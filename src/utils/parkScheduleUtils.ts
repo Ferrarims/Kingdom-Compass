@@ -2307,6 +2307,120 @@ export function generateParkHourlySchedule(
 }
 
 /**
+ * Regra Única e Centralizada para "Início do dia na acomodação":
+ * - Cria um único evento automático às 07:30 se o viajante pernoitou na acomodação na noite anterior.
+ * - NÃO cria no dia de chegada ao destino nem no dia de check-in (quando ainda não houve pernoite).
+ * - No dia de check-out, cria apenas se o horário de check-out for posterior a 07:30.
+ * - Em troca de hospedagem no mesmo dia, associa o início da manhã à hospedagem de origem (da qual está saindo).
+ * - Vincula sourceType: 'accommodation' e sourceId igual ao ID da reserva com ID estável.
+ * - Preserva estritamente horários manuais (sourceType === 'manual').
+ */
+export function applyAccommodationMorningRule(
+  items: HourlyScheduleItem[],
+  day: { dayNumber: number; date?: string; title?: string; park?: string },
+  tripContext?: { accommodations?: AccommodationBooking[]; startDate?: string; flights?: any[] }
+): HourlyScheduleItem[] {
+  if (!items) items = [];
+  const startDate = tripContext?.startDate || '2026-12-30';
+  const realDate = day.date || offsetDateString(startDate, (day.dayNumber || 1) - 1);
+  const accommodations = tripContext?.accommodations || [];
+
+  // Purgar APENAS eventos automáticos antigos de início do dia/acordar na acomodação
+  const result = items.filter((item) => {
+    if (!item) return false;
+    if (item.sourceType === 'manual') return true; // Preserva horários manuais intactos
+
+    const idLower = (item.id || '').toLowerCase();
+    const titleLower = (item.title || '').toLowerCase();
+
+    const isAutoMorningItem =
+      idLower.startsWith('auto-inicio') ||
+      idLower.startsWith('auto-acordar') ||
+      idLower.includes('hourly-acc-morning') ||
+      idLower.includes('acc-morning') ||
+      titleLower.includes('início do dia na acomodação') ||
+      titleLower.includes('inicio do dia na acomodação') ||
+      titleLower.includes('início do dia na hospedagem') ||
+      titleLower.includes('inicio do dia na hospedagem') ||
+      titleLower.includes('início do dia no hotel') ||
+      titleLower.includes('inicio do dia no hotel') ||
+      titleLower.startsWith('acordar —');
+
+    return !isAutoMorningItem;
+  });
+
+  // Não criar em dia 1 ou dia com título de chegada
+  const isDay1 = day.dayNumber === 1;
+  const isArrivalDayTitle = (day.title || '').toLowerCase().includes('chegada');
+  if (isDay1 || isArrivalDayTitle) {
+    return result;
+  }
+
+  // Identificar se o viajante pernoitou em alguma acomodação na noite anterior
+  // Pernoite na noite anterior significa: checkInDate <= prevDate E checkOutDate >= realDate
+  const prevDate = offsetDateString(realDate, -1);
+  const eligibleAccs = accommodations.filter((acc) => {
+    if (!acc || !acc.checkInDate || !acc.checkOutDate) return false;
+    const sleptLastNight = acc.checkInDate <= prevDate && acc.checkOutDate >= realDate;
+    return sleptLastNight;
+  });
+
+  if (eligibleAccs.length === 0) {
+    return result;
+  }
+
+  // Em caso de troca de hospedagem no mesmo dia, dar preferência à acomodação da qual está saindo hoje (origem)
+  const morningAcc = eligibleAccs.find((a) => a.checkOutDate === realDate) || eligibleAccs[0];
+  if (!morningAcc) {
+    return result;
+  }
+
+  // No dia de check-out, criar somente se o horário de check-out for posterior a 07:30
+  const isCheckoutToday = morningAcc.checkOutDate === realDate;
+  if (isCheckoutToday) {
+    const checkOutTime = (morningAcc.checkOutTime || '11:00').trim();
+    if (checkOutTime.localeCompare('07:30') <= 0) {
+      return result;
+    }
+  }
+
+  // Se o usuário já tiver criado um item MANUAL de início do dia no cronograma, não criar duplicado automático
+  const hasManualMorning = result.some((item) => {
+    if (item.sourceType !== 'manual') return false;
+    const t = (item.title || '').toLowerCase();
+    return (
+      t.includes('início do dia') ||
+      t.includes('inicio do dia') ||
+      t.includes('acordar')
+    );
+  });
+
+  if (hasManualMorning) {
+    return result;
+  }
+
+  const accName = (morningAcc.name || 'Acomodação').trim();
+  const accAddress = (morningAcc.address || accName).trim();
+  const accCategory: HourlyScheduleItem['category'] =
+    morningAcc.type === 'airbnb' || morningAcc.type === 'house' ? 'airbnb' : 'hotel';
+
+  const morningItem: HourlyScheduleItem = {
+    id: `auto-inicio-day-${day.dayNumber}`,
+    time: '07:30',
+    title: `☀️ Início do dia na acomodação (${accName})`,
+    location: accAddress,
+    category: accCategory,
+    notes: 'Café da manhã, preparativos e organização do dia.',
+    completed: false,
+    sourceType: 'accommodation',
+    sourceId: morningAcc.id,
+  };
+
+  result.unshift(morningItem);
+  return result.sort(compareScheduleItemOrder);
+}
+
+/**
  * Cleans all park references from an itinerary day when a park is removed / unlinked.
  */
 export function clearParkReferencesFromDay(
@@ -2314,6 +2428,7 @@ export function clearParkReferencesFromDay(
     dayNumber: number;
     title?: string;
     park?: string;
+    date?: string;
     morning?: any;
     afternoon?: any;
     night?: any;
@@ -2322,7 +2437,8 @@ export function clearParkReferencesFromDay(
   },
   totalDays: number = 1,
   accommodationName?: string,
-  accommodationAddress?: string
+  accommodationAddress?: string,
+  tripContext?: any
 ) {
   const oldPark = day.park && day.park !== 'Sem Parque' ? day.park : '';
   const oldParkLower = oldPark.toLowerCase();
@@ -2339,7 +2455,7 @@ export function clearParkReferencesFromDay(
     .filter((w) => w.length > 3 && w !== 'disney' && w !== 'universal' && w !== 'parque');
 
   // Filter out any hourly schedule items referring to the park or park transport
-  let cleanedHourly = (day.hourlySchedule || [])
+  let cleanedHourly: HourlyScheduleItem[] = (day.hourlySchedule || [])
     .filter((item) => {
       // Horários manuais NUNCA devem ser removidos por rotinas automáticas
       if (item.sourceType === 'manual') return true;
@@ -2430,7 +2546,14 @@ export function clearParkReferencesFromDay(
       return { ...item, notes: sanitizedNotes };
     });
 
-  // Ensure "Início do dia na acomodação" exists at 07:30 ONLY IF a valid hotel is booked
+  const effectiveContext = tripContext || {
+    startDate: '2026-12-30',
+    accommodations: hotelTitle ? [{ id: 'acc-temp', name: hotelTitle, address: effectiveAccLoc, checkInDate: '2000-01-01', checkOutDate: '2099-12-31' }] : []
+  };
+
+  // Utilize a regra única e centralizada para Início do dia na acomodação
+  cleanedHourly = applyAccommodationMorningRule(cleanedHourly, day, effectiveContext);
+
   const hasValidHotel = Boolean(
     hotelTitle &&
     hotelTitle.trim() &&
@@ -2438,70 +2561,6 @@ export function clearParkReferencesFromDay(
     hotelTitle.toLowerCase() !== 'nenhuma cadastrada' &&
     !hotelTitle.toLowerCase().startsWith('hospedagem')
   );
-
-  const isArrivalDay = day.dayNumber === 1 || (day.title || '').toLowerCase().includes('chegada');
-
-  if (isArrivalDay) {
-    cleanedHourly = cleanedHourly.filter((item) => {
-      if (item.sourceType === 'manual') return true;
-      const tLower = (item.title || '').toLowerCase();
-      const idLower = (item.id || '').toLowerCase();
-      return !(
-        idLower.startsWith('auto-inicio') ||
-        idLower.includes('hourly-acc-morning') ||
-        tLower.includes('início do dia na acomodação') ||
-        tLower.includes('inicio do dia na acomodação') ||
-        tLower.includes('início do dia na hospedagem') ||
-        tLower.includes('inicio do dia na hospedagem')
-      );
-    });
-  } else if (hasValidHotel) {
-    const hasMorningStart = cleanedHourly.some((item) => {
-      const t = (item.title || '').toLowerCase();
-      return (
-        t.includes('início do dia') ||
-        t.includes('inicio do dia') ||
-        item.id.includes('hourly-acc-morning') ||
-        item.id.includes('auto-inicio')
-      );
-    });
-
-    if (!hasMorningStart) {
-      const morningTitle = `☀️ Início do dia na acomodação (${hotelTitle})`;
-
-      cleanedHourly.unshift({
-        id: `auto-inicio-${dayKey}`,
-        time: '07:30',
-        title: morningTitle,
-        location: effectiveAccLoc,
-        category: 'hotel',
-        notes: 'Café da manhã, preparativos e organização do dia.',
-        completed: false,
-        sourceType: 'accommodation',
-      });
-    }
-  } else {
-    // If no valid accommodation booked, remove any orphaned accommodation items
-    cleanedHourly = cleanedHourly.filter((item) => {
-      if (item.sourceType === 'manual') return true;
-      const idLower = (item.id || '').toLowerCase();
-      const titleLower = (item.title || '').toLowerCase();
-      return !(
-        idLower.startsWith('auto-inicio') ||
-        idLower.startsWith('auto-saida') ||
-        idLower.startsWith('auto-retorno') ||
-        idLower.includes('hourly-acc-') ||
-        titleLower.includes('na acomodação') ||
-        titleLower.includes('na acomodacao') ||
-        titleLower.includes('na hospedagem') ||
-        titleLower.includes('(hospedagem)') ||
-        titleLower.startsWith('saída de hospedagem') ||
-        titleLower.startsWith('saida de hospedagem') ||
-        titleLower.includes('fim do dia na acomodação') ||
-        titleLower.includes('fim do dia na hospedagem')
-      );
-    });
-  }
 
   // Ensure "Fim do dia na acomodação" exists at 22:30 ONLY IF a valid hotel is booked
   if (hasValidHotel) {
@@ -3174,53 +3233,7 @@ export function syncAllEventsToHourlySchedule(
         const checkOutTimeToday = accCheckingOutToday?.checkOutTime || '11:00';
         const departingFlightToday = flights.find((fl: any) => fl && fl.departureDate === day.date);
 
-        if (!hasPark && morningAcc && (!accCheckingOutToday || '07:30'.localeCompare(checkOutTimeToday) < 0)) {
-          // Purgar qualquer "Acordar" automático existente
-          items = items.filter((i) => {
-            const t = (i.title || '').toLowerCase();
-            const id = (i.id || '').toLowerCase();
-            return !(id.startsWith('auto-acordar') || t.includes('acordar —'));
-          });
-
-          const existingStartIdx = items.findIndex((i) => {
-            const t = (i.title || '').toLowerCase();
-            const id = (i.id || '').toLowerCase();
-            return id.startsWith('auto-inicio') || t.includes('início do dia na acomodação') || t.includes('inicio do dia na acomodacao');
-          });
-
-          const startItem: HourlyScheduleItem = {
-            id: `auto-inicio-${day.dayNumber || '1'}`,
-            time: '07:30',
-            title: `🌅 Início do dia na acomodação (${morningAccName})`,
-            location: morningLocation,
-            category: morningCategory,
-            notes: departingFlightToday ? 'Início do dia na hospedagem antes do check-out e partida para o voo.' : 'Início do dia na hospedagem antes do encerramento ou check-out.',
-            sourceType: 'accommodation',
-            sourceId: morningAcc.id,
-            completed: false,
-          };
-
-          if (existingStartIdx >= 0) {
-            items[existingStartIdx] = { ...items[existingStartIdx], ...startItem, id: items[existingStartIdx].id };
-          } else {
-            items.unshift(startItem);
-          }
-        } else if (!hasPark && !morningAcc) {
-          // Purgar início do dia e acordar se não houver acomodação
-          items = items.filter((i) => {
-            if (i.sourceType === 'manual') return true;
-            const tLower = (i.title || '').toLowerCase();
-            const idLower = (i.id || '').toLowerCase();
-            return !(
-              idLower.startsWith('auto-acordar') ||
-              idLower.includes('hourly-acc-morning') ||
-              idLower.startsWith('auto-inicio') ||
-              tLower.includes('acordar —') ||
-              tLower.includes('início do dia na acomodação') ||
-              tLower.includes('inicio do dia na acomodacao')
-            );
-          });
-        }
+        // Início do dia na acomodação é gerenciado exclusivamente via applyAccommodationMorningRule no final deste método
 
         // REGRA 2 & 1: Check-in de reservas correspondentes neste dia (incluindo dias de troca de hospedagem)
         sortedAccs.forEach((acc: any) => {
@@ -3446,6 +3459,9 @@ export function syncAllEventsToHourlySchedule(
 
 
   }
+
+  // Aplica a regra única e centralizada para o início do dia na acomodação
+  items = applyAccommodationMorningRule(items, day, tripContext);
 
   // Alinhar saída e check-out se check-out for antes da saída
   items = adjustScheduleForCheckoutAndDeparture(items, dayCheckOutTime, Boolean(dayCheckOutTime));

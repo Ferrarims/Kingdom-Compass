@@ -83,13 +83,17 @@ export const AccommodationsView: React.FC = () => {
 
   useConfirmationKeyboard({
     isOpen: !!accToDelete,
-    onConfirm: () => {
+    onConfirm: async () => {
       if (accToDelete) {
         const idToDelete = accToDelete.id;
-        deleteAccommodation(idToDelete);
-        setAccToDelete(null);
-        if (editingAcc && editingAcc.id === idToDelete) {
-          setIsModalOpen(false);
+        const res = await deleteAccommodation(idToDelete);
+        if (res && res.success === false) {
+          setValidationError(res.error || 'Erro ao excluir hospedagem.');
+        } else {
+          setAccToDelete(null);
+          if (editingAcc && editingAcc.id === idToDelete) {
+            setIsModalOpen(false);
+          }
         }
       }
     },
@@ -221,7 +225,7 @@ export const AccommodationsView: React.FC = () => {
     }
   };
 
-  const handleSaveForm = (e: React.FormEvent) => {
+  const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
     const accName = formData.name.trim() || 'Nova Hospedagem';
     const dataToSave = { ...formData, name: accName };
@@ -251,11 +255,18 @@ export const AccommodationsView: React.FC = () => {
 
     setValidationError(null);
 
+    let res: { success: boolean; error?: string };
     if (editingAcc) {
-      updateAccommodation(editingAcc.id, dataToSave);
+      res = await updateAccommodation(editingAcc.id, dataToSave);
     } else {
-      addAccommodation(dataToSave);
+      res = await addAccommodation(dataToSave);
     }
+
+    if (res && res.success === false) {
+      setValidationError(res.error || 'Erro ao salvar hospedagem no Supabase.');
+      return;
+    }
+
     setIsModalOpen(false);
   };
 

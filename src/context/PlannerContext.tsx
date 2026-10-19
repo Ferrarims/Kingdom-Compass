@@ -593,12 +593,12 @@ interface PlannerContextType {
 
   // Accommodations & Hotels / Airbnb
   accommodations: AccommodationBooking[];
-  addAccommodation: (acc: Omit<AccommodationBooking, 'id'>) => void;
-  updateAccommodation: (id: string, updates: Partial<AccommodationBooking>) => void;
-  deleteAccommodation: (id: string) => void;
+  addAccommodation: (acc: Omit<AccommodationBooking, 'id'>) => Promise<{ success: boolean; error?: string }>;
+  updateAccommodation: (id: string, updates: Partial<AccommodationBooking>) => Promise<{ success: boolean; error?: string }>;
+  deleteAccommodation: (id: string) => Promise<{ success: boolean; error?: string }>;
   addAccommodationAttachment: (accId: string, attachment: Omit<AccommodationAttachment, 'id'>) => void;
   removeAccommodationAttachment: (accId: string, attachmentId: string) => void;
-  syncAccommodationToDays: (acc: AccommodationBooking, removeOnly?: boolean) => void;
+  syncAccommodationToDays: (acc: AccommodationBooking, removeOnly?: boolean, previousAcc?: AccommodationBooking) => Promise<{ success: boolean; error?: string }>;
   syncAccommodationsToSupabase: () => Promise<boolean>;
   reloadAccommodationsFromSupabase: () => Promise<boolean>;
   applySmartAccommodationRules: () => void;
@@ -4805,7 +4805,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   // Accommodation Schedule Synchronizer to Daily Itinerary
-  const syncAccommodationToDays = (acc: AccommodationBooking, removeOnly = false) => {
+  const syncAccommodationToDays = async (
+    acc: AccommodationBooking,
+    removeOnly = false,
+    previousAcc?: AccommodationBooking
+  ): Promise<{ success: boolean; error?: string }> => {
     const currentAccs = removeOnly
       ? accommodations.filter((a) => a.id !== acc.id)
       : accommodations.map((a) => (a.id === acc.id ? acc : a));
@@ -4813,80 +4817,110 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       currentAccs.push(acc);
     }
 
-    setRawDays((prevDays) => {
-      const tripContext = {
-        flights,
-        carRentals,
-        accommodations: currentAccs,
+    const tripContext = {
+      flights,
+      carRentals,
+      accommodations: currentAccs,
+      startDate: settings.startDate,
+      totalDays: rawDays.length,
+    };
+
+    const affectedDayIndexes = new Set<number>();
+    rawDays.forEach((d, index) => {
+      const calculatedDate = calculateDateOffset(settings.startDate, index);
+      const isAffectedByAcc =
+        index === 0 ||
+        (acc.checkInDate && calculatedDate === acc.checkInDate) ||
+        (acc.checkOutDate && calculatedDate === acc.checkOutDate) ||
+        (acc.checkInDate && acc.checkOutDate && calculatedDate >= acc.checkInDate && calculatedDate <= acc.checkOutDate);
+
+      const isAffectedByPrev =
+        previousAcc &&
+        ((previousAcc.checkInDate && calculatedDate === previousAcc.checkInDate) ||
+         (previousAcc.checkOutDate && calculatedDate === previousAcc.checkOutDate) ||
+         (previousAcc.checkInDate && previousAcc.checkOutDate && calculatedDate >= previousAcc.checkInDate && calculatedDate <= previousAcc.checkOutDate));
+
+      if (isAffectedByAcc || isAffectedByPrev) {
+        affectedDayIndexes.add(index);
+      }
+    });
+
+    const updatedDays = rawDays.map((d, index) => {
+      if (!affectedDayIndexes.has(index)) {
+        return d;
+      }
+      const calculatedDate = calculateDateOffset(settings.startDate, index);
+      const dayWithDate = { ...d, date: calculatedDate };
+      const newSchedule = syncAllEventsToHourlySchedule(dayWithDate, tripContext);
+      return {
+        ...d,
+        date: calculatedDate,
+        hourlySchedule: newSchedule,
+      };
+    });
+
+    setRawDays(updatedDays);
+
+    if (activeTripId) {
+      const fallbackTrip = activeTrip || {
+        id: activeTripId,
+        tripName: settings.tripName,
+        destination: settings.destination,
         startDate: settings.startDate,
-        totalDays: prevDays.length,
+        durationDays: settings.durationDays,
+        travelers: settings.travelers,
+        rawDays: updatedDays,
       };
 
-      const affectedDayIndexes = new Set<number>();
-      prevDays.forEach((d, index) => {
-        const calculatedDate = calculateDateOffset(settings.startDate, index);
-        const isAffected =
-          index === 0 ||
-          (acc.checkInDate && calculatedDate === acc.checkInDate) ||
-          (acc.checkOutDate && calculatedDate === acc.checkOutDate) ||
-          (acc.checkInDate && acc.checkOutDate && calculatedDate >= acc.checkInDate && calculatedDate <= acc.checkOutDate);
-        if (isAffected) {
-          affectedDayIndexes.add(index);
-        }
-      });
-
-      const updatedDays = prevDays.map((d, index) => {
-        if (!affectedDayIndexes.has(index)) {
-          return d;
-        }
-        const calculatedDate = calculateDateOffset(settings.startDate, index);
-        const dayWithDate = { ...d, date: calculatedDate };
-        const newSchedule = syncAllEventsToHourlySchedule(dayWithDate, tripContext);
-        return {
-          ...d,
-          hourlySchedule: newSchedule,
-        };
-      });
-
-      if (activeTripId) {
-        const fallbackTrip = activeTrip || {
-          id: activeTripId,
-          tripName: settings.tripName,
-          destination: settings.destination,
-          startDate: settings.startDate,
-          durationDays: settings.durationDays,
-          travelers: settings.travelers,
-          rawDays: updatedDays,
-        };
-        // Gravar no banco somente os dias afetados pela acomodação
-        const promises = Array.from(affectedDayIndexes).map((idx) => {
+      const saveResults = await Promise.all(
+        Array.from(affectedDayIndexes).map((idx) => {
           if (updatedDays[idx]) {
             return SupabaseService.saveItineraryDay(activeTripId, updatedDays[idx], fallbackTrip);
           }
           return Promise.resolve<{ success: boolean; error?: string }>({ success: true });
-        });
-        Promise.all(promises).then((results) => {
-          const failed = results.find((r) => r && !r.success);
-          if (failed) {
-            addNotification(`❌ Falha ao salvar sincronização de hospedagem na agenda: ${failed.error}`);
-          }
-        });
-        setTrips((prevTrips) =>
-          prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: currentAccs, rawDays: updatedDays } : t))
-        );
+        })
+      );
+
+      const failed = saveResults.find((r) => r && !r.success);
+      if (failed) {
+        const errMsg = failed.error || 'Erro ao sincronizar hospedagem nos dias do roteiro';
+        addNotification(`❌ Falha ao salvar agenda de hospedagem no banco: ${errMsg}`);
+        return { success: false, error: errMsg };
       }
 
-      return updatedDays;
-    });
+      setTrips((prevTrips) =>
+        prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: currentAccs, rawDays: updatedDays } : t))
+      );
+    }
+
+    return { success: true };
   };
 
   // Accommodation & Hotel / Airbnb Handlers
-  const addAccommodation = (acc: Omit<AccommodationBooking, 'id'>) => {
+  const addAccommodation = async (acc: Omit<AccommodationBooking, 'id'>): Promise<{ success: boolean; error?: string }> => {
     const newAcc: AccommodationBooking = {
       ...acc,
       id: generateUUID(),
       attachments: acc.attachments || [],
     };
+
+    if (activeTripId) {
+      const fallbackTrip = activeTrip || {
+        id: activeTripId,
+        tripName: settings.tripName,
+        destination: settings.destination,
+        startDate: settings.startDate,
+        durationDays: settings.durationDays,
+        travelers: settings.travelers,
+      };
+      const saveRes = await SupabaseService.saveAccommodation(activeTripId, newAcc, fallbackTrip);
+      if (!saveRes.success) {
+        const errMsg = saveRes.error || 'Erro ao salvar hospedagem no Supabase';
+        addNotification(`❌ Falha ao salvar hospedagem: ${errMsg}`);
+        return { success: false, error: errMsg };
+      }
+    }
+
     setAccommodations((prev) => {
       const nextAccs = [...prev, newAcc];
       setTrips((prevTrips) =>
@@ -4895,7 +4929,24 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       return nextAccs;
     });
     syncAccommodationExpense(newAcc, settings.dollarRate || 5.75);
-    syncAccommodationToDays(newAcc);
+
+    const syncRes = await syncAccommodationToDays(newAcc);
+    if (!syncRes.success) {
+      return syncRes;
+    }
+
+    addNotification(`Cadastrou hospedagem (${acc.name}), sincronizou no roteiro diário e no banco de dados`);
+    return { success: true };
+  };
+
+  const updateAccommodation = async (
+    id: string,
+    updates: Partial<AccommodationBooking>
+  ): Promise<{ success: boolean; error?: string }> => {
+    const oldAcc = accommodations.find((a) => a.id === id);
+    if (!oldAcc) return { success: false, error: 'Hospedagem não encontrada' };
+
+    const updatedAcc = { ...oldAcc, ...updates };
 
     if (activeTripId) {
       const fallbackTrip = activeTrip || {
@@ -4906,51 +4957,45 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         durationDays: settings.durationDays,
         travelers: settings.travelers,
       };
-      SupabaseService.saveAccommodation(activeTripId, newAcc, fallbackTrip);
+      const saveRes = await SupabaseService.saveAccommodation(activeTripId, updatedAcc, fallbackTrip);
+      if (!saveRes.success) {
+        const errMsg = saveRes.error || 'Erro ao atualizar hospedagem no Supabase';
+        addNotification(`❌ Falha ao atualizar hospedagem: ${errMsg}`);
+        return { success: false, error: errMsg };
+      }
     }
 
-    addNotification(`Cadastrou hospedagem (${acc.name}), sincronizou no roteiro diário e no banco de dados`);
-  };
-
-  const updateAccommodation = (id: string, updates: Partial<AccommodationBooking>) => {
-    let savedUpdated: AccommodationBooking | null = null;
     setAccommodations((prev) => {
-      const nextAccs = prev.map((a) => {
-        if (a.id === id) {
-          const updated = { ...a, ...updates };
-          savedUpdated = updated;
-          syncAccommodationExpense(updated, settings.dollarRate || 5.75);
-          syncAccommodationToDays(updated);
-          return updated;
-        }
-        return a;
-      });
+      const nextAccs = prev.map((a) => (a.id === id ? updatedAcc : a));
       setTrips((prevTrips) =>
         prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: nextAccs } : t))
       );
       return nextAccs;
     });
+    syncAccommodationExpense(updatedAcc, settings.dollarRate || 5.75);
 
-    if (activeTripId && savedUpdated) {
-      const fallbackTrip = activeTrip || {
-        id: activeTripId,
-        tripName: settings.tripName,
-        destination: settings.destination,
-        startDate: settings.startDate,
-        durationDays: settings.durationDays,
-        travelers: settings.travelers,
-      };
-      SupabaseService.saveAccommodation(activeTripId, savedUpdated, fallbackTrip);
+    const syncRes = await syncAccommodationToDays(updatedAcc, false, oldAcc);
+    if (!syncRes.success) {
+      return syncRes;
     }
 
     addNotification(`Atualizou informações da hospedagem e sincronizou no roteiro`);
+    return { success: true };
   };
 
-  const deleteAccommodation = (id: string) => {
+  const deleteAccommodation = async (id: string): Promise<{ success: boolean; error?: string }> => {
     const acc = accommodations.find((a) => a.id === id);
-    if (acc) {
-      syncAccommodationToDays(acc, true);
+    if (!acc) return { success: false, error: 'Hospedagem não encontrada' };
+
+    if (activeTripId) {
+      const delAccRes = await SupabaseService.deleteAccommodation(id);
+      if (!delAccRes) {
+        const errMsg = 'Falha ao excluir hospedagem no banco de dados';
+        addNotification(`❌ ${errMsg}`);
+        return { success: false, error: errMsg };
+      }
     }
+
     setAccommodations((prev) => {
       const nextAccs = prev.filter((a) => a.id !== id);
       setTrips((prevTrips) =>
@@ -4958,19 +5003,23 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       );
       return nextAccs;
     });
-    
+
     const expId = generateDeterministicUUID('acc-expense', id);
     setExpenses((prev) => prev.filter((e) => e.id !== expId && e.id !== `exp-acc-${id}`));
-    
-    SupabaseService.deleteAccommodation(id);
-    SupabaseService.deleteExpense(expId);
-    SupabaseService.deleteExpense(`exp-acc-${id}`);
+
     if (activeTripId) {
-      SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'accommodation');
+      await SupabaseService.deleteExpense(expId);
+      await SupabaseService.deleteExpense(`exp-acc-${id}`);
+      await SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'accommodation');
     }
-    if (acc) {
-      addNotification(`Removeu hospedagem ${acc.name} do roteiro e do banco de dados`);
+
+    const syncRes = await syncAccommodationToDays(acc, true);
+    if (!syncRes.success) {
+      return syncRes;
     }
+
+    addNotification(`Removeu hospedagem ${acc.name} do roteiro e do banco de dados`);
+    return { success: true };
   };
 
   const addAccommodationAttachment = (
