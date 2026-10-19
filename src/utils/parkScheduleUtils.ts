@@ -580,6 +580,35 @@ export function deduplicateHourlySchedule(items: HourlyScheduleItem[] = []): Hou
       hasNightAcc = true;
     }
 
+    // 5. Deduplicate multiple Check-out items on the same day
+    const isCheckout =
+      normTitle.includes('check-out') ||
+      id.includes('auto-acc-checkout') ||
+      (item.sourceId && item.sourceId.includes('acc-checkout'));
+
+    if (isCheckout) {
+      const checkoutKey = `checkout_${item.sourceId || normTitle}`;
+      if (seenTimeTitles.has(checkoutKey)) {
+        continue;
+      }
+      seenTimeTitles.add(checkoutKey);
+    }
+
+    // 6. Deduplicate multiple Inter-Accommodation Transfer items on the same day
+    const isSplitDrive =
+      normTitle.includes('deslocamento entre acomodac') ||
+      normTitle.includes('deslocamento de ') ||
+      id.includes('auto-acc-split-drive') ||
+      (item.sourceId && item.sourceId.includes('split-drive'));
+
+    if (isSplitDrive) {
+      const splitKey = `split_drive_${item.sourceId || normTitle}`;
+      if (seenTimeTitles.has(splitKey)) {
+        continue;
+      }
+      seenTimeTitles.add(splitKey);
+    }
+
     if (id) seenIds.add(id);
     seenTimeTitles.add(timeTitleKey);
     result.push(item);

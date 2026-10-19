@@ -1484,6 +1484,22 @@ export const SupabaseService = {
         }
       };
 
+      // Ensure rawDays have normalized dates and deduplicated schedules before syncing
+      const startDate = sanitizeDate(trip.startDate) || '2026-12-27';
+      const durationDays = Math.max(1, trip.durationDays || (trip.rawDays?.length || 16));
+      const normalizedRawDays = (trip.rawDays || []).map((d, index) => {
+        const dayNum = d.dayNumber || index + 1;
+        const realDate = calculateDateOffset(startDate, dayNum - 1);
+        const deduplicatedSchedule = deduplicateHourlySchedule(d.hourlySchedule || []);
+        return {
+          ...d,
+          dayNumber: dayNum,
+          date: realDate,
+          hourlySchedule: deduplicatedSchedule,
+        };
+      });
+      trip.rawDays = normalizedRawDays;
+
       // 1. Travelers
       await syncSubCollection('travelers', trip.travelers, mapTravelerToDb);
 
@@ -1502,8 +1518,25 @@ export const SupabaseService = {
           });
         });
 
-        if (allHourlyItems.length > 0) {
-          const dbHourlyRows = allHourlyItems.map(({ item, dayId }) => mapHourlyScheduleToDb(item, dayId, tripId));
+        const dbHourlyRows = allHourlyItems.map(({ item, dayId }, idx) => mapHourlyScheduleToDb(item, dayId, tripId, idx));
+        const currentHourlyIds = dbHourlyRows.map((r) => r.id).filter(Boolean);
+
+        const { data: existingHourly } = await supabase
+          .from('hourly_schedules')
+          .select('id')
+          .eq('trip_id', tripId);
+
+        if (existingHourly && existingHourly.length > 0) {
+          const staleIds = existingHourly
+            .map((r: any) => r.id)
+            .filter((id: string) => !currentHourlyIds.includes(id));
+
+          if (staleIds.length > 0) {
+            await supabase.from('hourly_schedules').delete().eq('trip_id', tripId).in('id', staleIds);
+          }
+        }
+
+        if (dbHourlyRows.length > 0) {
           await supabase.from('hourly_schedules').upsert(dbHourlyRows, { onConflict: 'id' });
         }
       } catch (hourlySyncErr) {
@@ -2726,12 +2759,22 @@ export const SupabaseService = {
         addLog(`Aviso ao buscar dia existente: ${errExisting?.message}`);
       }
 
+      // Ensure date is calculated and normalized for the day before saving
+      let dayDate = sanitizeDate(day.date);
+      if (!dayDate) {
+        const baseStart = fallbackTrip?.startDate || '2026-12-27';
+        const dayNum = Number(day.dayNumber) || 1;
+        dayDate = calculateDateOffset(baseStart, dayNum - 1);
+      }
+      day.date = dayDate;
+
       // Manter os itens de horário fornecidos sem forçar sincronização automática artificial
       const fullHourlyItems = ensureHourlyScheduleItems(day.hourlySchedule || []);
       day.hourlySchedule = fullHourlyItems;
 
       // 3. Upsert into `itinerary_days` table
-      const dayDb = mapItineraryDayToDb({ ...day, id: resolvedDayId }, tripId);
+      const dayDb = mapItineraryDayToDb({ ...day, id: resolvedDayId, date: dayDate }, tripId);
+      dayDb.date = dayDate;
       const { error: dayErr } = await supabase
         .from('itinerary_days')
         .upsert(dayDb, { onConflict: 'id' });
@@ -2741,7 +2784,7 @@ export const SupabaseService = {
         return { success: false, error: dayErr.message, resolvedDayId, debugLogs };
       }
 
-      addLog(`Tabela itinerary_days atualizada com sucesso para o Dia ${day.dayNumber} (ID: ${resolvedDayId}).`);
+      addLog(`Tabela itinerary_days atualizada com sucesso para o Dia ${day.dayNumber} (ID: ${resolvedDayId}, Data: ${dayDate}).`);
 
       // 4. Synchronize the dedicated `hourly_schedules` table for this day
       try {
@@ -2754,6 +2797,32 @@ export const SupabaseService = {
             dbHourlyRows.push(row);
           }
         });
+
+        // Excluir horários obsoletos ou duplicados do banco que não estão na lista ativa atual
+        try {
+          const { data: existingDbHourly } = await supabase
+            .from('hourly_schedules')
+            .select('id')
+            .eq('itinerary_day_id', resolvedDayId);
+
+          if (existingDbHourly && existingDbHourly.length > 0) {
+            const currentIds = dbHourlyRows.map((r) => r.id).filter(Boolean);
+            const idsToDelete = existingDbHourly
+              .map((r: any) => r.id)
+              .filter((id: string) => !currentIds.includes(id));
+
+            if (idsToDelete.length > 0) {
+              await supabase
+                .from('hourly_schedules')
+                .delete()
+                .eq('itinerary_day_id', resolvedDayId)
+                .in('id', idsToDelete);
+              addLog(`Removidos ${idsToDelete.length} horários obsoletos/duplicados da tabela hourly_schedules.`);
+            }
+          }
+        } catch (delStaleErr: any) {
+          addLog(`Aviso ao verificar horários obsoletos: ${delStaleErr?.message}`);
+        }
 
         if (dbHourlyRows.length > 0) {
           const { error: upsertHourlyErr } = await supabase
