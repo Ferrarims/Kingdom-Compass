@@ -90,56 +90,73 @@ export const GlobalSettingsModal: React.FC = () => {
     setTravelersCount(updated.length);
   };
 
-  const handleSave = (e?: React.FormEvent) => {
+  const [isSaving, setIsSaving] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const handleSave = async (e?: React.FormEvent) => {
     if (e && e.preventDefault) e.preventDefault();
-    let currentTravelers = [...travelersList];
-    if (newTravelerName.trim()) {
-      const newId = generateUUID();
-      const color = AVATAR_COLORS[travelersList.length % AVATAR_COLORS.length];
-      const newT: Traveler = {
-        id: newId,
-        name: newTravelerName.trim(),
-        email: newTravelerEmail.trim() || `${newTravelerName.toLowerCase().replace(/\s+/g, '')}@exemplo.com`,
-        avatarColor: color,
-        role: 'traveler',
-      };
-      currentTravelers.push(newT);
-      setTravelersList(currentTravelers);
-      setNewTravelerName('');
-      setNewTravelerEmail('');
+    setErrorMsg(null);
+    setIsSaving(true);
+
+    try {
+      let currentTravelers = [...travelersList];
+      if (newTravelerName.trim()) {
+        const newId = generateUUID();
+        const color = AVATAR_COLORS[travelersList.length % AVATAR_COLORS.length];
+        const newT: Traveler = {
+          id: newId,
+          name: newTravelerName.trim(),
+          email: newTravelerEmail.trim() || `${newTravelerName.toLowerCase().replace(/\s+/g, '')}@exemplo.com`,
+          avatarColor: color,
+          role: 'traveler',
+        };
+        currentTravelers.push(newT);
+        setTravelersList(currentTravelers);
+        setNewTravelerName('');
+        setNewTravelerEmail('');
+      }
+
+      const effectiveStartDate = normalizeDateToYMD(startDate || flexibleOutboundStart || '2026-12-30');
+      const calculatedReturnDate = calculateDateOffset(effectiveStartDate, Number(durationDays) - 1);
+      const effectiveOutStart = normalizeDateToYMD(isFlexibleDates ? (flexibleOutboundStart || effectiveStartDate) : effectiveStartDate);
+      const effectiveOutEnd = normalizeDateToYMD(isFlexibleDates ? (flexibleOutboundEnd || calculateDateOffset(effectiveOutStart, 7)) : calculateDateOffset(effectiveStartDate, 7));
+      const effectiveInStart = normalizeDateToYMD(isFlexibleDates ? (flexibleInboundStart || calculateDateOffset(effectiveOutStart, durationDays)) : calculateDateOffset(effectiveStartDate, durationDays));
+      const effectiveInEnd = normalizeDateToYMD(isFlexibleDates ? (flexibleInboundEnd || calculateDateOffset(effectiveOutEnd, durationDays)) : calculateDateOffset(effectiveStartDate, durationDays + 7));
+
+      const effectiveOutFlex = isFlexibleDates ? 'Data Não Definida' : 'Datas Fixas';
+      const effectiveInFlex = isFlexibleDates ? 'Data Não Definida' : 'Datas Fixas';
+
+      const res = await updateSettings({
+        startDate: effectiveStartDate,
+        returnDate: calculatedReturnDate,
+        durationDays: Number(durationDays),
+        travelersCount: currentTravelers.length,
+        dollarRate: Number(dollarRate),
+        tripName: tripName.trim() || settings.tripName,
+        destination: destination.trim() || settings.destination,
+        isFlexibleDates,
+        flexibleOutboundStart: effectiveOutStart,
+        flexibleOutboundEnd: effectiveOutEnd,
+        flexibleInboundStart: effectiveInStart,
+        flexibleInboundEnd: effectiveInEnd,
+        outboundFlexibility: effectiveOutFlex,
+        inboundFlexibility: effectiveInFlex,
+        flexibilityNotes: isFlexibleDates ? 'Viagem com data não definida' : flexibilityNotes,
+        travelers: currentTravelers,
+      });
+
+      if (res && res.success === false) {
+        setErrorMsg(res.error || 'Erro ao salvar parâmetros da viagem no Supabase.');
+        setIsSaving(false);
+        return;
+      }
+
+      setIsSettingsOpen(false);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Falha ao salvar as configurações.');
+    } finally {
+      setIsSaving(false);
     }
-
-    const effectiveStartDate = normalizeDateToYMD(startDate || flexibleOutboundStart || '2026-12-30');
-    const effectiveOutStart = normalizeDateToYMD(isFlexibleDates ? (flexibleOutboundStart || effectiveStartDate) : effectiveStartDate);
-    const effectiveOutEnd = normalizeDateToYMD(isFlexibleDates ? (flexibleOutboundEnd || calculateDateOffset(effectiveOutStart, 7)) : calculateDateOffset(effectiveStartDate, 7));
-    const effectiveInStart = normalizeDateToYMD(isFlexibleDates ? (flexibleInboundStart || calculateDateOffset(effectiveOutStart, durationDays)) : calculateDateOffset(effectiveStartDate, durationDays));
-    const effectiveInEnd = normalizeDateToYMD(isFlexibleDates ? (flexibleInboundEnd || calculateDateOffset(effectiveOutEnd, durationDays)) : calculateDateOffset(effectiveStartDate, durationDays + 7));
-
-    const effectiveOutFlex = isFlexibleDates
-      ? 'Data Não Definida'
-      : 'Datas Fixas';
-    const effectiveInFlex = isFlexibleDates
-      ? 'Data Não Definida'
-      : 'Datas Fixas';
-
-    updateSettings({
-      startDate: effectiveStartDate,
-      durationDays: Number(durationDays),
-      travelersCount: currentTravelers.length,
-      dollarRate: Number(dollarRate),
-      tripName: tripName.trim() || settings.tripName,
-      destination: destination.trim() || settings.destination,
-      isFlexibleDates,
-      flexibleOutboundStart: effectiveOutStart,
-      flexibleOutboundEnd: effectiveOutEnd,
-      flexibleInboundStart: effectiveInStart,
-      flexibleInboundEnd: effectiveInEnd,
-      outboundFlexibility: effectiveOutFlex,
-      inboundFlexibility: effectiveInFlex,
-      flexibilityNotes: isFlexibleDates ? 'Viagem com data não definida' : flexibilityNotes,
-      travelers: currentTravelers,
-    });
-    setIsSettingsOpen(false);
   };
 
   const { handleBackdropClick } = useModalKeyEvents({

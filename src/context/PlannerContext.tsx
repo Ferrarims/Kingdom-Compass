@@ -466,9 +466,10 @@ export function generateDaysForNewTrip(durationDays: number, startDate?: string)
   });
 }
 
-export function normalizeTripDays(days: Omit<ItineraryDay, 'date'>[] | undefined, totalDays: number): Omit<ItineraryDay, 'date'>[] {
+export function normalizeTripDays(days: ItineraryDay[] | Omit<ItineraryDay, 'date'>[] | undefined, totalDays: number, startDate?: string): ItineraryDay[] {
+  const baseStart = startDate || '2026-12-30';
   if (!days || days.length === 0) {
-    return generateDaysForNewTrip(totalDays);
+    return generateDaysForNewTrip(totalDays, baseStart);
   }
   const count = days.length;
   return days.map((d, index) => {
@@ -497,6 +498,7 @@ export function normalizeTripDays(days: Omit<ItineraryDay, 'date'>[] | undefined
     return {
       ...d,
       dayNumber: dayNum,
+      date: (d as ItineraryDay).date || calculateDateOffset(baseStart, index),
       title: title || (dayNum === 1 ? 'Chegada' : (dayNum === count && count > 1 ? 'Partida' : 'Sem Parque')),
       park: park,
       hourlySchedule: d.hourlySchedule || [],
@@ -528,13 +530,13 @@ interface PlannerContextType {
     dollarRate?: number;
     travelers: Traveler[];
   }) => Trip;
-  updateTrip: (id: string, updates: Partial<Trip>) => void;
+  updateTrip: (id: string, updates: Partial<Trip>) => Promise<{ success: boolean; error?: string }>;
   deleteTrip: (id: string) => void;
   removeAllTrips: () => Promise<void>;
   duplicateTrip: (id: string) => void;
 
   settings: GlobalSettings;
-  updateSettings: (newSettings: Partial<GlobalSettings>) => void;
+  updateSettings: (newSettings: Partial<GlobalSettings>) => Promise<{ success: boolean; error?: string }>;
   updateModuleReadiness: (moduleKey: keyof ModuleReadiness, status: ModuleReadinessStatus) => void;
   updateTravelers: (travelers: Traveler[]) => void;
   setCurrentUser: (userId: string) => void;
@@ -2092,9 +2094,12 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     return newTrip;
   };
 
-  const updateTrip = (id: string, updates: Partial<Trip>) => {
+  const updateTrip = async (id: string, updates: Partial<Trip>): Promise<{ success: boolean; error?: string }> => {
     if (updates.startDate) {
       updates.startDate = normalizeDateToYMD(updates.startDate);
+    }
+    if (updates.returnDate) {
+      updates.returnDate = normalizeDateToYMD(updates.returnDate);
     }
     if (updates.flexibleOutboundStart) {
       updates.flexibleOutboundStart = normalizeDateToYMD(updates.flexibleOutboundStart);
@@ -2109,6 +2114,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       updates.flexibleInboundEnd = normalizeDateToYMD(updates.flexibleInboundEnd);
     }
 
+    let tripToSync: Trip | null = null;
+
     setTrips((prev) =>
       prev.map((t) => {
         if (t.id === id) {
@@ -2118,6 +2125,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           }
 
           const targetDuration = updatedTrip.durationDays || updatedTrip.settings?.durationDays || updatedTrip.rawDays?.length || 10;
+          const tripStart = updatedTrip.startDate || updatedTrip.settings?.startDate || '2026-12-30';
+
           if (!updates.rawDays && updatedTrip.rawDays && updatedTrip.rawDays.length !== targetDuration) {
             let currentDays = updatedTrip.rawDays;
             if (currentDays.length < targetDuration) {
@@ -2132,6 +2141,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
                 return {
                   id: generateUUID(),
                   dayNumber: dayNum,
+                  date: calculateDateOffset(tripStart, dayNum - 1),
                   title: title,
                   park: 'Sem Parque' as any,
                   completed: false,
@@ -2147,9 +2157,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
             } else if (currentDays.length > targetDuration) {
               currentDays = currentDays.slice(0, targetDuration);
             }
-            updatedTrip.rawDays = normalizeTripDays(currentDays, targetDuration);
+            updatedTrip.rawDays = normalizeTripDays(currentDays, targetDuration, tripStart);
           } else if (!updatedTrip.rawDays || updatedTrip.rawDays.length === 0) {
-            updatedTrip.rawDays = generateDaysForNewTrip(targetDuration);
+            updatedTrip.rawDays = generateDaysForNewTrip(targetDuration, tripStart);
           }
 
           if (id === activeTripId) {
@@ -2159,6 +2169,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
               ...(updates.tripName ? { tripName: updates.tripName } : {}),
               ...(updates.destination ? { destination: updates.destination } : {}),
               ...(updates.startDate ? { startDate: updates.startDate } : {}),
+              ...(updates.returnDate ? { returnDate: updates.returnDate } : {}),
               ...(updates.durationDays ? { durationDays: updates.durationDays } : {}),
               ...(updates.isFlexibleDates !== undefined ? { isFlexibleDates: updates.isFlexibleDates } : {}),
               ...(updates.flexibleOutboundStart ? { flexibleOutboundStart: updates.flexibleOutboundStart } : {}),
@@ -2174,14 +2185,17 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
             }));
           }
 
-          // Trigger background sync for updated trip
-          SupabaseService.syncTripToSupabase(updatedTrip);
-
+          tripToSync = updatedTrip;
           return updatedTrip;
         }
         return t;
       })
     );
+
+    if (tripToSync) {
+      return await SupabaseService.syncTripToSupabase(tripToSync);
+    }
+    return { success: true };
   };
 
   const deleteTrip = (id: string) => {
@@ -2551,7 +2565,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     addNotification(`Atualizou status de ${moduleNames[moduleKey] || moduleKey}: ${statusLabels[status]}`);
   }, [activeTripId]);
 
-  const updateSettings = (newSettings: Partial<GlobalSettings>) => {
+  const updateSettings = async (newSettings: Partial<GlobalSettings>): Promise<{ success: boolean; error?: string }> => {
     let nextDocs = prepDocuments;
 
     // 1. Travelers update: ensure each traveler has their own set of preparation documents
@@ -2635,10 +2649,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     // 5. Update and sync active trip inside trips and trigger Supabase syncing
     if (activeTripId) {
-      updateTrip(activeTripId, {
+      const syncRes = await updateTrip(activeTripId, {
         tripName: newSettings.tripName !== undefined ? newSettings.tripName : settings.tripName,
         destination: newSettings.destination !== undefined ? newSettings.destination : settings.destination,
         startDate: newSettings.startDate !== undefined ? newSettings.startDate : settings.startDate,
+        returnDate: newSettings.returnDate !== undefined ? newSettings.returnDate : settings.returnDate,
         durationDays: newSettings.durationDays !== undefined ? newSettings.durationDays : settings.durationDays,
         isFlexibleDates: newSettings.isFlexibleDates !== undefined ? newSettings.isFlexibleDates : settings.isFlexibleDates,
         flexibleOutboundStart: newSettings.flexibleOutboundStart !== undefined ? newSettings.flexibleOutboundStart : settings.flexibleOutboundStart,
@@ -2654,9 +2669,13 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         prepDocuments: nextDocs,
         settings: { ...settings, ...newSettings },
       });
+      if (syncRes && syncRes.success === false) {
+        return syncRes;
+      }
     }
 
     addNotification('Alterou as configurações globais da viagem');
+    return { success: true };
   };
 
   const updateTravelers = (travelers: Traveler[]) => {

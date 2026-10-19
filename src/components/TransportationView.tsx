@@ -98,7 +98,7 @@ export const TransportationView: React.FC = () => {
   const defaultPickupDate = outboundFlight?.arrivalDate || settings.startDate || '';
   const defaultPickupTime = outboundFlight?.arrivalTime ? adjustTime(outboundFlight.arrivalTime, 1) : '';
 
-  const defaultDropoffDate = inboundFlight?.departureDate || settings.endDate || '';
+  const defaultDropoffDate = inboundFlight?.departureDate || settings.returnDate || '';
   const defaultDropoffTime = inboundFlight?.departureTime ? adjustTime(inboundFlight.departureTime, -1) : '';
 
   // Form State

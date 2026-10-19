@@ -67,6 +67,8 @@ export function calculateDateOffset(startDateStr: string, daysOffset: number): s
 
 export function mapTripToDb(trip: Trip | Partial<Trip>): Record<string, any> {
   const startDate = sanitizeDate(trip.startDate) || sanitizeDate(trip.settings?.startDate) || '2026-12-30';
+  const durationDays = Math.max(1, trip.durationDays || trip.settings?.durationDays || 10);
+  const returnDate = sanitizeDate(trip.returnDate || trip.settings?.returnDate) || calculateDateOffset(startDate, durationDays - 1);
   const validStatus = ['Planejando', 'Confirmada', 'Concluída'].includes(trip.status || '') ? trip.status : 'Planejando';
   const validTransport = ['rental', 'public', 'uber', 'mixed'].includes(trip.settings?.transportModality || '')
     ? trip.settings?.transportModality
@@ -77,7 +79,8 @@ export function mapTripToDb(trip: Trip | Partial<Trip>): Record<string, any> {
     trip_name: trip.tripName || trip.settings?.tripName || 'Minha Viagem Orlando',
     destination: trip.destination || trip.settings?.destination || 'Orlando, FL',
     start_date: startDate,
-    duration_days: Math.max(1, trip.durationDays || trip.settings?.durationDays || 10),
+    return_date: returnDate,
+    duration_days: durationDays,
     travelers_count: Math.max(1, trip.travelersCount || trip.travelers?.length || 1),
     dollar_rate: Number(trip.dollarRate || trip.settings?.dollarRate || 5.75),
     total_budget_goal_brl: Number(trip.totalBudgetGoalBRL || trip.settings?.totalBudgetGoalBRL || 0),
@@ -110,13 +113,18 @@ export function mapTripToDb(trip: Trip | Partial<Trip>): Record<string, any> {
 }
 
 export function mapDbToTrip(row: any): Partial<Trip> {
+  const startDate = sanitizeDate(row.start_date);
+  const durationDays = Number(row.duration_days) || 10;
+  const returnDate = sanitizeDate(row.return_date) || (startDate ? calculateDateOffset(startDate, durationDays - 1) : undefined);
+
   return {
     id: row.id,
     tripCode: row.trip_code,
     tripName: row.trip_name,
     destination: row.destination,
-    startDate: row.start_date,
-    durationDays: row.duration_days,
+    startDate: startDate,
+    returnDate: returnDate,
+    durationDays: durationDays,
     travelersCount: row.travelers_count,
     dollarRate: Number(row.dollar_rate),
     totalBudgetGoalBRL: Number(row.total_budget_goal_brl),
@@ -1317,7 +1325,7 @@ export const SupabaseService = {
         });
 
         const startDate = sanitizeDate(tripSummary.startDate) || '2026-12-30';
-        const returnDate = sanitizeDate(tripSummary.flexibleInboundEnd || tripSummary.settings?.flexibleInboundEnd);
+        const returnDate = sanitizeDate(tripSummary.returnDate || tripSummary.settings?.returnDate || (startDate && totalTripDays ? calculateDateOffset(startDate, totalTripDays - 1) : null));
 
         // Assemble full rawDays array ensuring all duration days exist
         const rawDays: ItineraryDay[] = [];
