@@ -712,68 +712,58 @@ export function getTripEmergencyBackup(): Trip[] {
 }
 
 // Non-destructive merge of local and remote trips
+// Non-destructive merge of local and remote trips with strict remote authority for persisted items
 export function mergeLocalAndRemoteTrips(localList: Trip[], remoteList: Trip[]): Trip[] {
   if (!remoteList || remoteList.length === 0) return localList || [];
   if (!localList || localList.length === 0) return remoteList || [];
 
   const mergedMap = new Map<string, Trip>();
 
-  // Insert local trips first
-  localList.forEach((t) => {
-    if (t && t.id) mergedMap.set(t.id, t);
+  // Inserir viagens puramente locais primeiro (ex: criadas offline e ainda não salvas no Supabase)
+  const remoteTripIds = new Set(remoteList.map((r) => r && r.id).filter(Boolean));
+  (localList || []).forEach((t) => {
+    if (t && t.id && !remoteTripIds.has(t.id)) {
+      mergedMap.set(t.id, t);
+    }
   });
 
-  // Merge remote trips without discarding local items
+  // Para viagens existentes no Supabase, os dados remotos são a fonte de autoridade.
+  // Cache local antigo NÃO pode ser fundido cegamente para não ressuscitar registros deletados.
   remoteList.forEach((rTrip) => {
     if (!rTrip || !rTrip.id) return;
-    const localTrip = mergedMap.get(rTrip.id);
+    const localTrip = (localList || []).find((l) => l && l.id === rTrip.id);
     if (!localTrip) {
       mergedMap.set(rTrip.id, rTrip);
     } else {
-      // Merge properties safely, keeping whichever has more records or merging collections cleanly
+      // Regra consistente para dados locais não salvos:
+      // Apenas itens com marcador explícito de pendência (_isPendingSave) são mantidos para sincronização.
+      const unsavedExpenses = (localTrip.expenses || []).filter((e: any) => e._isPendingSave);
+      const unsavedFlights = (localTrip.flights || []).filter((f: any) => f._isPendingSave);
+      const unsavedAccommodations = (localTrip.accommodations || []).filter((a: any) => a._isPendingSave);
+      const unsavedCarRentals = (localTrip.carRentals || []).filter((c: any) => c._isPendingSave);
+      const unsavedTickets = (localTrip.parkTickets || []).filter((t: any) => t._isPendingSave);
+
+      const mergedRawDays = (rTrip.rawDays || []).map((rDay) => {
+        const lDay = (localTrip.rawDays || []).find((ld) => ld.id === rDay.id || ld.dayNumber === rDay.dayNumber);
+        const unsavedHourly = (lDay?.hourlySchedule || []).filter((h: any) => h._isPendingSave);
+        return {
+          ...rDay,
+          hourlySchedule: unsavedHourly.length > 0
+            ? deduplicateHourlySchedule([...(rDay.hourlySchedule || []), ...unsavedHourly])
+            : (rDay.hourlySchedule || []),
+        };
+      });
+
       const merged: Trip = {
-        ...rTrip,
         ...localTrip,
-        expenses: (localTrip.expenses?.length || 0) >= (rTrip.expenses?.length || 0)
-          ? (localTrip.expenses || [])
-          : (rTrip.expenses || []),
-        rawDays: (() => {
-          if (!rTrip.rawDays || rTrip.rawDays.length === 0) return localTrip.rawDays || [];
-          if (!localTrip.rawDays || localTrip.rawDays.length === 0) return rTrip.rawDays || [];
-
-          // Preservar os dias e horários persistidos remotamente do Supabase
-          return rTrip.rawDays.map((rDay) => {
-            const lDay = (localTrip.rawDays || []).find((ld) => ld.id === rDay.id || ld.dayNumber === rDay.dayNumber);
-            if (!lDay) return rDay;
-
-            const rHourly = rDay.hourlySchedule || [];
-            const lHourly = lDay.hourlySchedule || [];
-            const mergedHourly = deduplicateHourlySchedule([...rHourly, ...lHourly]);
-
-            return {
-              ...lDay,
-              ...rDay,
-              hourlySchedule: mergedHourly,
-              parkBooking: rDay.parkBooking || lDay.parkBooking,
-              attachments: rDay.attachments && rDay.attachments.length > 0 ? rDay.attachments : (lDay.attachments || []),
-            };
-          });
-        })(),
-        prepDocuments: (localTrip.prepDocuments?.length || 0) >= (rTrip.prepDocuments?.length || 0)
-          ? (localTrip.prepDocuments || [])
-          : (rTrip.prepDocuments || []),
-        flights: (localTrip.flights?.length || 0) >= (rTrip.flights?.length || 0)
-          ? (localTrip.flights || [])
-          : (rTrip.flights || []),
-        accommodations: (localTrip.accommodations?.length || 0) >= (rTrip.accommodations?.length || 0)
-          ? (localTrip.accommodations || [])
-          : (rTrip.accommodations || []),
-        carRentals: (localTrip.carRentals?.length || 0) >= (rTrip.carRentals?.length || 0)
-          ? (localTrip.carRentals || [])
-          : (rTrip.carRentals || []),
-        parkTickets: (localTrip.parkTickets?.length || 0) >= (rTrip.parkTickets?.length || 0)
-          ? (localTrip.parkTickets || [])
-          : (rTrip.parkTickets || []),
+        ...rTrip,
+        expenses: unsavedExpenses.length > 0 ? [...(rTrip.expenses || []), ...unsavedExpenses] : (rTrip.expenses || []),
+        flights: unsavedFlights.length > 0 ? [...(rTrip.flights || []), ...unsavedFlights] : (rTrip.flights || []),
+        accommodations: unsavedAccommodations.length > 0 ? [...(rTrip.accommodations || []), ...unsavedAccommodations] : (rTrip.accommodations || []),
+        carRentals: unsavedCarRentals.length > 0 ? [...(rTrip.carRentals || []), ...unsavedCarRentals] : (rTrip.carRentals || []),
+        parkTickets: unsavedTickets.length > 0 ? [...(rTrip.parkTickets || []), ...unsavedTickets] : (rTrip.parkTickets || []),
+        prepDocuments: rTrip.prepDocuments || [],
+        rawDays: mergedRawDays.length > 0 ? mergedRawDays : (rTrip.rawDays || []),
       };
       mergedMap.set(rTrip.id, merged);
     }
@@ -2342,95 +2332,23 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   // Dynamic calculation: Calculate Day Dates from Start Date & Auto-completion
+  // Dynamic calculation: Calculate Day Dates from Start Date & Auto-completion
+  // Exibe o estado persistido diretamente de rawDays sem gerar ou modificar horários durante a renderização
   const itineraryDays: ItineraryDay[] = useMemo(() => {
-    // Map to collect next-day overflow items from previous day's late park returns
-    const overflowByDayIndex: Record<number, HourlyScheduleItem[]> = {};
-
-    const computedDays = rawDays.map((day, index) => {
+    return rawDays.map((day, index) => {
       const calculatedDate = calculateDateOffset(settings.startDate, index);
       const isPast = isDateInPast(calculatedDate, settings.isFlexibleDates);
-
-      const activeAcc = accommodations.find((acc) => {
-        if (!acc.checkInDate || !acc.checkOutDate) return false;
-        return calculatedDate >= acc.checkInDate && calculatedDate <= acc.checkOutDate;
-      });
-      const hasAcc = Boolean(
-        activeAcc &&
-        activeAcc.name &&
-        activeAcc.name.trim() &&
-        activeAcc.name.trim().toLowerCase() !== 'hospedagem' &&
-        activeAcc.name.trim().toLowerCase() !== 'nenhuma cadastrada'
-      );
       const isThemePark = isDayWithPark(day);
-
-      let currentSchedule = day.hourlySchedule || [];
-
-      if (isThemePark && day.park) {
-        const pb = day.parkBooking;
-        const result = generateParkScheduleResult(
-          day.park,
-          pb?.parkHours?.openingTime || '09:00',
-          pb?.parkHours?.closingTime || '21:00',
-          pb?.parkHours?.earlyEntryTime,
-          hasAcc ? activeAcc!.name : '',
-          currentSchedule,
-          pb?.id,
-          day.dayNumber || index + 1,
-          activeAcc?.address || (hasAcc ? activeAcc!.name : undefined),
-          day,
-          rawDays,
-          settings?.destination,
-          pb
-        );
-
-        currentSchedule = result.currentDaySchedule;
-        if (result.nextDayOverflowItems.length > 0 && index + 1 < rawDays.length) {
-          overflowByDayIndex[index + 1] = result.nextDayOverflowItems;
-        }
-      }
-
-      const isCheckOutDay = Boolean(
-        accommodations.some((acc) => acc.checkOutDate === calculatedDate)
-      );
-      const accForDay = accommodations.find((acc) => acc.checkOutDate === calculatedDate);
-      const checkOutTime = accForDay?.checkOutTime;
-
-      let cleanedSchedule = deduplicateHourlySchedule(
-        cleanInvalidAutoItems(currentSchedule, hasAcc, isThemePark, day.park)
-      );
-
-      cleanedSchedule = adjustScheduleForCheckoutAndDeparture(
-        cleanedSchedule,
-        checkOutTime,
-        isCheckOutDay
-      );
 
       return {
         ...day,
         date: calculatedDate,
         parkBooking: isThemePark ? day.parkBooking : undefined,
         completed: Boolean(day.completed || isPast),
-        hourlySchedule: cleanedSchedule,
+        hourlySchedule: (day.hourlySchedule || []).slice().sort(compareScheduleItemOrder),
       };
     });
-
-    // Merge next-day overflow items (madrugada past-midnight returns) into their respective next day's schedule
-    return computedDays.map((day, index) => {
-      const overflow = overflowByDayIndex[index];
-      if (!overflow || overflow.length === 0) return day;
-
-      const merged = adjustScheduleForCheckoutAndDeparture(
-        deduplicateHourlySchedule([...overflow, ...(day.hourlySchedule || [])])
-      );
-      // Sort schedule chronologically
-      merged.sort(compareScheduleItemOrder);
-
-      return {
-        ...day,
-        hourlySchedule: merged,
-      };
-    });
-  }, [rawDays, accommodations, settings.startDate, settings.isFlexibleDates]);
+  }, [rawDays, settings.startDate, settings.isFlexibleDates]);
 
   // Dynamic calculation: Calculate Milestones Target Dates
   const fullMilestones: BookingMilestone[] = useMemo(() => {
@@ -3204,6 +3122,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         : generateUUID();
       const itemToSave: HourlyScheduleItem = { ...item, id: rowId };
 
+      // Snapshot prévio para reversão em caso de erro no Supabase
+      const previousRawDays = rawDays;
+      const previousTrips = trips;
+
+      // Atualização otimista
       setRawDays((prevDays) => {
         return prevDays.map((d) => {
           if (d.id === dayId) {
@@ -3251,15 +3174,28 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
       if (activeTripId) {
         const res = await SupabaseService.saveHourlyScheduleItem(activeTripId, dayId, itemToSave);
-        return res.success;
+        if (!res.success) {
+          // Reverter estado otimista imediatamente
+          setRawDays(previousRawDays);
+          setTrips(previousTrips);
+          addNotification(`❌ Falha ao salvar horário: ${res.error || 'Erro no banco de dados'}. Alteração revertida.`);
+          return false;
+        }
+        addNotification(`Horário "${itemToSave.title}" salvo com sucesso.`);
+        return true;
       }
       return true;
     },
-    [activeTripId]
+    [activeTripId, rawDays, trips]
   );
 
   const deleteHourlyScheduleItem = useCallback(
     async (dayId: string, itemId: string): Promise<boolean> => {
+      // Snapshot prévio para reversão em caso de erro no Supabase
+      const previousRawDays = rawDays;
+      const previousTrips = trips;
+
+      // Atualização otimista
       setRawDays((prevDays) => {
         return prevDays.map((d) => {
           if (d.id === dayId) {
@@ -3287,10 +3223,21 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         })
       );
 
-      const success = await SupabaseService.deleteHourlySchedule(itemId);
-      return success;
+      if (activeTripId) {
+        const res = await SupabaseService.deleteHourlySchedule(itemId);
+        if (!res.success) {
+          // Reverter estado otimista imediatamente
+          setRawDays(previousRawDays);
+          setTrips(previousTrips);
+          addNotification(`❌ Falha ao excluir horário: ${res.error || 'Erro no banco de dados'}. O item foi restaurado.`);
+          return false;
+        }
+        addNotification(`Horário excluído com sucesso.`);
+        return true;
+      }
+      return true;
     },
-    [activeTripId]
+    [activeTripId, rawDays, trips]
   );
 
   const swapOrMoveParkDay = (sourceDayNumber: number, targetDayNumber: number) => {
@@ -4522,7 +4469,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     SupabaseService.deleteFlight(id);
     SupabaseService.deleteExpense(expId);
-    SupabaseService.deleteHourlySchedulesBySource(id, 'flight');
+    if (activeTripId) {
+      SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'flight');
+    }
 
     // Re-sincronizar apenas os dias afetados
     setRawDays((prevDays) => {
@@ -4803,7 +4752,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     SupabaseService.deleteCarRental(id);
     SupabaseService.deleteExpense(expId);
     SupabaseService.deleteExpense(`exp-car-${id}`);
-    SupabaseService.deleteHourlySchedulesBySource(id, 'car_rental');
+    if (activeTripId) {
+      SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'car_rental');
+    }
     if (rental) {
       addNotification(`Removeu aluguel do veículo ${rental.company} e seus horários do roteiro`);
     }
@@ -4999,7 +4950,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     SupabaseService.deleteAccommodation(id);
     SupabaseService.deleteExpense(expId);
     SupabaseService.deleteExpense(`exp-acc-${id}`);
-    SupabaseService.deleteHourlySchedulesBySource(id, 'accommodation');
+    if (activeTripId) {
+      SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'accommodation');
+    }
     if (acc) {
       addNotification(`Removeu hospedagem ${acc.name} do roteiro e do banco de dados`);
     }
@@ -5420,7 +5373,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     SupabaseService.deleteParkTicket(id);
     SupabaseService.deleteExpense(expId);
     SupabaseService.deleteExpense(`exp-ticket-${id}`);
-    SupabaseService.deleteHourlySchedulesBySource(id);
+    if (activeTripId) {
+      SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'ticket');
+    }
     if (ticket) {
       addNotification(`Removeu o ingresso ${ticket.title} e seu gasto do orçamento`);
     }

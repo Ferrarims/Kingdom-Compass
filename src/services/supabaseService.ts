@@ -1321,9 +1321,15 @@ export const SupabaseService = {
             if (pb) {
               baseDay.parkBooking = pb;
             }
-            // Merge JSONB hourly items and dedicated hourly_schedules table items cleanly
-            const mergedList = [...(baseDay.hourlySchedule || []), ...dedicatedHourly];
-            baseDay.hourlySchedule = deduplicateHourlySchedule(mergedList);
+            // Se existirem registros na tabela dedicada hourly_schedules para a viagem, ela é a fonte autoritativa.
+            // Não mesclar com baseDay.hourlySchedule legado para não ressuscitar horários apagados.
+            if (hourlyData && hourlyData.length > 0) {
+              baseDay.hourlySchedule = dedicatedHourly;
+            } else if (dedicatedHourly.length > 0) {
+              baseDay.hourlySchedule = dedicatedHourly;
+            } else {
+              baseDay.hourlySchedule = baseDay.hourlySchedule || [];
+            }
             rawDays.push(baseDay);
           } else {
             let title = 'Sem Parque';
@@ -3119,29 +3125,55 @@ export const SupabaseService = {
   /**
    * Delete Hourly Schedule Item
    */
-  async deleteHourlySchedule(id: string): Promise<boolean> {
+  async deleteHourlySchedule(id: string): Promise<{ success: boolean; error?: string }> {
     try {
+      if (!id) return { success: false, error: 'ID do horário é obrigatório' };
       const { error } = await supabase.from('hourly_schedules').delete().eq('id', id);
-      return !error;
-    } catch {
-      return false;
+      if (error) {
+        console.error('Erro ao deletar hourly_schedules:', error.message);
+        return { success: false, error: error.message };
+      }
+      return { success: true };
+    } catch (err: any) {
+      console.error('Falha ao deletar item de horário:', err);
+      return { success: false, error: err?.message || 'Falha ao deletar horário' };
     }
   },
 
   /**
-   * Delete Hourly Schedules by source_id and optionally source_type
+   * Delete Hourly Schedules by exact source_id, scoped strictly to trip_id and optionally itinerary_day_id/source_type.
+   * Não utiliza correspondência parcial (LIKE) para não atingir outras viagens ou origens.
    */
-  async deleteHourlySchedulesBySource(sourceId: string, sourceType?: string): Promise<boolean> {
+  async deleteHourlySchedulesBySource(
+    tripId: string,
+    sourceId: string,
+    sourceType?: string,
+    itineraryDayId?: string
+  ): Promise<{ success: boolean; error?: string }> {
     try {
-      if (!sourceId) return true;
-      let query = supabase.from('hourly_schedules').delete();
+      if (!tripId || !sourceId) return { success: true };
+      let query = supabase
+        .from('hourly_schedules')
+        .delete()
+        .eq('trip_id', tripId)
+        .eq('source_id', sourceId); // Correspondência exata apenas
+
       if (sourceType) {
         query = query.eq('source_type', sourceType);
       }
-      const { error } = await query.or(`source_id.eq.${sourceId},source_id.like.%${sourceId}%`);
-      return !error;
-    } catch {
-      return false;
+      if (itineraryDayId) {
+        query = query.eq('itinerary_day_id', itineraryDayId);
+      }
+
+      const { error } = await query;
+      if (error) {
+        console.error('Erro ao deletar hourly_schedules por origem:', error.message);
+        return { success: false, error: error.message };
+      }
+      return { success: true };
+    } catch (err: any) {
+      console.error('Falha em deleteHourlySchedulesBySource:', err);
+      return { success: false, error: err?.message || 'Falha ao deletar horários por origem' };
     }
   },
 

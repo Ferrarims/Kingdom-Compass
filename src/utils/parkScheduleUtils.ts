@@ -2341,6 +2341,8 @@ export function clearParkReferencesFromDay(
   // Filter out any hourly schedule items referring to the park or park transport
   let cleanedHourly = (day.hourlySchedule || [])
     .filter((item) => {
+      // Horários manuais NUNCA devem ser removidos por rotinas automáticas
+      if (item.sourceType === 'manual') return true;
       if (item.sourceType === 'park') return false;
       if (item.sourceType === 'fastpass') return false;
       if (item.sourceType === 'show') return false;
@@ -2441,6 +2443,7 @@ export function clearParkReferencesFromDay(
 
   if (isArrivalDay) {
     cleanedHourly = cleanedHourly.filter((item) => {
+      if (item.sourceType === 'manual') return true;
       const tLower = (item.title || '').toLowerCase();
       const idLower = (item.id || '').toLowerCase();
       return !(
@@ -2480,6 +2483,7 @@ export function clearParkReferencesFromDay(
   } else {
     // If no valid accommodation booked, remove any orphaned accommodation items
     cleanedHourly = cleanedHourly.filter((item) => {
+      if (item.sourceType === 'manual') return true;
       const idLower = (item.id || '').toLowerCase();
       const titleLower = (item.title || '').toLowerCase();
       return !(
@@ -2805,6 +2809,7 @@ export function syncAllEventsToHourlySchedule(
   } else if (!isPark || !parkBooking) {
     // Se o dia não tem parque ou não tem reserva de parque, purgar eventos automáticos de parque
     items = items.filter((i) => {
+      if (i.sourceType === 'manual') return true;
       const idLower = (i.id || '').toLowerCase();
       const titleLower = (i.title || '').toLowerCase();
       if (
@@ -2829,6 +2834,7 @@ export function syncAllEventsToHourlySchedule(
 
   // 2. Limpeza de itens legados de voo que causavam duplicidade com Decolagem/Pouso
   items = items.filter((i) => {
+    if (i.sourceType === 'manual') return true;
     const idLower = (i.id || '').toLowerCase();
     const titleLower = (i.title || '').toLowerCase();
     const sourceIdLower = (i.sourceId || '').toLowerCase();
@@ -2852,7 +2858,7 @@ export function syncAllEventsToHourlySchedule(
       const company = rental.company || 'Locadora';
       if (rental.pickupDate === day.date) {
         const pickupTime = rental.pickupTime || '10:00';
-        const existingCarPickupIdx = items.findIndex((i) => (i.sourceId === `car-pickup-${rental.id}`) || ((i.title || '').toLowerCase().includes('retirada') && (i.title || '').toLowerCase().includes('carro')));
+        const existingCarPickupIdx = items.findIndex((i) => (i.sourceId === rental.id || i.sourceId === `car-pickup-${rental.id}`) || ((i.title || '').toLowerCase().includes('retirada') && (i.title || '').toLowerCase().includes('carro')));
         const carPickupItem: HourlyScheduleItem = {
           id: `auto-car-pickup-${rental.id}`,
           time: pickupTime,
@@ -2861,7 +2867,7 @@ export function syncAllEventsToHourlySchedule(
           category: 'transport',
           notes: `Retirada do veículo ${rental.category || ''} na ${rental.pickupLocation || company}. Confirmação: ${rental.confirmationCode || 'N/A'}.`,
           sourceType: 'car_rental',
-          sourceId: `car-pickup-${rental.id}`,
+          sourceId: rental.id,
           completed: false,
         };
         if (existingCarPickupIdx >= 0) {
@@ -2872,7 +2878,7 @@ export function syncAllEventsToHourlySchedule(
       }
       if (rental.dropoffDate === day.date) {
         const dropoffTime = rental.dropoffTime || '16:00';
-        const existingCarDropoffIdx = items.findIndex((i) => (i.sourceId === `car-dropoff-${rental.id}`) || ((i.title || '').toLowerCase().includes('devolução') && (i.title || '').toLowerCase().includes('carro')));
+        const existingCarDropoffIdx = items.findIndex((i) => (i.sourceId === rental.id || i.sourceId === `car-dropoff-${rental.id}`) || ((i.title || '').toLowerCase().includes('devolução') && (i.title || '').toLowerCase().includes('carro')));
         const carDropoffItem: HourlyScheduleItem = {
           id: `auto-car-dropoff-${rental.id}`,
           time: dropoffTime,
@@ -2881,7 +2887,7 @@ export function syncAllEventsToHourlySchedule(
           category: 'transport',
           notes: `Devolução do veículo ${rental.category || ''} na ${rental.dropoffLocation || company}.`,
           sourceType: 'car_rental',
-          sourceId: `car-dropoff-${rental.id}`,
+          sourceId: rental.id,
           completed: false,
         };
         if (existingCarDropoffIdx >= 0) {
@@ -2937,6 +2943,7 @@ export function syncAllEventsToHourlySchedule(
     // PURGAR EVENTOS OBSOLETOS DE ACOMODAÇÕES QUE NÃO PERTENCEM A ESTA DATA OU APÓS O CHECK-OUT
     items = items.filter((item) => {
       if (!item) return false;
+      if (item.sourceType === 'manual') return true;
       const tLower = (item.title || '').toLowerCase();
       const idLower = (item.id || '').toLowerCase();
       const sourceIdLower = (item.sourceId || '').toLowerCase();
@@ -3009,6 +3016,7 @@ export function syncAllEventsToHourlySchedule(
     if (isArrivalDay) {
       // No dia de chegada, o dia NÃO inicia na acomodação antes da chegada (remover "Início do dia na acomodação" e "Acordar")
       items = items.filter((item) => {
+        if (item.sourceType === 'manual') return true;
         const tLower = (item.title || '').toLowerCase();
         const idLower = (item.id || '').toLowerCase();
         return !(
@@ -3066,7 +3074,7 @@ export function syncAllEventsToHourlySchedule(
         // Se a chegada estimada for depois do horário oficial, ajustar o evento do roteiro para a chegada estimada.
         // Se chegar antes, manter o horário oficial.
         const existingCheckInIdx = items.findIndex((i) => {
-          if (i.sourceId === `acc-checkin-${day1Timeline.firstAccId}`) return true;
+          if (i.sourceId === day1Timeline.firstAccId || i.sourceId === `acc-checkin-${day1Timeline.firstAccId}`) return true;
           const t = (i.title || '').toLowerCase();
           return t.includes('check-in') && (t.includes(accName.toLowerCase()) || t.includes('acomodação') || t.includes('hotel') || t.includes('hospedagem'));
         });
@@ -3085,7 +3093,7 @@ export function syncAllEventsToHourlySchedule(
           category: accCat,
           notes: checkInNotes,
           sourceType: 'accommodation',
-          sourceId: `acc-checkin-${day1Timeline.firstAccId || 'first'}`,
+          sourceId: day1Timeline.firstAccId,
           completed: false,
         };
 
@@ -3200,6 +3208,7 @@ export function syncAllEventsToHourlySchedule(
         } else if (!hasPark && !morningAcc) {
           // Purgar início do dia e acordar se não houver acomodação
           items = items.filter((i) => {
+            if (i.sourceType === 'manual') return true;
             const tLower = (i.title || '').toLowerCase();
             const idLower = (i.id || '').toLowerCase();
             return !(
@@ -3214,13 +3223,12 @@ export function syncAllEventsToHourlySchedule(
         }
 
         // REGRA 2 & 1: Check-in de reservas correspondentes neste dia (incluindo dias de troca de hospedagem)
-        // REGRA 2 & 1: Check-in de reservas correspondentes neste dia (incluindo dias de troca de hospedagem)
         sortedAccs.forEach((acc: any) => {
           if (acc.checkInDate === day.date) {
             const isAirbnb = acc.type === 'airbnb' || acc.type === 'house' || (acc.name && acc.name.toLowerCase().includes('airbnb'));
             const checkInTime = acc.checkInTime || '15:00';
             const existingInterCheckInIdx = items.findIndex((i) => {
-              if (i.sourceId === `acc-checkin-${acc.id}`) return true;
+              if (i.sourceId === acc.id || i.sourceId === `acc-checkin-${acc.id}`) return true;
               const t = (i.title || '').toLowerCase();
               return t.includes('check-in') && t.includes((acc.name || '').toLowerCase());
             });
@@ -3232,7 +3240,7 @@ export function syncAllEventsToHourlySchedule(
               category: isAirbnb ? 'airbnb' : 'hotel',
               notes: `Horário oficial de check-in em ${acc.name}. ${acc.confirmationCode ? 'Confirmação: ' + acc.confirmationCode + '. ' : ''}${acc.roomType ? 'Tipo: ' + acc.roomType : ''}`.trim(),
               sourceType: 'accommodation',
-              sourceId: `acc-checkin-${acc.id}`,
+              sourceId: acc.id,
               completed: false,
             };
             if (existingInterCheckInIdx >= 0) {
@@ -3243,7 +3251,8 @@ export function syncAllEventsToHourlySchedule(
           } else {
             // Purgar check-in de acomodações cuja data de início não seja este dia
             items = items.filter((i) => {
-              if (i.sourceId === `acc-checkin-${acc.id}`) return false;
+              if (i.sourceType === 'manual') return true;
+              if (i.sourceId === acc.id || i.sourceId === `acc-checkin-${acc.id}`) return false;
               if (acc.name) {
                 const tLower = (i.title || '').toLowerCase();
                 if (tLower.includes('check-in') && tLower.includes(acc.name.toLowerCase())) return false;
@@ -3324,6 +3333,7 @@ export function syncAllEventsToHourlySchedule(
         } else {
           // Sem acomodação ativa na noite -> purgar "Fim do dia na acomodação"
           items = items.filter((item) => {
+            if (item.sourceType === 'manual') return true;
             const tLower = (item.title || '').toLowerCase();
             const idLower = (item.id || '').toLowerCase();
             return !(
@@ -3343,7 +3353,7 @@ export function syncAllEventsToHourlySchedule(
       if (acc.checkOutDate === day.date) {
         const checkOutTime = acc.checkOutTime || '11:00';
         dayCheckOutTime = checkOutTime;
-        const existingCheckoutIdx = items.findIndex((i) => (i.sourceId === `acc-checkout-${acc.id}`) || ((i.title || '').toLowerCase().includes('check-out') && (i.title || '').toLowerCase().includes(acc.name?.toLowerCase() || '')));
+        const existingCheckoutIdx = items.findIndex((i) => (i.sourceId === acc.id || i.sourceId === `acc-checkout-${acc.id}`) || ((i.title || '').toLowerCase().includes('check-out') && (i.title || '').toLowerCase().includes(acc.name?.toLowerCase() || '')));
         const checkOutItem: HourlyScheduleItem = {
           id: `auto-acc-checkout-${acc.id}`,
           time: checkOutTime,
@@ -3352,7 +3362,7 @@ export function syncAllEventsToHourlySchedule(
           category: acc.type === 'airbnb' || acc.type === 'house' ? 'airbnb' : 'hotel',
           notes: `Horário contratual de check-out: ${checkOutTime}. Entrega de chaves e encerramento da estadia.`,
           sourceType: 'accommodation',
-          sourceId: `acc-checkout-${acc.id}`,
+          sourceId: acc.id,
           completed: false,
         };
         if (existingCheckoutIdx >= 0) {
@@ -4212,33 +4222,33 @@ export function ensureHourlyScheduleItems(
 
   if (!items || items.length === 0) return [];
 
-  const dayTitle = !Array.isArray(dayOrSchedule) && dayOrSchedule?.title ? dayOrSchedule.title.trim().toLowerCase() : '';
-
-  // Purgar quaisquer itens fictícios legados (ex: eventos artificiais de placeholder às 10:00 com título genérico ou título do dia)
+  // Purgar quaisquer itens fictícios legados (ex: eventos artificiais de placeholder às 10:00)
   const cleanItems = items.filter((item) => {
     if (!item) return false;
+    // REGRA DE OURO: Horários manuais NUNCA devem ser removidos nem filtrados por rotinas de limpeza automática
+    if (item.sourceType === 'manual') {
+      return true;
+    }
+
     const id = (item.id || '').toLowerCase();
-    const t = (item.title || '').trim().toLowerCase();
     if (id.startsWith('artificial-') || id === 'auto-empty-placeholder') {
       return false;
     }
-    // Não permitir evento automático sem origem real criado apenas para preencher o dia
-    const isGenericTitle =
-      (dayTitle && t === dayTitle) ||
-      t === 'programação livre' ||
-      t === 'programacao livre' ||
-      t === 'planejamento livre' ||
-      t === 'novo dia mágico' ||
-      t === 'novo dia magico' ||
-      t === 'dia livre' ||
-      t === 'sem parque' ||
-      t === 'dia livre / sem parque';
+
+    // A limpeza automática só pode identificar placeholders artificiais com critérios confiáveis
+    const isAutoPlaceholderSource =
+      item.sourceType === 'gen' ||
+      item.sourceType === 'placeholder' ||
+      item.sourceType === 'system' ||
+      (!item.sourceType && !item.sourceId);
+
+    const isArtificialNote = (item.notes || '').trim() === 'Atividade programada para o dia.';
+    const isArtificialId = id.includes('empty-schedule') || id.includes('placeholder');
 
     if (
       item.time === '10:00' &&
-      (id.includes('empty-schedule') || id.includes('placeholder') || isGenericTitle) &&
-      (!item.sourceType || item.sourceType === 'manual' || item.sourceType === 'gen') &&
-      (!item.notes || !item.notes.trim()) &&
+      isAutoPlaceholderSource &&
+      (isArtificialNote || isArtificialId) &&
       (!item.location || !item.location.trim())
     ) {
       return false;

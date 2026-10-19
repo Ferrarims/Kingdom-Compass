@@ -564,57 +564,9 @@ export const ItineraryPlanner: React.FC = () => {
     };
   };
 
-  // Helper: Get hourly schedule (defaults to empty array - blank by default, with auto car rentals)
+  // Helper: Get hourly schedule (exibe o estado persistido sem criar eventos virtuais durante a renderização)
   const getHourlySchedule = (day: ItineraryDay): HourlyScheduleItem[] => {
-    let items = [...(day.hourlySchedule || [])];
-    const isDayOne = day.dayNumber === 1;
-    const isLastDay = day.dayNumber === itineraryDays.length;
-
-    if (carRentals && carRentals.length > 0) {
-      carRentals.forEach((rental, rIdx) => {
-        const isPickupDay = rental.pickupDate === day.date || (isDayOne && rIdx === 0 && !rental.pickupDate);
-        if (isPickupDay) {
-          const pickupTime = rental.pickupTime || '10:00';
-          const exists = items.some((i) => (i.sourceId && i.sourceId.includes(rental.id)) || (i.id && i.id.includes(rental.id))) ||
-                         items.some((i) => (i.title || '').toLowerCase().includes('retirada') && (i.title || '').toLowerCase().includes('carro'));
-          if (!exists) {
-            items.push({
-              id: `auto-car-pickup-${rental.id}`,
-              time: pickupTime,
-              title: `🚗 Retirada de Carro: ${rental.company || 'Locadora'} (${rental.category || 'Veículo'})`,
-              location: rental.pickupLocation || 'Aeroporto / Local de Retirada',
-              category: 'transport',
-              notes: `Retirada do veículo ${rental.category || ''} na ${rental.pickupLocation || 'locadora'}. Confirmação: ${rental.confirmationCode || 'N/A'}.`,
-              sourceType: 'car_rental',
-              sourceId: `car-pickup-${rental.id}`,
-              completed: false,
-            });
-          }
-        }
-
-        const isDropoffDay = rental.dropoffDate === day.date || (isLastDay && rIdx === 0 && !rental.dropoffDate);
-        if (isDropoffDay) {
-          const dropoffTime = rental.dropoffTime || '16:00';
-          const exists = items.some((i) => (i.sourceId && i.sourceId.includes(rental.id)) || (i.id && i.id.includes(rental.id))) ||
-                         items.some((i) => (i.title || '').toLowerCase().includes('devolução') && (i.title || '').toLowerCase().includes('carro'));
-          if (!exists) {
-            items.push({
-              id: `auto-car-dropoff-${rental.id}`,
-              time: dropoffTime,
-              title: `🚗 Devolução de Carro: ${rental.company || 'Locadora'} (${rental.category || 'Veículo'})`,
-              location: rental.dropoffLocation || 'Aeroporto / Local de Devolução',
-              category: 'transport',
-              notes: `Devolução do veículo ${rental.category || ''} na ${rental.dropoffLocation || 'locadora'}.`,
-              sourceType: 'car_rental',
-              sourceId: `car-dropoff-${rental.id}`,
-              completed: false,
-            });
-          }
-        }
-      });
-    }
-
-    return deduplicateHourlySchedule(items).sort(compareScheduleItemOrder);
+    return (day.hourlySchedule || []).slice().sort(compareScheduleItemOrder);
   };
 
   // Toggle single hourly item
@@ -685,6 +637,7 @@ export const ItineraryPlanner: React.FC = () => {
     }
     const targetDayId = targetDay.id;
 
+    let success = false;
     if (editingHourlyItemId) {
       const existing = (targetDay.hourlySchedule || []).find((i) => i.id === editingHourlyItemId);
       const updatedItem: HourlyScheduleItem = {
@@ -698,7 +651,7 @@ export const ItineraryPlanner: React.FC = () => {
         sourceType: existing?.sourceType || 'manual',
         sourceId: existing?.sourceId,
       };
-      await saveHourlyScheduleItem(targetDayId, updatedItem);
+      success = await saveHourlyScheduleItem(targetDayId, updatedItem);
     } else {
       const newItem: HourlyScheduleItem = {
         id: generateUUID(),
@@ -710,11 +663,13 @@ export const ItineraryPlanner: React.FC = () => {
         notes: hourlyForm.notes.trim(),
         sourceType: 'manual',
       };
-      await saveHourlyScheduleItem(targetDayId, newItem);
+      success = await saveHourlyScheduleItem(targetDayId, newItem);
     }
 
-    setIsHourlyModalOpen(false);
-    setEditingHourlyItemId(null);
+    if (success) {
+      setIsHourlyModalOpen(false);
+      setEditingHourlyItemId(null);
+    }
   };
 
   // Quick Park selection Modal Save
