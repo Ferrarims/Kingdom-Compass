@@ -462,7 +462,7 @@ export function mapHourlyScheduleToDb(
 
   const rowId = item.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.id)
     ? item.id
-    : ensureValidUUID(item.id, 'hourly', `${itineraryDayId}-${item.sourceType || 'gen'}-${item.sourceId || ''}-${time}-${(item.title || '').trim()}-${index}`);
+    : ensureValidUUID(item.id, 'hourly', `${itineraryDayId}-${item.sourceType || 'gen'}-${item.sourceId || ''}-${time}-${(item.title || '').trim()}`);
 
   return {
     id: rowId,
