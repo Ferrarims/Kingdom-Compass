@@ -2378,8 +2378,12 @@ export function applyAccommodationMorningRule(
   // No dia de check-out, criar somente se o horário de check-out for posterior a 07:30
   const isCheckoutToday = morningAcc.checkOutDate === realDate;
   if (isCheckoutToday) {
-    const checkOutTime = (morningAcc.checkOutTime || '11:00').trim();
-    if (checkOutTime.localeCompare('07:30') <= 0) {
+    const rawCheckOutTime = (morningAcc.checkOutTime || '11:00').trim();
+    const timeMatch = rawCheckOutTime.match(/\d{1,2}:\d{2}/);
+    const cleanTime = timeMatch ? timeMatch[0] : '11:00';
+    const normalizedCheckOutTime = cleanTime.length === 4 ? `0${cleanTime}` : cleanTime;
+
+    if (normalizedCheckOutTime.localeCompare('07:30') <= 0) {
       return result;
     }
   }
@@ -3299,8 +3303,8 @@ export function syncAllEventsToHourlySchedule(
             location: isIdenticalAddr ? `${fromName} ➔ ${toName} (Endereço não validado)` : `${fromName} ➔ ${toName}`,
             category: 'transport',
             notes: driveNotes,
-            sourceType: 'accommodation',
-            sourceId: `split-${accCheckingOutToday.id}-${accCheckingInToday.id}`,
+            sourceType: 'transport',
+            sourceId: `split-drive-${accCheckingOutToday.id}-${accCheckingInToday.id}`,
             completed: false,
           };
 

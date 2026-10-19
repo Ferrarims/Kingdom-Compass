@@ -46,6 +46,21 @@ export function sanitizeDate(d?: string | null): string | null {
   return null;
 }
 
+export function calculateDateOffset(startDateStr: string, daysOffset: number): string {
+  try {
+    const parts = (startDateStr || '').split('-');
+    if (parts.length === 3) {
+      const d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+      d.setDate(d.getDate() + daysOffset);
+      const y = d.getFullYear();
+      const mon = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${mon}-${day}`;
+    }
+  } catch {}
+  return startDateStr;
+}
+
 /**
  * Mappers between Application camelCase and Supabase snake_case
  */
@@ -381,7 +396,7 @@ export function mapItineraryDayToDb(day: Omit<ItineraryDay, 'date'> & { date?: s
   return row;
 }
 
-export function mapDbToItineraryDay(row: any): Omit<ItineraryDay, 'date'> {
+export function mapDbToItineraryDay(row: any): ItineraryDay {
   let parsedHourly: HourlyScheduleItem[] = [];
   if (Array.isArray(row.hourly_schedule)) {
     parsedHourly = row.hourly_schedule;
@@ -397,6 +412,7 @@ export function mapDbToItineraryDay(row: any): Omit<ItineraryDay, 'date'> {
   return {
     id: row.id,
     dayNumber: Number(row.day_number) || 1,
+    date: sanitizeDate(row.date) || '',
     title: row.title,
     park: row.park,
     completed: Boolean(row.completed),
@@ -1300,14 +1316,28 @@ export const SupabaseService = {
           }
         });
 
+        const startDate = sanitizeDate(tripSummary.startDate) || '2026-12-30';
+        const returnDate = sanitizeDate(tripSummary.flexibleInboundEnd || tripSummary.settings?.flexibleInboundEnd);
+
         // Assemble full rawDays array ensuring all duration days exist
-        const rawDays: Omit<ItineraryDay, 'date'>[] = [];
+        const rawDays: ItineraryDay[] = [];
         for (let dayNum = 1; dayNum <= totalTripDays; dayNum++) {
           const dRow = dbDaysMap.get(dayNum);
           const dedicatedHourly = hourlyByDayNumber.get(dayNum) || [];
 
+          // Determine date for this day
+          let dayDate = dRow ? sanitizeDate(dRow.date) : null;
+          if (!dayDate) {
+            if (dayNum === totalTripDays && returnDate) {
+              dayDate = returnDate;
+            } else {
+              dayDate = calculateDateOffset(startDate, dayNum - 1);
+            }
+          }
+
           if (dRow) {
             const baseDay = mapDbToItineraryDay(dRow);
+            baseDay.date = dayDate;
             const pb = parkBookingsByDayId.get(baseDay.id) || parkBookingsByDayNum.get(dayNum);
             if (pb) {
               baseDay.parkBooking = pb;
@@ -1329,6 +1359,7 @@ export const SupabaseService = {
             rawDays.push({
               id: ensureValidUUID(null, 'day', tripId + '-' + dayNum),
               dayNumber: dayNum,
+              date: dayDate,
               title,
               park: 'Sem Parque' as any,
               completed: false,
