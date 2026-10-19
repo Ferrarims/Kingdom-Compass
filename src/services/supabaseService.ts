@@ -2673,10 +2673,7 @@ export const SupabaseService = {
             totalBudgetGoalBRL: fallbackTrip?.totalBudgetGoalBRL || 0,
             status: fallbackTrip?.status || 'Planejando',
             coverTheme: fallbackTrip?.coverTheme || 'magic',
-            travelers: fallbackTrip?.travelers || [],
-            expenses: [],
-            rawDays: [day],
-            createdAt: new Date().toISOString().split('T')[0],
+            rawDays: [{ ...day, date: day.date || calculateDateOffset(fallbackTrip?.startDate || '2026-12-30', (day.dayNumber || 1) - 1) }],
           };
           const tripDb = mapTripToDb(tripToInsert);
           const { error: tripUpsertErr } = await supabase.from('trips').upsert(tripDb, { onConflict: 'id' });

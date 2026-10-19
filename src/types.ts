@@ -29,6 +29,8 @@ export interface GlobalSettings {
   id?: string;
   tripCode?: string;
   startDate: string; // YYYY-MM-DD (or reference start date)
+  returnDate?: string; // YYYY-MM-DD (exact return date)
+  endDate?: string; // YYYY-MM-DD (alias for exact return date)
   durationDays: number;
   travelersCount: number;
   dollarRate: number; // e.g. 5.75 BRL per USD
@@ -57,6 +59,8 @@ export interface Trip {
   tripName: string;
   destination: string;
   startDate: string; // YYYY-MM-DD
+  returnDate?: string; // YYYY-MM-DD
+  endDate?: string;
   durationDays: number;
   isFlexibleDates: boolean;
   flexibleOutboundStart?: string;
@@ -77,7 +81,7 @@ export interface Trip {
   coverTheme?: string;
   settings: GlobalSettings;
   expenses: ExpenseItem[];
-  rawDays: Omit<ItineraryDay, 'date'>[];
+  rawDays: ItineraryDay[];
   prepDocuments: PreparationDocument[];
   bookingMilestones: Omit<BookingMilestone, 'targetDate'>[];
   baggageItems: BaggageItem[];

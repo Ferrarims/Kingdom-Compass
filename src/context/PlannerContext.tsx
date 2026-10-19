@@ -437,8 +437,9 @@ export function formatDisplayDate(dateStr: string, includeDayOfWeek: boolean = t
   }
 }
 
-export function generateDaysForNewTrip(durationDays: number): Omit<ItineraryDay, 'date'>[] {
+export function generateDaysForNewTrip(durationDays: number, startDate?: string): ItineraryDay[] {
   const total = Math.max(1, durationDays);
+  const baseStart = startDate || '2026-12-30';
   return Array.from({ length: total }, (_, i) => {
     const dayNum = i + 1;
     let title = 'Sem Parque';
@@ -451,6 +452,7 @@ export function generateDaysForNewTrip(durationDays: number): Omit<ItineraryDay,
     return {
       id: generateUUID(),
       dayNumber: dayNum,
+      date: calculateDateOffset(baseStart, i),
       title: title,
       park: 'Sem Parque' as any,
       completed: false,
