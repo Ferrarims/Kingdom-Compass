@@ -1,0 +1,6 @@
+{
+  "name": "KingdomCompass - Planejador Mágico Orlando",
+  "description": "Web App colaborativo de planejamento de viagem mágica para a Disney e Orlando em grupo, com itinerários diários, cálculo dinâmico de custos por pessoa, conversão cambial, acomodações e voos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

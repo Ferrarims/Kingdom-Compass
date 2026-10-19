@@ -1,0 +1,126 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-serif: 'Playfair Display', Georgia, serif;
+    --font-display: 'Cinzel', serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  }
+  
+  body {
+    font-family: var(--font-sans);
+    background-color: #F9F7F2;
+    color: #1E293B;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, .font-serif {
+    font-family: var(--font-serif);
+  }
+}
+
+.font-serif-title {
+  font-family: 'Playfair Display', Georgia, serif;
+}
+
+.font-cinzel {
+  font-family: 'Cinzel', Georgia, serif;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.03);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(26, 43, 76, 0.2);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(26, 43, 76, 0.4);
+}
+
+@media print {
+  @page {
+    margin: 12mm 14mm;
+    size: A4 portrait;
+  }
+
+  *, *::before, *::after {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
+  }
+
+  aside, 
+  nav, 
+  header, 
+  .no-print, 
+  button, 
+  .collaborator-bar, 
+  .fixed,
+  .screen-only {
+    display: none !important;
+  }
+
+  body {
+    background: #FFFFFF !important;
+    color: #1A2B4C !important;
+    font-size: 10.5pt;
+    line-height: 1.4;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  .print-full {
+    width: 100% !important;
+    max-width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .print-avoid-break {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  .print-page-break {
+    break-after: page !important;
+    page-break-after: always !important;
+  }
+}
+
+@media screen {
+  .print-only {
+    display: none !important;
+  }
+}
+
+/* Map marker selection & pulse animations */
+@keyframes markerPulseGlow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(212, 175, 55, 0.75), 0 4px 12px rgba(0, 0, 0, 0.35);
+    transform: scale(1.15);
+  }
+  50% {
+    box-shadow: 0 0 0 10px rgba(212, 175, 55, 0), 0 6px 16px rgba(0, 0, 0, 0.45);
+    transform: scale(1.22);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(212, 175, 55, 0), 0 4px 12px rgba(0, 0, 0, 0.35);
+    transform: scale(1.15);
+  }
+}
+
+.marker-selected-pulse {
+  animation: markerPulseGlow 1.8s infinite ease-in-out !important;
+  border-color: #D4AF37 !important;
+  z-index: 1000 !important;
+}
+
+

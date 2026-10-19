@@ -1,0 +1,3402 @@
+import { supabase, isSupabaseMissingTableError } from './supabaseClient';
+import { ensureValidUUID, generateDeterministicUUID } from '../utils/uuid';
+import { ensurePreparationDocsForTravelers } from '../utils/prepDocs';
+import { deduplicateHourlySchedule, syncAllEventsToHourlySchedule, syncAccommodationsWithItineraryDays, ensureHourlyScheduleItems } from '../utils/parkScheduleUtils';
+import { normalizeAttractionName } from '../utils/attractionUtils';
+import {
+  Trip,
+  ExpenseItem,
+  ExpenseCategory,
+  ItineraryDay,
+  FlightSegment,
+  CarRentalBooking,
+  AccommodationBooking,
+  ParkTicketPurchase,
+  PreparationDocument,
+  BookingMilestone,
+  BaggageItem,
+  Traveler,
+  GlobalSettings,
+  HourlyScheduleItem,
+  ParkDayBooking,
+  PhotoPackageItem,
+  SettlementPayment,
+  TravelerAttractionSelection,
+} from '../types';
+
+/**
+ * Robust date sanitization for PostgreSQL DATE columns
+ */
+export function sanitizeDate(d?: string | null): string | null {
+  if (!d || typeof d !== 'string') return null;
+  const trimmed = d.trim();
+  if (!trimmed) return null;
+  // Match YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  // Match DD/MM/YYYY
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(trimmed)) {
+    const [day, month, year] = trimmed.split('/');
+    return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+  // Try ISO parse
+  const parsed = new Date(trimmed);
+  if (!isNaN(parsed.getTime())) {
+    return parsed.toISOString().split('T')[0];
+  }
+  return null;
+}
+
+/**
+ * Mappers between Application camelCase and Supabase snake_case
+ */
+
+export function mapTripToDb(trip: Trip | Partial<Trip>): Record<string, any> {
+  const startDate = sanitizeDate(trip.startDate) || sanitizeDate(trip.settings?.startDate) || '2026-12-30';
+  const validStatus = ['Planejando', 'Confirmada', 'Concluída'].includes(trip.status || '') ? trip.status : 'Planejando';
+  const validTransport = ['rental', 'public', 'uber', 'mixed'].includes(trip.settings?.transportModality || '')
+    ? trip.settings?.transportModality
+    : 'rental';
+
+  const row: Record<string, any> = {
+    trip_code: trip.tripCode || `ORL-${Math.floor(1000 + Math.random() * 9000)}`,
+    trip_name: trip.tripName || trip.settings?.tripName || 'Minha Viagem Orlando',
+    destination: trip.destination || trip.settings?.destination || 'Orlando, FL',
+    start_date: startDate,
+    duration_days: Math.max(1, trip.durationDays || trip.settings?.durationDays || 10),
+    travelers_count: Math.max(1, trip.travelersCount || trip.travelers?.length || 1),
+    dollar_rate: Number(trip.dollarRate || trip.settings?.dollarRate || 5.75),
+    total_budget_goal_brl: Number(trip.totalBudgetGoalBRL || trip.settings?.totalBudgetGoalBRL || 0),
+    status: validStatus,
+    cover_theme: trip.coverTheme || 'magic',
+    transport_modality: validTransport,
+    is_flexible_dates: Boolean(trip.isFlexibleDates ?? trip.settings?.isFlexibleDates ?? false),
+    flexible_outbound_start: sanitizeDate(trip.flexibleOutboundStart || trip.settings?.flexibleOutboundStart),
+    flexible_outbound_end: sanitizeDate(trip.flexibleOutboundEnd || trip.settings?.flexibleOutboundEnd),
+    flexible_inbound_start: sanitizeDate(trip.flexibleInboundStart || trip.settings?.flexibleInboundStart),
+    flexible_inbound_end: sanitizeDate(trip.flexibleInboundEnd || trip.settings?.flexibleInboundEnd),
+    flexible_min_days: trip.flexibleMinDays || trip.settings?.flexibleMinDays || null,
+    flexible_max_days: trip.flexibleMaxDays || trip.settings?.flexibleMaxDays || null,
+    outbound_flexibility: trip.outboundFlexibility || trip.settings?.outboundFlexibility || null,
+    inbound_flexibility: trip.inboundFlexibility || trip.settings?.inboundFlexibility || null,
+    flexibility_notes: trip.flexibilityNotes || trip.settings?.flexibilityNotes || null,
+    module_readiness: trip.moduleReadiness || trip.settings?.moduleReadiness || {
+      flights: 'pending',
+      accommodations: 'pending',
+      parks: 'pending',
+      transport: 'pending',
+      docs: 'pending',
+    },
+    updated_at: new Date().toISOString(),
+  };
+  if (trip.id) {
+    row.id = ensureValidUUID(trip.id, 'trip', trip.tripCode || 'code');
+  }
+  return row;
+}
+
+export function mapDbToTrip(row: any): Partial<Trip> {
+  return {
+    id: row.id,
+    tripCode: row.trip_code,
+    tripName: row.trip_name,
+    destination: row.destination,
+    startDate: row.start_date,
+    durationDays: row.duration_days,
+    travelersCount: row.travelers_count,
+    dollarRate: Number(row.dollar_rate),
+    totalBudgetGoalBRL: Number(row.total_budget_goal_brl),
+    status: row.status,
+    coverTheme: row.cover_theme,
+    isFlexibleDates: row.is_flexible_dates,
+    flexibleOutboundStart: row.flexible_outbound_start,
+    flexibleOutboundEnd: row.flexible_outbound_end,
+    flexibleInboundStart: row.flexible_inbound_start,
+    flexibleInboundEnd: row.flexible_inbound_end,
+    flexibleMinDays: row.flexible_min_days,
+    flexibleMaxDays: row.flexible_max_days,
+    outboundFlexibility: row.outbound_flexibility,
+    inboundFlexibility: row.inbound_flexibility,
+    flexibilityNotes: row.flexibility_notes,
+    moduleReadiness: row.module_readiness || {
+      flights: 'pending',
+      accommodations: 'pending',
+      parks: 'pending',
+      transport: 'pending',
+      docs: 'pending',
+    },
+    createdAt: row.created_at,
+  };
+}
+
+export function mapTravelerToDb(traveler: Traveler, tripId: string): Record<string, any> {
+  const role = traveler.role === 'admin' ? 'admin' : 'traveler';
+  const row: Record<string, any> = {
+    trip_id: tripId,
+    name: traveler.name,
+    email: traveler.email || null,
+    avatar_color: traveler.avatarColor || '#3B82F6',
+    avatar_icon: traveler.avatarIcon || null,
+    role: role,
+    updated_at: new Date().toISOString(),
+  };
+  if (traveler.id) {
+    row.id = ensureValidUUID(traveler.id, 'traveler', traveler.id);
+  }
+  return row;
+}
+
+export function mapDbToTraveler(row: any): Traveler {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email || '',
+    avatarColor: row.avatar_color,
+    avatarIcon: row.avatar_icon,
+    role: row.role,
+  };
+}
+
+/**
+ * Helper to sanitize traveler IDs for Foreign Key UUID columns.
+ * If 'all' or empty, returns null (so the DB foreign key is valid and null represents group/all).
+ */
+export function sanitizeTravelerForeignKey(id?: string | null): string | null {
+  if (!id || id === 'all' || id === 'grupo') return null;
+  return ensureValidUUID(id, 'traveler', id);
+}
+
+export function mapExpenseToDb(item: ExpenseItem, tripId: string, fallbackTravelerId?: string | null): Record<string, any> {
+  const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+  const validDbCategories = [
+    'Passagens',
+    'Hospedagem',
+    'Ingressos',
+    'Pacotes de Fotos',
+    'Alimentação',
+    'Compras',
+    'Transporte',
+    'Seguro',
+    'Documentos',
+  ];
+  const category = validDbCategories.includes(item.category) ? item.category : 'Pacotes de Fotos';
+
+  const validStatuses = ['Pago', 'Pendente', 'Parcial', 'Não iniciado'];
+  const status = validStatuses.includes(item.status) ? item.status : 'Pendente';
+
+  const usd = item.estimatedValueUSD !== undefined && item.estimatedValueUSD !== null && !isNaN(Number(item.estimatedValueUSD))
+    ? Number(item.estimatedValueUSD)
+    : 0;
+  const brl = item.estimatedValueBRL !== undefined && item.estimatedValueBRL !== null && !isNaN(Number(item.estimatedValueBRL))
+    ? Number(item.estimatedValueBRL)
+    : 0;
+  const paidBrl = item.paidValueBRL !== undefined && item.paidValueBRL !== null && !isNaN(Number(item.paidValueBRL))
+    ? Number(item.paidValueBRL)
+    : 0;
+
+  const rawPayer = item.payerId || item.responsibleTravelerId || null;
+  const payerFk = sanitizeTravelerForeignKey(rawPayer);
+
+  // If payerFk is null ("cada um pagou o seu" / grupo), payer_id remains null.
+  // responsible_traveler_id will receive a valid traveler fallback only if provided (to satisfy legacy not-null schemas).
+  const respTravelerFk = payerFk || (fallbackTravelerId ? sanitizeTravelerForeignKey(fallbackTravelerId) : null);
+
+  const cleanSourceId = item.sourceId ? ensureValidUUID(item.sourceId, 'source', item.sourceId) : null;
+  const sourceType = item.sourceType || (item.category === 'Pacotes de Fotos' || item.title?.toLowerCase().includes('pacote de fotos') ? 'photo_package' : null);
+
+  const row: Record<string, any> = {
+    trip_id: cleanTripId,
+    title: (item.title || 'Despesa').trim(),
+    category,
+    estimated_value_usd: usd,
+    estimated_value_brl: brl,
+    paid_value_brl: paidBrl,
+    paid_value_usd: item.paidValueUSD ? Number(item.paidValueUSD) : null,
+    status,
+    responsible_traveler_id: respTravelerFk,
+    payer_id: payerFk,
+    source_type: sourceType,
+    source_id: cleanSourceId,
+    traveler_ids: (item.travelerIds || [rawPayer || 'all']).map((tid) =>
+      tid && tid !== 'all' ? ensureValidUUID(tid, 'traveler', tid) : 'all'
+    ),
+    excluded: Boolean(item.excluded),
+    notes: item.notes || null,
+    created_at: item.createdAt || new Date().toISOString(),
+    updated_by: item.updatedBy || null,
+    updated_at: new Date().toISOString(),
+  };
+  if (item.id) {
+    row.id = ensureValidUUID(item.id, 'expense', item.title);
+  }
+  return row;
+}
+
+export function mapDbToExpense(row: any): ExpenseItem {
+  // Se payer_id no banco for null, significa que foi dividido / cada um pagou o seu ('all')
+  const payerId = row.payer_id ? row.payer_id : 'all';
+  const respTravelerId = row.responsible_traveler_id || row.payer_id || 'all';
+
+  let category: ExpenseCategory = (row.category as ExpenseCategory) || 'Compras';
+  if (
+    row.source_type === 'photo_package' ||
+    row.category === 'Pacotes de Fotos' ||
+    (row.title && row.title.toLowerCase().startsWith('pacote de fotos'))
+  ) {
+    category = 'Pacotes de Fotos';
+  }
+
+  return {
+    id: row.id,
+    title: row.title || 'Despesa',
+    category,
+    estimatedValueUSD: Number(row.estimated_value_usd || 0),
+    estimatedValueBRL: Number(row.estimated_value_brl || 0),
+    paidValueBRL: Number(row.paid_value_brl || 0),
+    paidValueUSD: row.paid_value_usd ? Number(row.paid_value_usd) : undefined,
+    status: row.status || 'Pendente',
+    payerId: payerId,
+    responsibleTravelerId: respTravelerId,
+    sourceType: row.source_type || (category === 'Pacotes de Fotos' ? 'photo_package' : undefined),
+    sourceId: row.source_id,
+    travelerIds: Array.isArray(row.traveler_ids) && row.traveler_ids.length > 0
+      ? row.traveler_ids.map((tid: string) => (tid && tid !== 'all' ? ensureValidUUID(tid, 'traveler', tid) : 'all'))
+      : ['all'],
+    excluded: Boolean(row.excluded),
+    notes: row.notes || '',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    updatedBy: row.updated_by,
+  };
+}
+
+/**
+ * Sincroniza um gasto de outra tabela (voos, hotéis, etc.) com a tabela de expenses central.
+ */
+async function syncToExpenses(
+  tripId: string, 
+  sourceType: 'flight' | 'accommodation' | 'car_rental' | 'park_ticket' | 'photo_package',
+  sourceId: string,
+  data: {
+    title: string;
+    category: any;
+    usd: number;
+    brl: number;
+    payerId: string;
+    travelerIds: string[];
+    status: any;
+    notes?: string;
+  },
+  fallbackTrip?: Partial<Trip>
+) {
+  try {
+    const typeMap: Record<string, string> = {
+      flight: 'flight-expense',
+      accommodation: 'acc-expense',
+      car_rental: 'car-expense',
+      park_ticket: 'ticket-expense',
+      photo_package: 'photo-expense'
+    };
+
+    const expId = generateDeterministicUUID(typeMap[sourceType] || sourceType, sourceId);
+
+    if (data.usd <= 0 && data.brl <= 0) {
+      try {
+        await supabase.from('expenses').delete().eq('id', expId);
+      } catch (e) {
+        // ignore
+      }
+      return;
+    }
+
+    const expenseItem: ExpenseItem = {
+      id: expId,
+      title: data.title,
+      category: data.category,
+      estimatedValueUSD: data.usd,
+      estimatedValueBRL: data.brl,
+      paidValueBRL: data.status === 'Pago' ? data.brl : 0,
+      paidValueUSD: data.status === 'Pago' ? data.usd : 0,
+      status: data.status,
+      payerId: data.payerId,
+      responsibleTravelerId: data.payerId,
+      travelerIds: data.travelerIds,
+      sourceType,
+      sourceId,
+      excluded: false,
+      notes: data.notes
+    };
+
+    // Obter viajante de fallback caso a coluna no banco ainda tenha restrição NOT NULL em schemas legados
+    let defaultTravelerId: string | null = null;
+    if (fallbackTrip?.travelers && fallbackTrip.travelers.length > 0) {
+      defaultTravelerId = fallbackTrip.travelers[0].id;
+    }
+
+    let row = mapExpenseToDb(expenseItem, tripId, defaultTravelerId);
+    let { error } = await supabase.from('expenses').upsert(row, { onConflict: 'id' });
+
+    // Se falhar por restrição NOT NULL em responsible_traveler_id, busca o primeiro viajante da viagem no banco e repete
+    if (error && (error.message?.includes('responsible_traveler_id') || error.code === '23502')) {
+      const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+      const { data: dbTraveler } = await supabase
+        .from('travelers')
+        .select('id')
+        .eq('trip_id', cleanTripId)
+        .limit(1)
+        .maybeSingle();
+
+      if (dbTraveler?.id) {
+        row = mapExpenseToDb(expenseItem, tripId, dbTraveler.id);
+        const retryResult = await supabase.from('expenses').upsert(row, { onConflict: 'id' });
+        error = retryResult.error;
+      }
+    }
+
+    if (error && !isSupabaseMissingTableError(error)) {
+      console.error(`Erro ao sincronizar gasto (${sourceType}):`, error);
+    }
+  } catch (err) {
+    console.error(`Erro ao sincronizar gasto (${sourceType}):`, err);
+  }
+}
+
+export function mapItineraryDayToDb(day: Omit<ItineraryDay, 'date'> & { date?: string }, tripId: string): Record<string, any> {
+  const row: Record<string, any> = {
+    trip_id: tripId,
+    day_number: day.dayNumber,
+    date: sanitizeDate(day.date),
+    title: day.title,
+    park: day.park || 'Sem Parque',
+    completed: !!day.completed,
+    morning: day.morning || { notes: '', where: '', dining: '' },
+    afternoon: day.afternoon || { notes: '', where: '', dining: '' },
+    night: day.night || { notes: '', where: '', dining: '' },
+    general_notes: day.generalNotes || '',
+    hourly_schedule: [],
+    updated_at: new Date().toISOString(),
+  };
+  if (day.id) {
+    row.id = ensureValidUUID(day.id, 'day', tripId + '-' + day.dayNumber);
+  }
+  return row;
+}
+
+export function mapDbToItineraryDay(row: any): Omit<ItineraryDay, 'date'> {
+  let parsedHourly: HourlyScheduleItem[] = [];
+  if (Array.isArray(row.hourly_schedule)) {
+    parsedHourly = row.hourly_schedule;
+  } else if (typeof row.hourly_schedule === 'string' && row.hourly_schedule.trim().startsWith('[')) {
+    try {
+      const parsed = JSON.parse(row.hourly_schedule);
+      if (Array.isArray(parsed)) parsedHourly = parsed;
+    } catch {}
+  } else if (Array.isArray(row.hourlySchedule)) {
+    parsedHourly = row.hourlySchedule;
+  }
+
+  return {
+    id: row.id,
+    dayNumber: Number(row.day_number) || 1,
+    title: row.title,
+    park: row.park,
+    completed: Boolean(row.completed),
+    morning: row.morning || { notes: '', where: '', dining: '' },
+    afternoon: row.afternoon || { notes: '', where: '', dining: '' },
+    night: row.night || { notes: '', where: '', dining: '' },
+    generalNotes: row.general_notes || '',
+    hourlySchedule: deduplicateHourlySchedule(parsedHourly),
+    attachments: [],
+  };
+}
+
+const VALID_HOURLY_CATEGORIES = [
+  'transport',
+  'park',
+  'dining',
+  'hotel',
+  'shopping',
+  'flight',
+  'other',
+] as const;
+
+export function mapHourlyScheduleToDb(
+  item: HourlyScheduleItem,
+  itineraryDayId: string,
+  tripId: string,
+  index: number = 0
+): Record<string, any> {
+  const rawCat = (item.category || '').toLowerCase();
+  const category = (VALID_HOURLY_CATEGORIES as readonly string[]).includes(rawCat)
+    ? rawCat
+    : 'other';
+
+  const cleanTime = (item.time || '08:00').trim();
+  const timeMatch = cleanTime.match(/(\d{1,2}:\d{2})/);
+  const time = timeMatch
+    ? (timeMatch[1].length === 4 ? `0${timeMatch[1]}` : timeMatch[1])
+    : '08:00';
+
+  const rowId = item.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.id)
+    ? item.id
+    : ensureValidUUID(item.id, 'hourly', `${itineraryDayId}-${item.sourceType || 'gen'}-${item.sourceId || ''}-${time}-${(item.title || '').trim()}-${index}`);
+
+  return {
+    id: rowId,
+    itinerary_day_id: itineraryDayId,
+    trip_id: tripId,
+    time,
+    title: (item.title || 'Atividade').trim(),
+    location: item.location ? item.location.trim() : null,
+    category,
+    completed: Boolean(item.completed),
+    notes: item.notes ? item.notes.trim() : null,
+    source_type: item.sourceType || (item.id?.startsWith('auto-show') ? 'show' : null),
+    source_id: item.sourceId || null,
+    created_at: new Date().toISOString(),
+  };
+}
+
+export function mapDbToHourlySchedule(row: any): HourlyScheduleItem {
+  const rawCat = (row.category || '').toLowerCase();
+  const category = (VALID_HOURLY_CATEGORIES as readonly string[]).includes(rawCat)
+    ? (rawCat as HourlyScheduleItem['category'])
+    : 'other';
+
+  return {
+    id: row.id,
+    time: row.time || '08:00',
+    title: row.title || '',
+    location: row.location || undefined,
+    category,
+    completed: Boolean(row.completed),
+    notes: row.notes || undefined,
+    sourceType: row.source_type || row.sourceType || undefined,
+    sourceId: row.source_id || row.sourceId || undefined,
+  };
+}
+
+export function mapParkBookingToDb(
+  booking: ParkDayBooking,
+  itineraryDayId: string,
+  tripId: string
+): Record<string, any> {
+  const row: Record<string, any> = {
+    itinerary_day_id: itineraryDayId,
+    trip_id: tripId,
+    day_number: booking.dayNumber || 1,
+    park_name: booking.parkName || 'Sem Parque',
+    park_id: booking.parkId || null,
+    park_hours: booking.parkHours || { openingTime: '09:00', closingTime: '21:00', earlyEntryTime: '08:30' },
+    park_pass_status: booking.parkPassStatus || 'Confirmado no App',
+    confirmation_code: booking.confirmationCode || null,
+    ticket_type: booking.ticketType || null,
+    rope_drop_plan: booking.ropeDropPlan || null,
+    fast_passes: Array.isArray(booking.fastPasses) ? booking.fastPasses.map(fp => ensureValidUUID(fp.id, 'fastpass', `${itineraryDayId}-${fp.attractionName}-${fp.timeWindow}`)) : [],
+    dining_reservations: Array.isArray(booking.diningReservations) ? booking.diningReservations.map(dr => ensureValidUUID(dr.id, 'dining', `${itineraryDayId}-${dr.restaurantName}-${dr.time}`)) : [],
+    shows_and_parades: Array.isArray(booking.showsAndParades) ? booking.showsAndParades.map(s => ensureValidUUID(s.id, 'show', `${itineraryDayId}-${s.showName}-${s.time}`)) : [],
+    has_photo_package: Boolean(booking.hasPhotoPackage || booking.photoPackage),
+    photo_package: booking.hasPhotoPackage && booking.photoPackage ? ensureValidUUID(booking.photoPackage.id, 'photo-pkg', `${itineraryDayId}-${booking.photoPackage.name}`) : null,
+    notes: booking.notes || null,
+    updated_at: new Date().toISOString(),
+  };
+  if (booking.id) {
+    row.id = ensureValidUUID(booking.id, 'park-booking', itineraryDayId);
+  }
+  return row;
+}
+
+export function mapDbToParkBooking(row: any): ParkDayBooking {
+  let parkHours = { openingTime: '09:00', closingTime: '21:00' };
+  if (row.park_hours) {
+    if (typeof row.park_hours === 'string') {
+      try {
+        parkHours = JSON.parse(row.park_hours);
+      } catch {}
+    } else if (typeof row.park_hours === 'object') {
+      parkHours = row.park_hours;
+    }
+  }
+
+  const parseJsonField = (val: any, fallback: any = []) => {
+    if (!val) return fallback;
+    if (typeof val === 'object') return val;
+    if (typeof val === 'string') {
+      try {
+        return JSON.parse(val);
+      } catch {
+        return fallback;
+      }
+    }
+    return fallback;
+  };
+
+  const fastPasses = parseJsonField(row.fast_passes, []);
+  const diningReservations = parseJsonField(row.dining_reservations, []);
+  const showsAndParades = parseJsonField(row.shows_and_parades, []);
+  const photoPkgRaw = parseJsonField(row.photo_package, null);
+
+  return {
+    id: row.id,
+    dayNumber: Number(row.day_number) || 1,
+    date: row.date || '',
+    parkName: row.park_name || '',
+    parkId: row.park_id || undefined,
+    parkHours,
+    parkPassStatus: row.park_pass_status || 'Confirmado no App',
+    confirmationCode: row.confirmation_code || undefined,
+    ticketType: row.ticket_type || undefined,
+    ropeDropPlan: row.rope_drop_plan || undefined,
+    fastPasses: Array.isArray(fastPasses) ? fastPasses : [],
+    diningReservations: Array.isArray(diningReservations) ? diningReservations : [],
+    showsAndParades: Array.isArray(showsAndParades) ? showsAndParades : [],
+    hasPhotoPackage: Boolean(row.has_photo_package || photoPkgRaw),
+    photoPackage: photoPkgRaw && typeof photoPkgRaw === 'object' ? photoPkgRaw : undefined,
+    notes: row.notes || undefined,
+  };
+}
+
+export function mapFlightToDb(f: FlightSegment, tripId: string): Record<string, any> {
+  const validTypes = ['outbound', 'inbound', 'connection', 'extra'];
+  const type = validTypes.includes(f.type) ? f.type : 'outbound';
+  const validCabins = ['Econômica', 'Premium Economy', 'Executiva', 'Primeira Classe'];
+  const cabinClass = validCabins.includes(f.cabinClass) ? f.cabinClass : 'Econômica';
+
+  const row: Record<string, any> = {
+    trip_id: tripId,
+    type,
+    type_label: f.typeLabel || 'Voo',
+    airline: f.airline || 'Companhia Aérea',
+    airline_code: f.airlineCode || null,
+    flight_number: f.flightNumber || '0000',
+    pnr_locator: f.pnrLocator || 'N/A',
+    origin_airport: f.originAirport || 'Origem',
+    origin_city: f.originCity || null,
+    origin_code: f.originCode || null,
+    destination_airport: f.destinationAirport || 'Destino',
+    destination_city: f.destinationCity || null,
+    destination_code: f.destinationCode || null,
+    departure_date: sanitizeDate(f.departureDate),
+    departure_time: f.departureTime || '00:00',
+    arrival_date: sanitizeDate(f.arrivalDate),
+    arrival_time: f.arrivalTime || '00:00',
+    duration: f.duration || null,
+    stopovers: f.stopovers || 'Voo Direto',
+    cabin_class: cabinClass,
+    seats: f.seats || null,
+    terminal_origin: f.terminalOrigin || null,
+    terminal_destination: f.terminalDestination || null,
+    gate: f.gate || null,
+    baggage_allowance: f.baggageAllowance || { personalItem: true, carryOnQty: 1, checkedQty: 1, notes: '' },
+    status: f.status || 'Emitido / Confirmado',
+    ticket_cost_usd: f.ticketCostUSD ? Number(f.ticketCostUSD) : null,
+    ticket_cost_brl: f.ticketCostBRL ? Number(f.ticketCostBRL) : null,
+    payer_id: sanitizeTravelerForeignKey(f.payerId),
+    notes: f.notes || null,
+    passengers: f.passengers || [],
+    traveler_ids: (f.travelerIds || ['all']).map((tid) =>
+      tid && tid !== 'all' ? ensureValidUUID(tid, 'traveler', tid) : 'all'
+    ),
+    updated_at: new Date().toISOString(),
+  };
+  if (f.id) {
+    row.id = ensureValidUUID(f.id, 'flight', tripId + '-' + f.flightNumber);
+  }
+  return row;
+}
+
+export function mapDbToFlight(row: any): FlightSegment {
+  return {
+    id: row.id,
+    type: row.type,
+    typeLabel: row.type_label,
+    airline: row.airline,
+    airlineCode: row.airline_code,
+    flightNumber: row.flight_number,
+    pnrLocator: row.pnr_locator,
+    originAirport: row.origin_airport,
+    originCity: row.origin_city,
+    originCode: row.origin_code,
+    destinationAirport: row.destination_airport,
+    destinationCity: row.destination_city,
+    destinationCode: row.destination_code,
+    departureDate: row.departure_date,
+    departureTime: row.departure_time,
+    arrivalDate: row.arrival_date,
+    arrivalTime: row.arrival_time,
+    duration: row.duration,
+    stopovers: row.stopovers,
+    cabinClass: row.cabin_class,
+    seats: row.seats,
+    terminalOrigin: row.terminal_origin,
+    terminalDestination: row.terminal_destination,
+    gate: row.gate,
+    baggageAllowance: row.baggage_allowance || { personalItem: true, carryOnQty: 1, checkedQty: 1, notes: '' },
+    status: row.status,
+    ticketCostUSD: row.ticket_cost_usd ? Number(row.ticket_cost_usd) : undefined,
+    ticketCostBRL: row.ticket_cost_brl ? Number(row.ticket_cost_brl) : undefined,
+    payerId: row.payer_id || 'all',
+    notes: row.notes,
+    passengers: row.passengers || [],
+    travelerIds: (row.traveler_ids || ['all']).map((tid: string) =>
+      tid && tid !== 'all' ? ensureValidUUID(tid, 'traveler', tid) : 'all'
+    ),
+    attachments: [],
+  };
+}
+
+export function mapCarRentalToDb(c: CarRentalBooking, tripId: string): Record<string, any> {
+  const row: Record<string, any> = {
+    trip_id: tripId,
+    company: c.company || 'Locadora',
+    confirmation_code: c.confirmationCode || 'N/A',
+    category: c.category || 'SUV / Sedan',
+    pickup_location: c.pickupLocation || 'Aeroporto',
+    pickup_date: sanitizeDate(c.pickupDate),
+    pickup_time: c.pickupTime || '12:00',
+    dropoff_location: c.dropoffLocation || 'Aeroporto',
+    dropoff_date: sanitizeDate(c.dropoffDate),
+    dropoff_time: c.dropoffTime || '12:00',
+    cost_usd: c.costUSD ? Number(c.costUSD) : null,
+    cost_brl: c.costBRL ? Number(c.costBRL) : null,
+    status: c.status || 'Reservado / Confirmado',
+    payer_id: sanitizeTravelerForeignKey(c.payerId),
+    driver_name: c.driverName || null,
+    included_insurances: c.includedInsurances || [],
+    toll_option: c.tollOption || 'Visitor Toll Pass',
+    traveler_ids: (c.travelerIds || ['all']).map((tid) =>
+      tid && tid !== 'all' ? ensureValidUUID(tid, 'traveler', tid) : 'all'
+    ),
+    notes: c.notes || null,
+    updated_at: new Date().toISOString(),
+  };
+  if (c.id) {
+    row.id = ensureValidUUID(c.id, 'car', tripId + '-' + c.confirmationCode);
+  }
+  return row;
+}
+
+export function mapDbToCarRental(row: any): CarRentalBooking {
+  return {
+    id: row.id,
+    company: row.company,
+    confirmationCode: row.confirmation_code,
+    category: row.category,
+    pickupLocation: row.pickup_location,
+    pickupDate: row.pickup_date,
+    pickupTime: row.pickup_time,
+    dropoffLocation: row.dropoff_location,
+    dropoffDate: row.dropoff_date,
+    dropoffTime: row.dropoff_time,
+    costUSD: row.cost_usd ? Number(row.cost_usd) : undefined,
+    costBRL: row.cost_brl ? Number(row.cost_brl) : undefined,
+    status: row.status,
+    payerId: row.payer_id || 'all',
+    driverName: row.driver_name,
+    includedInsurances: row.included_insurances || [],
+    tollOption: row.toll_option,
+    travelerIds: (row.traveler_ids || ['all']).map((tid: string) =>
+      tid && tid !== 'all' ? ensureValidUUID(tid, 'traveler', tid) : 'all'
+    ),
+    notes: row.notes,
+    attachments: [],
+  };
+}
+
+export function mapAccommodationToDb(a: AccommodationBooking, tripId: string): Record<string, any> {
+  const validTypes = ['hotel', 'resort', 'airbnb', 'house', 'other'];
+  const type = validTypes.includes(a.type) ? a.type : 'hotel';
+
+  const validStatuses = ['Reservado / Confirmado', 'Pago', 'Pendente', 'Concluído'];
+  const status = validStatuses.includes(a.status) ? a.status : 'Reservado / Confirmado';
+
+  const checkIn = sanitizeDate(a.checkInDate) || '2026-12-30';
+  const checkOut = sanitizeDate(a.checkOutDate) || '2027-01-10';
+
+  const row: Record<string, any> = {
+    trip_id: tripId,
+    type,
+    name: a.name || 'Hospedagem',
+    confirmation_code: a.confirmationCode || 'Não informado',
+    address: a.address || 'Orlando, FL',
+    check_in_date: checkIn,
+    check_in_time: a.checkInTime || '15:00',
+    check_out_date: checkOut,
+    check_out_time: a.checkOutTime || '11:00',
+    room_type: a.roomType || null,
+    cost_usd: a.costUSD !== undefined && a.costUSD !== null && !isNaN(Number(a.costUSD)) ? Number(a.costUSD) : null,
+    cost_brl: a.costBRL !== undefined && a.costBRL !== null && !isNaN(Number(a.costBRL)) ? Number(a.costBRL) : null,
+    status,
+    payer_id: sanitizeTravelerForeignKey(a.payerId),
+    guest_name: a.guestName || null,
+    total_guests: typeof a.totalGuests === 'number' && !isNaN(a.totalGuests) && a.totalGuests > 0 ? Math.floor(a.totalGuests) : 1,
+    amenities: Array.isArray(a.amenities) ? a.amenities : [],
+    traveler_ids: (a.travelerIds || ['all']).map((tid) =>
+      tid && tid !== 'all' ? ensureValidUUID(tid, 'traveler', tid) : 'all'
+    ),
+    contact_phone: a.contactPhone || null,
+    notes: a.notes || null,
+    updated_at: new Date().toISOString(),
+  };
+  if (a.id) {
+    row.id = ensureValidUUID(a.id, 'accommodation', tripId + '-' + a.confirmationCode);
+  }
+  return row;
+}
+
+export function mapDbToAccommodation(row: any): AccommodationBooking {
+  return {
+    id: row.id,
+    type: row.type || 'hotel',
+    name: row.name || 'Hospedagem',
+    confirmationCode: row.confirmation_code || '',
+    address: row.address || '',
+    checkInDate: row.check_in_date || '2026-12-30',
+    checkInTime: row.check_in_time || '15:00',
+    checkOutDate: row.check_out_date || '2027-01-10',
+    checkOutTime: row.check_out_time || '11:00',
+    roomType: row.room_type || undefined,
+    costUSD: row.cost_usd !== null && row.cost_usd !== undefined ? Number(row.cost_usd) : undefined,
+    costBRL: row.cost_brl !== null && row.cost_brl !== undefined ? Number(row.cost_brl) : undefined,
+    status: row.status || 'Reservado / Confirmado',
+    payerId: row.payer_id || 'all',
+    guestName: row.guest_name || undefined,
+    totalGuests: row.total_guests !== null && row.total_guests !== undefined ? Number(row.total_guests) : 1,
+    amenities: Array.isArray(row.amenities) ? row.amenities : [],
+    travelerIds: (row.traveler_ids || ['all']).map((tid: string) =>
+      tid && tid !== 'all' ? ensureValidUUID(tid, 'traveler', tid) : 'all'
+    ),
+    contactPhone: row.contact_phone || undefined,
+    notes: row.notes || undefined,
+    attachments: [],
+  };
+}
+
+export function mapParkTicketToDb(t: ParkTicketPurchase, tripId: string): Record<string, any> {
+  const row: Record<string, any> = {
+    trip_id: tripId,
+    title: t.title,
+    type: t.type || 'individual',
+    complex: t.complex,
+    parks_included: t.parksIncluded || [],
+    days_count: t.daysCount || 1,
+    ticket_option: t.ticketOption || null,
+    traveler_ids: (t.travelerIds || ['all']).map((tid) =>
+      tid && tid !== 'all' ? ensureValidUUID(tid, 'traveler', tid) : 'all'
+    ),
+    quantity: t.quantity || 1,
+    cost_usd: t.costUSD ? Number(t.costUSD) : null,
+    cost_brl: t.costBRL ? Number(t.costBRL) : null,
+    payment_status: t.paymentStatus || 'Pago',
+    payer_id: sanitizeTravelerForeignKey(t.payerId),
+    confirmation_code: t.confirmationCode || null,
+    seller: t.seller || null,
+    notes: t.notes || null,
+    voucher_attachment: t.voucherAttachment || null,
+    updated_at: new Date().toISOString(),
+  };
+  if (t.id) {
+    row.id = ensureValidUUID(t.id, 'ticket', tripId + '-' + t.title);
+  }
+  return row;
+}
+
+export function mapDbToParkTicket(row: any): ParkTicketPurchase {
+  return {
+    id: row.id,
+    title: row.title,
+    type: row.type,
+    complex: row.complex,
+    parksIncluded: row.parks_included || [],
+    daysCount: row.days_count,
+    ticketOption: row.ticket_option,
+    travelerIds: (row.traveler_ids || ['all']).map((tid: string) =>
+      tid && tid !== 'all' ? ensureValidUUID(tid, 'traveler', tid) : 'all'
+    ),
+    quantity: row.quantity,
+    costUSD: row.cost_usd ? Number(row.cost_usd) : undefined,
+    costBRL: row.cost_brl ? Number(row.cost_brl) : undefined,
+    paymentStatus: row.payment_status,
+    payerId: row.payer_id || 'all',
+    confirmationCode: row.confirmation_code,
+    seller: row.seller,
+    notes: row.notes,
+    voucherAttachment: row.voucher_attachment,
+    createdAt: row.created_at,
+  };
+}
+
+export function mapPrepDocToDb(doc: PreparationDocument, tripId: string): Record<string, any> {
+  const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+  const cleanTravelerId = doc.travelerId ? ensureValidUUID(doc.travelerId, 'traveler', doc.travelerId) : null;
+  const seed = `${cleanTripId}-${cleanTravelerId || 'shared'}-${doc.title || doc.id}`;
+  const docId = ensureValidUUID(doc.id, 'prep-doc', seed);
+
+  const row: Record<string, any> = {
+    id: docId,
+    trip_id: cleanTripId,
+    title: doc.title,
+    subtitle: doc.subtitle || '',
+    status: doc.status || 'Pendente',
+    completed: !!doc.completed,
+    completed_by_travelers: doc.completedByTravelers || {},
+    traveler_id: cleanTravelerId,
+    sub_items: (doc.subItems || []).map((sub, idx) => ({
+      id: ensureValidUUID(sub.id, 'sub-item', `${cleanTripId}-${cleanTravelerId || 'shared'}-${doc.title}-${idx}-${sub.title}`),
+      title: sub.title,
+      completed: !!sub.completed,
+      completedByTravelers: sub.completedByTravelers || {},
+    })),
+    tips: doc.tips || [],
+    links: doc.links || [],
+    updated_at: new Date().toISOString(),
+  };
+  return row;
+}
+
+export function mapDbToPrepDoc(row: any): PreparationDocument {
+  const subItemsRaw = Array.isArray(row.sub_items) ? row.sub_items : [];
+  const subItems = subItemsRaw.map((sub: any) => ({
+    id: sub.id,
+    title: sub.title,
+    completed: Boolean(sub.completed),
+    completedByTravelers: sub.completedByTravelers || sub.completed_by_travelers || {},
+  }));
+
+  return {
+    id: row.id,
+    travelerId: row.traveler_id,
+    title: row.title,
+    subtitle: row.subtitle,
+    status: row.status || 'Pendente',
+    completed: Boolean(row.completed),
+    completedByTravelers: row.completed_by_travelers || row.completedByTravelers || {},
+    subItems,
+    tips: row.tips || [],
+    links: row.links || [],
+  };
+}
+
+export function mapBaggageToDb(item: BaggageItem, tripId: string): Record<string, any> {
+  const row: Record<string, any> = {
+    trip_id: tripId,
+    traveler_id: ensureValidUUID(item.travelerId, 'traveler', item.travelerId),
+    category: item.category,
+    name: item.name,
+    packed: !!item.packed,
+    quantity: item.quantity || 1,
+    updated_at: new Date().toISOString(),
+  };
+  if (item.id) {
+    row.id = ensureValidUUID(item.id, 'baggage', tripId + '-' + item.travelerId + '-' + item.name);
+  }
+  return row;
+}
+
+export function mapDbToBaggage(row: any): BaggageItem {
+  return {
+    id: row.id,
+    travelerId: ensureValidUUID(row.traveler_id, 'traveler', row.traveler_id),
+    category: row.category,
+    name: row.name,
+    packed: Boolean(row.packed),
+    quantity: row.quantity || 1,
+  };
+}
+
+export function mapMilestoneToDb(m: Omit<BookingMilestone, 'targetDate'>, tripId: string): Record<string, any> {
+  const row: Record<string, any> = {
+    trip_id: tripId,
+    title: m.title,
+    days_before_trip: m.daysBeforeTrip,
+    description: m.description,
+    completed: !!m.completed,
+    category: m.category,
+    updated_at: new Date().toISOString(),
+  };
+  if (m.id) {
+    row.id = ensureValidUUID(m.id, 'milestone', tripId + '-' + m.title);
+  }
+  return row;
+}
+
+export function mapDbToMilestone(row: any): Omit<BookingMilestone, 'targetDate'> {
+  return {
+    id: row.id,
+    title: row.title,
+    daysBeforeTrip: row.days_before_trip,
+    description: row.description,
+    completed: Boolean(row.completed),
+    category: row.category,
+  };
+}
+
+export function mapSettlementPaymentToDb(p: SettlementPayment, tripId: string): Record<string, any> {
+  const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+  const fromTrv = ensureValidUUID(p.fromTravelerId, 'traveler', p.fromTravelerId);
+  const toTrv = ensureValidUUID(p.toTravelerId, 'traveler', p.toTravelerId);
+  const id = p.id ? ensureValidUUID(p.id, 'settlement', `${cleanTripId}-${fromTrv}-${toTrv}-${p.description || ''}`) : ensureValidUUID(Date.now().toString(), 'settlement', `${cleanTripId}-${fromTrv}-${toTrv}`);
+
+  return {
+    id,
+    trip_id: cleanTripId,
+    from_traveler_id: fromTrv,
+    to_traveler_id: toTrv,
+    amount_brl: Number(p.amountBrl) || 0,
+    amount_usd: p.amountUsd !== undefined && p.amountUsd !== null ? Number(p.amountUsd) : null,
+    description: p.description || null,
+    payment_date: sanitizeDate(p.paymentDate) || new Date().toISOString().split('T')[0],
+    payment_method: p.paymentMethod || 'PIX',
+    status: p.status || 'Concluído',
+    updated_at: new Date().toISOString(),
+  };
+}
+
+export function mapDbToSettlementPayment(row: any): SettlementPayment {
+  return {
+    id: row.id,
+    tripId: row.trip_id,
+    fromTravelerId: row.from_traveler_id,
+    toTravelerId: row.to_traveler_id,
+    amountBrl: Number(row.amount_brl) || 0,
+    amountUsd: row.amount_usd !== null && row.amount_usd !== undefined ? Number(row.amount_usd) : undefined,
+    description: row.description || '',
+    paymentDate: row.payment_date || new Date().toISOString().split('T')[0],
+    paymentMethod: row.payment_method || 'PIX',
+    status: row.status || 'Concluído',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+/**
+ * Service API Methods
+ */
+
+export const SupabaseService = {
+  /**
+   * Fetch all trips summary
+   */
+  async fetchAllTrips(): Promise<Trip[] | null> {
+    try {
+      const { data: tripsData, error: tripsErr } = await supabase
+        .from('trips')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (tripsErr) {
+        if (isSupabaseMissingTableError(tripsErr)) {
+          // Schema not initialized yet in Supabase
+          return null;
+        }
+        console.warn('Supabase: Erro ao buscar viagens:', tripsErr);
+        return null;
+      }
+
+      if (!tripsData || tripsData.length === 0) {
+        return [];
+      }
+
+      const fullTrips: Trip[] = [];
+
+      for (const tRow of tripsData) {
+        const tripSummary = mapDbToTrip(tRow);
+        const tripId = tRow.id;
+
+        // Fetch travelers for this trip
+        const { data: trvData } = await supabase.from('travelers').select('*').eq('trip_id', tripId);
+        const travelers = (trvData || []).map(mapDbToTraveler);
+
+        // Fetch other collections
+        const [
+          { data: expData },
+          { data: daysData },
+          { data: hourlyData },
+          { data: fltData },
+          { data: carData },
+          { data: accData },
+          { data: tktData },
+          { data: docData },
+          { data: mlsData },
+          { data: bagData },
+          { data: parkBookingsData },
+          { data: attrSelData },
+          { data: showsData },
+          { data: diningData },
+          { data: fastPassData },
+          { data: photoPkgData },
+        ] = await Promise.all([
+          supabase.from('expenses').select('*').eq('trip_id', tripId),
+          supabase.from('itinerary_days').select('*').eq('trip_id', tripId).order('day_number', { ascending: true }),
+          supabase.from('hourly_schedules').select('*').eq('trip_id', tripId).order('time', { ascending: true }),
+          supabase.from('flight_segments').select('*').eq('trip_id', tripId),
+          supabase.from('car_rentals').select('*').eq('trip_id', tripId),
+          supabase.from('accommodations').select('*').eq('trip_id', tripId),
+          supabase.from('park_ticket_purchases').select('*').eq('trip_id', tripId),
+          supabase.from('preparation_documents').select('*').eq('trip_id', tripId),
+          supabase.from('booking_milestones').select('*').eq('trip_id', tripId),
+          supabase.from('baggage_items').select('*').eq('trip_id', tripId),
+          supabase.from('park_day_bookings').select('*').eq('trip_id', tripId),
+          supabase.from('traveler_attraction_selections').select('*').eq('trip_id', tripId),
+          supabase.from('park_shows_reservations').select('*').eq('trip_id', tripId),
+          supabase.from('park_dining_reservations').select('*').eq('trip_id', tripId),
+          supabase.from('park_fast_passes').select('*').eq('trip_id', tripId),
+          supabase.from('park_photo_packages').select('*').eq('trip_id', tripId),
+        ]);
+
+        // Map photo packages by itinerary_day_id or park_day_booking_id
+        const photoPackagesByDay = new Map<string, PhotoPackageItem>();
+        (photoPkgData || []).forEach((pRow: any) => {
+          const pkgItem: PhotoPackageItem = {
+            id: pRow.id,
+            name: pRow.name || 'Pacote de Fotos',
+            type: pRow.package_type || 'trip_30days',
+            validityDescription: pRow.validity_description || undefined,
+            complex: pRow.complex || 'Disney',
+            includedParks: Array.isArray(pRow.included_parks) ? pRow.included_parks : [],
+            confirmationCode: pRow.confirmation_code || undefined,
+            accountEmailOrUser: pRow.account_email_or_user || undefined,
+            costUSD: pRow.cost_usd !== null ? Number(pRow.cost_usd) : undefined,
+            costBRL: pRow.cost_brl !== null ? Number(pRow.cost_brl) : undefined,
+            status: pRow.status || 'Confirmado',
+            paymentStatus: pRow.payment_status || 'Reservado / Confirmado',
+            payerId: pRow.payer_id || 'all',
+            travelerIds: Array.isArray(pRow.traveler_ids) ? pRow.traveler_ids : ['all'],
+            notes: pRow.notes || undefined,
+          };
+          if (pRow.itinerary_day_id) {
+            photoPackagesByDay.set(pRow.itinerary_day_id, pkgItem);
+          }
+          if (pRow.park_day_booking_id) {
+            photoPackagesByDay.set(pRow.park_day_booking_id, pkgItem);
+          }
+        });
+
+        // Map secondary show reservations by itinerary_day_id and park_day_booking_id
+        const secondaryShowsByDay = new Map<string, any[]>();
+        (showsData || []).forEach((s: any) => {
+          const item = {
+            id: s.id,
+            showName: s.show_name || 'Show',
+            time: s.show_time || '20:00',
+            location: s.location || undefined,
+            reservedArea: s.reserved_area || undefined,
+            status: s.status || 'Agendado',
+            notes: s.notes || undefined,
+          };
+          const keys = [s.itinerary_day_id, s.park_day_booking_id].filter(Boolean);
+          keys.forEach((k) => {
+            const list = secondaryShowsByDay.get(k) || [];
+            if (!list.some((x: any) => x.id === item.id || (x.showName === item.showName && x.time === item.time))) {
+              list.push(item);
+            }
+            secondaryShowsByDay.set(k, list);
+          });
+        });
+
+        // Map secondary dining reservations by itinerary_day_id and park_day_booking_id
+        const secondaryDiningByDay = new Map<string, any[]>();
+        (diningData || []).forEach((dr: any) => {
+          const item = {
+            id: dr.id,
+            restaurantName: dr.restaurant_name || 'Restaurante',
+            mealType: dr.meal_type || 'Almoço (Lunch)',
+            time: dr.reservation_time || '12:30',
+            confirmationCode: dr.confirmation_code || undefined,
+            partySize: dr.party_size || undefined,
+            tableService: Boolean(dr.table_service),
+            status: dr.status || 'Confirmada',
+            cancellationPolicyNotes: dr.cancellation_policy_notes || undefined,
+            notes: dr.notes || undefined,
+          };
+          const keys = [dr.itinerary_day_id, dr.park_day_booking_id].filter(Boolean);
+          keys.forEach((k) => {
+            const list = secondaryDiningByDay.get(k) || [];
+            if (!list.some((x: any) => x.id === item.id || (x.restaurantName === item.restaurantName && x.time === item.time))) {
+              list.push(item);
+            }
+            secondaryDiningByDay.set(k, list);
+          });
+        });
+
+        // Map secondary fast passes by itinerary_day_id and park_day_booking_id
+        const secondaryFastPassesByDay = new Map<string, any[]>();
+        (fastPassData || []).forEach((fp: any) => {
+          const item = {
+            id: fp.id,
+            attractionName: fp.attraction_name || 'Atração',
+            timeWindow: fp.time_window || '',
+            type: fp.pass_type || 'Lightning Lane Multi Pass',
+            tier: fp.tier || undefined,
+            status: fp.status || 'Agendado',
+            partyMembers: fp.party_members || undefined,
+            notes: fp.notes || undefined,
+          };
+          const keys = [fp.itinerary_day_id, fp.park_day_booking_id].filter(Boolean);
+          keys.forEach((k) => {
+            const list = secondaryFastPassesByDay.get(k) || [];
+            if (!list.some((x: any) => x.id === item.id || (x.attractionName === item.attractionName && x.timeWindow === item.timeWindow))) {
+              list.push(item);
+            }
+            secondaryFastPassesByDay.set(k, list);
+          });
+        });
+
+        const parkBookingsByDayId = new Map<string, ParkDayBooking>();
+        const parkBookingsByDayNum = new Map<number, ParkDayBooking>();
+        (parkBookingsData || []).forEach((pbRow: any) => {
+          const pb = mapDbToParkBooking(pbRow);
+          // Enrich with shows
+          const extraShows = [
+            ...(secondaryShowsByDay.get(pbRow.itinerary_day_id) || []),
+            ...(secondaryShowsByDay.get(pbRow.id) || []),
+          ];
+          if (extraShows.length > 0) {
+            const existingShows = pb.showsAndParades || [];
+            extraShows.forEach((ex) => {
+              if (!existingShows.some((es) => es.id === ex.id || (es.showName === ex.showName && es.time === ex.time))) {
+                existingShows.push(ex);
+              }
+            });
+            pb.showsAndParades = existingShows;
+          }
+
+          // Enrich with dining
+          const extraDining = [
+            ...(secondaryDiningByDay.get(pbRow.itinerary_day_id) || []),
+            ...(secondaryDiningByDay.get(pbRow.id) || []),
+          ];
+          if (extraDining.length > 0) {
+            const existingDining = pb.diningReservations || [];
+            extraDining.forEach((ex) => {
+              if (!existingDining.some((ed) => ed.id === ex.id || (ed.restaurantName === ex.restaurantName && ed.time === ex.time))) {
+                existingDining.push(ex);
+              }
+            });
+            pb.diningReservations = existingDining;
+          }
+
+          // Enrich with fast passes
+          const extraFp = [
+            ...(secondaryFastPassesByDay.get(pbRow.itinerary_day_id) || []),
+            ...(secondaryFastPassesByDay.get(pbRow.id) || []),
+          ];
+          if (extraFp.length > 0) {
+            const existingFp = pb.fastPasses || [];
+            extraFp.forEach((ex) => {
+              if (!existingFp.some((ef) => ef.id === ex.id || (ef.attractionName === ex.attractionName && ef.timeWindow === ex.timeWindow))) {
+                existingFp.push(ex);
+              }
+            });
+            pb.fastPasses = existingFp;
+          }
+
+          if (pbRow.itinerary_day_id) {
+            const photoPkg = photoPackagesByDay.get(pbRow.itinerary_day_id) || photoPackagesByDay.get(pb.id);
+            if (photoPkg && !pb.photoPackage) {
+              pb.photoPackage = photoPkg;
+              pb.hasPhotoPackage = true;
+            }
+            parkBookingsByDayId.set(pbRow.itinerary_day_id, pb);
+          }
+          if (pbRow.day_number) {
+            parkBookingsByDayNum.set(Number(pbRow.day_number), pb);
+          }
+        });
+
+        // Also check if any standalone photo package exists for days without bookings
+        (photoPkgData || []).forEach((pRow: any) => {
+          if (pRow.itinerary_day_id && !parkBookingsByDayId.has(pRow.itinerary_day_id)) {
+            const pkgItem = photoPackagesByDay.get(pRow.itinerary_day_id);
+            if (pkgItem) {
+              const matchedDay = (daysData || []).find((d: any) => d.id === pRow.itinerary_day_id);
+              if (matchedDay) {
+                const dayNum = Number(matchedDay.day_number) || 1;
+                const existingPb = parkBookingsByDayNum.get(dayNum) || {
+                  id: `pb-${pRow.itinerary_day_id}`,
+                  dayNumber: dayNum,
+                  date: matchedDay.date || '',
+                  parkName: matchedDay.park || 'Parque',
+                  parkPassStatus: 'Confirmado no App',
+                  fastPasses: [],
+                  diningReservations: [],
+                  showsAndParades: [],
+                  hasPhotoPackage: true,
+                  photoPackage: pkgItem,
+                };
+                existingPb.hasPhotoPackage = true;
+                existingPb.photoPackage = pkgItem;
+                parkBookingsByDayId.set(pRow.itinerary_day_id, existingPb);
+                parkBookingsByDayNum.set(dayNum, existingPb);
+              }
+            }
+          }
+        });
+
+        const settings: GlobalSettings = {
+          id: tripId,
+          tripCode: tripSummary.tripCode || tripId,
+          startDate: tripSummary.startDate || '2026-12-30',
+          durationDays: tripSummary.durationDays || 10,
+          travelersCount: travelers.length || tripSummary.travelersCount || 1,
+          dollarRate: tripSummary.dollarRate || 5.75,
+          totalBudgetGoalBRL: tripSummary.totalBudgetGoalBRL || 0,
+          tripName: tripSummary.tripName || 'Minha Viagem',
+          destination: tripSummary.destination || 'Orlando, FL',
+          travelers: travelers.length > 0 ? travelers : [],
+          currentUserId: travelers[0]?.id || '1',
+          isFlexibleDates: tripSummary.isFlexibleDates,
+          flexibleOutboundStart: tripSummary.flexibleOutboundStart,
+          flexibleOutboundEnd: tripSummary.flexibleOutboundEnd,
+          flexibleInboundStart: tripSummary.flexibleInboundStart,
+          flexibleInboundEnd: tripSummary.flexibleInboundEnd,
+          flexibleMinDays: tripSummary.flexibleMinDays,
+          flexibleMaxDays: tripSummary.flexibleMaxDays,
+          outboundFlexibility: tripSummary.outboundFlexibility,
+          inboundFlexibility: tripSummary.inboundFlexibility,
+          flexibilityNotes: tripSummary.flexibilityNotes,
+        };
+
+        const totalTripDays = Math.max(
+          1,
+          tripSummary.durationDays || (daysData && daysData.length > 0 ? daysData.length : 10)
+        );
+
+        // Index existing db itinerary_days
+        const dbDaysMap = new Map<number, any>();
+        (daysData || []).forEach((dRow: any) => {
+          const dNum = Number(dRow.day_number);
+          if (dNum > 0) {
+            dbDaysMap.set(dNum, dRow);
+          }
+        });
+
+        // Group hourly_schedules by matching day_number or day_id
+        const hourlyByDayNumber = new Map<number, HourlyScheduleItem[]>();
+        (hourlyData || []).forEach((hRow: any) => {
+          const item = mapDbToHourlySchedule(hRow);
+          let matchedDayNum: number | null = null;
+
+          // 1. Check if hRow.itinerary_day_id matches any db day id
+          for (const [dNum, dRow] of dbDaysMap.entries()) {
+            if (dRow.id === hRow.itinerary_day_id) {
+              matchedDayNum = dNum;
+              break;
+            }
+          }
+
+          // 2. Extract dayNumber from hRow.id format 'sch-<dayNumber>-...'
+          if (!matchedDayNum) {
+            const schMatch = (hRow.id || '').match(/^sch-(\d+)-/);
+            if (schMatch) {
+              matchedDayNum = parseInt(schMatch[1], 10);
+            }
+          }
+
+          // 3. Extract dayNumber from hRow.itinerary_day_id format 'day-...-<dayNumber>'
+          if (!matchedDayNum && hRow.itinerary_day_id) {
+            const parts = hRow.itinerary_day_id.split('-');
+            const lastPart = parseInt(parts[parts.length - 1], 10);
+            if (!isNaN(lastPart) && lastPart > 0) {
+              matchedDayNum = lastPart;
+            }
+          }
+
+          const targetDayNum = matchedDayNum || 1;
+          const list = hourlyByDayNumber.get(targetDayNum) || [];
+          if (!list.some((existing) => existing.id === item.id)) {
+            list.push(item);
+          }
+          hourlyByDayNumber.set(targetDayNum, list);
+        });
+
+        // Assemble full rawDays array ensuring all duration days exist
+        const rawDays: Omit<ItineraryDay, 'date'>[] = [];
+        for (let dayNum = 1; dayNum <= totalTripDays; dayNum++) {
+          const dRow = dbDaysMap.get(dayNum);
+          const dedicatedHourly = hourlyByDayNumber.get(dayNum) || [];
+
+          if (dRow) {
+            const baseDay = mapDbToItineraryDay(dRow);
+            const pb = parkBookingsByDayId.get(baseDay.id) || parkBookingsByDayNum.get(dayNum);
+            if (pb) {
+              baseDay.parkBooking = pb;
+            }
+            // Merge JSONB hourly items and dedicated hourly_schedules table items cleanly
+            const mergedList = [...(baseDay.hourlySchedule || []), ...dedicatedHourly];
+            baseDay.hourlySchedule = deduplicateHourlySchedule(mergedList);
+            rawDays.push(baseDay);
+          } else {
+            let title = 'Sem Parque';
+            if (dayNum === 1) title = 'Chegada';
+            else if (dayNum === totalTripDays && totalTripDays > 1) title = 'Partida';
+
+            const pb = parkBookingsByDayNum.get(dayNum);
+
+            rawDays.push({
+              id: ensureValidUUID(null, 'day', tripId + '-' + dayNum),
+              dayNumber: dayNum,
+              title,
+              park: 'Sem Parque' as any,
+              completed: false,
+              morning: { where: '', dining: '', notes: '' },
+              afternoon: { where: '', dining: '', notes: '' },
+              night: { where: '', dining: '', notes: '' },
+              generalNotes: '',
+              hourlySchedule: dedicatedHourly.sort((a, b) =>
+                (a.time || '00:00').localeCompare(b.time || '00:00')
+              ),
+              attachments: [],
+              parkBooking: pb,
+            });
+          }
+        }
+
+        // Garante sincronização integral de todos os eventos com data/hora em hourlySchedule
+        const tripContextOnLoad = {
+          flights: (fltData || []).map(mapDbToFlight),
+          accommodations: (accData || []).map(mapDbToAccommodation),
+          carRentals: (carData || []).map(mapDbToCarRental),
+        };
+        rawDays.forEach((rd) => {
+          rd.hourlySchedule = syncAllEventsToHourlySchedule(rd, tripContextOnLoad);
+        });
+
+        const rawDocs = (docData || []).map(mapDbToPrepDoc);
+        const guaranteedPrepDocs = ensurePreparationDocsForTravelers(travelers, rawDocs, tripId);
+
+        // Auto-sync missing documents in background to Supabase if any were newly generated
+        if (guaranteedPrepDocs.length !== rawDocs.length) {
+          setTimeout(() => {
+            SupabaseService.syncPrepDocuments(tripId, guaranteedPrepDocs, {
+              ...tripSummary,
+              travelers,
+            } as Trip).catch((e) => console.warn('Background prep docs auto-sync notice:', e));
+          }, 100);
+        }
+
+        const attractionSelections: Record<string, boolean> = {};
+        (attrSelData || []).forEach((row: any) => {
+          if (row.selected && row.traveler_id && row.park_id && row.attraction_name) {
+            const key = `${row.traveler_id}::${row.park_id}::${row.attraction_name}`;
+            attractionSelections[key] = true;
+            const norm = normalizeAttractionName(row.attraction_name);
+            if (norm && norm !== row.attraction_name) {
+              attractionSelections[`${row.traveler_id}::${row.park_id}::${norm}`] = true;
+            }
+          }
+        });
+
+        fullTrips.push({
+          ...(tripSummary as Trip),
+          travelers,
+          settings,
+          expenses: (expData || []).map(mapDbToExpense),
+          rawDays,
+          flights: (fltData || []).map(mapDbToFlight),
+          carRentals: (carData || []).map(mapDbToCarRental),
+          accommodations: (accData || []).map(mapDbToAccommodation),
+          parkTickets: (tktData || []).map(mapDbToParkTicket),
+          prepDocuments: guaranteedPrepDocs,
+          bookingMilestones: (mlsData || []).map(mapDbToMilestone),
+          baggageItems: (bagData || []).map(mapDbToBaggage),
+          attractionSelections,
+        });
+      }
+
+      return fullTrips;
+    } catch (err: any) {
+      if (!isSupabaseMissingTableError(err)) {
+        console.error('Supabase fetchAllTrips failed:', err);
+      }
+      return null;
+    }
+  },
+
+  /**
+   * Save or Update an entire Trip structure to Supabase
+   */
+  async syncTripToSupabase(trip: Trip): Promise<{ success: boolean; error?: string; tablesExist?: boolean }> {
+    try {
+      const tripDb = mapTripToDb(trip);
+      const { error: tripErr } = await supabase.from('trips').upsert(tripDb, { onConflict: 'id' });
+      if (tripErr) {
+        if (isSupabaseMissingTableError(tripErr)) {
+          return {
+            success: false,
+            tablesExist: false,
+            error: 'Tabelas do Supabase aguardando criação (SQL).',
+          };
+        }
+        throw tripErr;
+      }
+
+      const tripId = trip.id;
+
+      // Helper to sync sub-collections and remove deleted items from Supabase
+      const syncSubCollection = async <T extends { id: string }>(
+        tableName: string,
+        items: T[] | undefined,
+        mapFn: (item: T, tId: string) => Record<string, any>
+      ) => {
+        const currentItems = items || [];
+        const dbRows = currentItems.map((item) => mapFn(item, tripId));
+        const currentIds = dbRows.map((row) => row.id).filter(Boolean);
+
+        const { data: existing } = await supabase.from(tableName).select('id').eq('trip_id', tripId);
+        if (existing && existing.length > 0) {
+          const idsToDelete = existing.map((r: any) => r.id).filter((id: string) => !currentIds.includes(id));
+          if (idsToDelete.length > 0) {
+            await supabase.from(tableName).delete().eq('trip_id', tripId).in('id', idsToDelete);
+          }
+        }
+
+        if (dbRows.length > 0) {
+          await supabase.from(tableName).upsert(dbRows, { onConflict: 'id' });
+        }
+      };
+
+      // 1. Travelers
+      await syncSubCollection('travelers', trip.travelers, mapTravelerToDb);
+
+      // 2. Expenses
+      await syncSubCollection('expenses', trip.expenses, mapExpenseToDb);
+
+      // 3. Itinerary Days & Hourly Schedules (Fully synchronized with all events and hourly items)
+      const syncedRawDays = syncAccommodationsWithItineraryDays({
+        currentDays: trip.rawDays || [],
+        accommodations: trip.accommodations || [],
+        flights: trip.flights || [],
+        carRentals: trip.carRentals || [],
+        startDate: trip.startDate || '2026-12-30',
+        durationDays: trip.durationDays || 10,
+      }).map(ensureHourlyScheduleItems);
+
+      await syncSubCollection('itinerary_days', syncedRawDays, mapItineraryDayToDb);
+
+      // 3b. Hourly Schedules (Dedicated table with FK to itinerary_days and trips)
+      try {
+        const allHourlyItems: Array<{ item: HourlyScheduleItem; dayId: string }> = [];
+        syncedRawDays.forEach((d) => {
+          (d.hourlySchedule || []).forEach((h) => {
+            allHourlyItems.push({ item: h, dayId: d.id });
+          });
+        });
+
+        const currentHourlyIds = allHourlyItems.map((x) => x.item.id).filter(Boolean);
+        const { data: existingHourly } = await supabase.from('hourly_schedules').select('id').eq('trip_id', tripId);
+        if (existingHourly && existingHourly.length > 0) {
+          const hourlyToDelete = existingHourly.map((r: any) => r.id).filter((id: string) => !currentHourlyIds.includes(id));
+          if (hourlyToDelete.length > 0) {
+            await supabase.from('hourly_schedules').delete().eq('trip_id', tripId).in('id', hourlyToDelete);
+          }
+        }
+
+        if (allHourlyItems.length > 0) {
+          const dbHourlyRows = allHourlyItems.map(({ item, dayId }, index) => mapHourlyScheduleToDb(item, dayId, tripId, index));
+          await supabase.from('hourly_schedules').upsert(dbHourlyRows, { onConflict: 'id' });
+        }
+      } catch (hourlySyncErr) {
+        console.warn('Hourly schedules sync note:', hourlySyncErr);
+      }
+
+      // 3c. Park Day Bookings
+      try {
+        const parkBookingsToUpsert: any[] = [];
+        const parkBookingDayIds: string[] = [];
+        (trip.rawDays || []).forEach((d) => {
+          if (d.parkBooking && d.park && d.park !== 'Sem Parque') {
+            parkBookingsToUpsert.push(mapParkBookingToDb(d.parkBooking, d.id, tripId));
+            parkBookingDayIds.push(d.id);
+          }
+        });
+
+        const { data: existingBookings } = await supabase
+          .from('park_day_bookings')
+          .select('id, itinerary_day_id')
+          .eq('trip_id', tripId);
+
+        if (existingBookings && existingBookings.length > 0) {
+          const toDelete = existingBookings
+            .filter((b: any) => !parkBookingDayIds.includes(b.itinerary_day_id))
+            .map((b: any) => b.id);
+          if (toDelete.length > 0) {
+            await supabase.from('park_day_bookings').delete().eq('trip_id', tripId).in('id', toDelete);
+          }
+        }
+
+        if (parkBookingsToUpsert.length > 0) {
+          await supabase.from('park_day_bookings').upsert(parkBookingsToUpsert, { onConflict: 'itinerary_day_id' });
+        }
+
+        // Sincronizar tabelas secundárias para FastPasses, Refeições e Shows
+        try {
+          const allFastPassRows: any[] = [];
+          const allDiningRows: any[] = [];
+          const allShowRows: any[] = [];
+          const allPhotoPkgRows: any[] = [];
+
+          (trip.rawDays || []).forEach((d) => {
+            if (d.parkBooking && d.park && d.park !== 'Sem Parque') {
+              const bookingId = ensureValidUUID(d.parkBooking.id, 'park-booking', d.id);
+              (d.parkBooking.fastPasses || []).forEach((fp) => {
+                allFastPassRows.push({
+                  id: ensureValidUUID(fp.id, 'fastpass', `${bookingId}-${fp.attractionName}-${fp.timeWindow}`),
+                  trip_id: tripId,
+                  park_day_booking_id: bookingId,
+                  itinerary_day_id: d.id,
+                  attraction_name: fp.attractionName || 'Atração',
+                  time_window: fp.timeWindow || '',
+                  pass_type: fp.type || 'Lightning Lane Multi Pass',
+                  tier: fp.tier || null,
+                  status: fp.status || 'Agendado',
+                  party_members: fp.partyMembers || null,
+                  notes: fp.notes || null,
+                  updated_at: new Date().toISOString(),
+                });
+              });
+
+              (d.parkBooking.diningReservations || []).forEach((dr) => {
+                allDiningRows.push({
+                  id: ensureValidUUID(dr.id, 'dining', `${bookingId}-${dr.restaurantName}-${dr.time}`),
+                  trip_id: tripId,
+                  park_day_booking_id: bookingId,
+                  itinerary_day_id: d.id,
+                  restaurant_name: dr.restaurantName || 'Restaurante',
+                  meal_type: dr.mealType || 'Almoço (Lunch)',
+                  reservation_time: dr.time || '12:30',
+                  confirmation_code: dr.confirmationCode || null,
+                  party_size: dr.partySize || null,
+                  table_service: Boolean(dr.tableService),
+                  status: dr.status || 'Confirmada',
+                  cancellation_policy_notes: dr.cancellationPolicyNotes || null,
+                  notes: dr.notes || null,
+                  updated_at: new Date().toISOString(),
+                });
+              });
+
+              (d.parkBooking.showsAndParades || []).forEach((show) => {
+                allShowRows.push({
+                  id: ensureValidUUID(show.id, 'show', `${bookingId}-${show.showName}-${show.time}`),
+                  trip_id: tripId,
+                  park_day_booking_id: bookingId,
+                  itinerary_day_id: d.id,
+                  show_name: show.showName || 'Show',
+                  show_time: show.time || '20:00',
+                  location: show.location || null,
+                  reserved_area: show.reservedArea || null,
+                  status: show.status || 'Agendado',
+                  notes: show.notes || null,
+                  updated_at: new Date().toISOString(),
+                });
+              });
+
+              const pkg = d.parkBooking.hasPhotoPackage && d.parkBooking.photoPackage ? d.parkBooking.photoPackage : null;
+              if (pkg && (pkg.costUSD || pkg.costBRL || pkg.name)) {
+                allPhotoPkgRows.push({
+                  id: ensureValidUUID(pkg.id, 'photo-pkg', `${bookingId}-${pkg.name}`),
+                  trip_id: tripId,
+                  park_day_booking_id: bookingId,
+                  itinerary_day_id: d.id,
+                  name: pkg.name || 'Pacote de Fotos',
+                  package_type: pkg.type || 'trip_30days',
+                  validity_description: pkg.validityDescription || null,
+                  complex: pkg.complex || 'Disney',
+                  included_parks: pkg.includedParks || [],
+                  confirmation_code: pkg.confirmationCode || null,
+                  account_email_or_user: pkg.accountEmailOrUser || null,
+                  cost_usd: pkg.costUSD !== undefined ? Number(pkg.costUSD) : null,
+                  cost_brl: pkg.costBRL !== undefined ? Number(pkg.costBRL) : null,
+                  status: pkg.status || 'Confirmado',
+                  payment_status: pkg.paymentStatus || 'Reservado / Confirmado',
+                  payer_id: pkg.payerId || 'all',
+                  traveler_ids: pkg.travelerIds || ['all'],
+                  notes: pkg.notes || null,
+                  updated_at: new Date().toISOString(),
+                });
+              }
+            }
+          });
+
+          // Limpar e re-inserir registros atualizados se existirem
+          await Promise.allSettled([
+            supabase.from('park_fast_passes').delete().eq('trip_id', tripId),
+            supabase.from('park_dining_reservations').delete().eq('trip_id', tripId),
+            supabase.from('park_shows_reservations').delete().eq('trip_id', tripId),
+            supabase.from('park_photo_packages').delete().eq('trip_id', tripId),
+          ]);
+
+          if (allFastPassRows.length > 0) {
+            await supabase.from('park_fast_passes').upsert(allFastPassRows, { onConflict: 'id' });
+          }
+          if (allDiningRows.length > 0) {
+            await supabase.from('park_dining_reservations').upsert(allDiningRows, { onConflict: 'id' });
+          }
+          if (allShowRows.length > 0) {
+            await supabase.from('park_shows_reservations').upsert(allShowRows, { onConflict: 'id' });
+          }
+          if (allPhotoPkgRows.length > 0) {
+            await supabase.from('park_photo_packages').upsert(allPhotoPkgRows, { onConflict: 'id' });
+          }
+        } catch (secSyncErr) {
+          if (!isSupabaseMissingTableError(secSyncErr)) {
+            console.warn('Secondary park tables sync note:', secSyncErr);
+          }
+        }
+      } catch (pbSyncErr) {
+        console.warn('Park day bookings sync note:', pbSyncErr);
+      }
+
+      // 4. Flights
+      await syncSubCollection('flight_segments', trip.flights, mapFlightToDb);
+
+      // 5. Car Rentals
+      await syncSubCollection('car_rentals', trip.carRentals, mapCarRentalToDb);
+
+      // 6. Accommodations
+      await syncSubCollection('accommodations', trip.accommodations, mapAccommodationToDb);
+
+      // 7. Park Tickets
+      await syncSubCollection('park_ticket_purchases', trip.parkTickets, mapParkTicketToDb);
+
+      // 8. Prep Docs
+      await syncSubCollection('preparation_documents', trip.prepDocuments, mapPrepDocToDb);
+
+      // 9. Baggage
+      await syncSubCollection('baggage_items', trip.baggageItems, mapBaggageToDb);
+
+      // 10. Milestones
+      await syncSubCollection('booking_milestones', trip.bookingMilestones, mapMilestoneToDb);
+
+      // 11. Traveler Attraction Selections
+      try {
+        const selectionsMap = trip.attractionSelections || {};
+        const entries = Object.entries(selectionsMap);
+
+        // Only upsert active selections; never mass-delete user database records
+        if (entries.length > 0) {
+          const dbRows: any[] = [];
+          for (const [key, selected] of entries) {
+            if (selected) {
+              const parts = key.split('::');
+              if (parts.length === 3) {
+                const [travelerId, parkId, attractionName] = parts;
+                const cleanTravelerId = ensureValidUUID(travelerId, 'traveler', travelerId);
+                const selId = generateDeterministicUUID('attr-sel', `${tripId}-${cleanTravelerId}-${parkId}-${attractionName}`);
+                dbRows.push({
+                  id: selId,
+                  trip_id: ensureValidUUID(tripId, 'trip', tripId),
+                  traveler_id: cleanTravelerId,
+                  park_id: parkId,
+                  attraction_name: attractionName,
+                  selected: true,
+                  updated_at: new Date().toISOString(),
+                });
+              }
+            }
+          }
+
+          if (dbRows.length > 0) {
+            // Batch upsert without deleting existing records that may have different UUIDs
+            for (let i = 0; i < dbRows.length; i += 50) {
+              const chunk = dbRows.slice(i, i + 50);
+              await supabase.from('traveler_attraction_selections').upsert(chunk, { onConflict: 'id' });
+            }
+          }
+        }
+      } catch (attrSyncErr) {
+        console.warn('Attraction selections sync note:', attrSyncErr);
+      }
+
+      return { success: true, tablesExist: true };
+    } catch (err: any) {
+      if (isSupabaseMissingTableError(err)) {
+        return {
+          success: false,
+          tablesExist: false,
+          error: 'Tabelas do Supabase aguardando criação (SQL).',
+        };
+      }
+      console.error('Supabase syncTripToSupabase failed:', err);
+      return { success: false, error: err?.message || 'Erro ao sincronizar com o Supabase' };
+    }
+  },
+
+  /**
+   * Safe mock data database cleanup placeholder (no-op to protect user database data)
+   */
+  async cleanUpMockDatabaseData(): Promise<void> {
+    // No-op: do not perform destructive deletions on user database tables
+  },
+
+  /**
+   * Fetch all traveler attraction selections directly from traveler_attraction_selections table
+   */
+  async fetchTravelerAttractionSelections(tripId: string): Promise<TravelerAttractionSelection[]> {
+    try {
+      const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+      const { data, error } = await supabase
+        .from('traveler_attraction_selections')
+        .select('*')
+        .eq('trip_id', cleanTripId)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.warn('Error fetching traveler_attraction_selections:', error);
+        return [];
+      }
+      return (data || []) as TravelerAttractionSelection[];
+    } catch (e) {
+      console.warn('Exception in fetchTravelerAttractionSelections:', e);
+      return [];
+    }
+  },
+
+  /**
+   * Save or Update a single traveler attraction selection in Supabase
+   */
+  async saveAttractionSelection(
+    tripId: string,
+    travelerId: string,
+    parkId: string,
+    attractionName: string,
+    selected: boolean
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+      const cleanTravelerId = ensureValidUUID(travelerId, 'traveler', travelerId);
+      const normName = normalizeAttractionName(attractionName);
+
+      // Check if a record already exists with exact or normalized attraction name
+      const { data: existingRows } = await supabase
+        .from('traveler_attraction_selections')
+        .select('id, attraction_name')
+        .eq('trip_id', cleanTripId)
+        .eq('traveler_id', cleanTravelerId)
+        .eq('park_id', parkId);
+
+      const matchedRow = (existingRows || []).find((r: any) =>
+        r.attraction_name === attractionName ||
+        normalizeAttractionName(r.attraction_name).toLowerCase() === normName.toLowerCase()
+      );
+
+      if (!selected) {
+        if (matchedRow?.id) {
+          await supabase.from('traveler_attraction_selections').delete().eq('id', matchedRow.id);
+        } else {
+          await supabase
+            .from('traveler_attraction_selections')
+            .delete()
+            .eq('trip_id', cleanTripId)
+            .eq('traveler_id', cleanTravelerId)
+            .eq('park_id', parkId)
+            .eq('attraction_name', attractionName);
+        }
+        return { success: true };
+      }
+
+      if (matchedRow?.id) {
+        const { error } = await supabase
+          .from('traveler_attraction_selections')
+          .update({
+            selected: true,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', matchedRow.id);
+
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('traveler_attraction_selections')
+          .insert({
+            trip_id: cleanTripId,
+            traveler_id: cleanTravelerId,
+            park_id: parkId,
+            attraction_name: attractionName,
+            selected: true,
+            updated_at: new Date().toISOString(),
+          });
+
+        if (error) throw error;
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      if (isSupabaseMissingTableError(err)) {
+        return { success: false, error: 'Tabela traveler_attraction_selections aguardando criação no Supabase.' };
+      }
+      return { success: false, error: err?.message || 'Erro ao salvar preferência de atração' };
+    }
+  },
+
+  /**
+   * Delete Trip
+   */
+  async deleteTrip(tripId: string): Promise<boolean> {
+    try {
+      const { error } = await supabase.from('trips').delete().eq('id', tripId);
+      return !error;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Delete Expense
+   */
+  async deleteExpense(id: string): Promise<boolean> {
+    try {
+      const { error } = await supabase.from('expenses').delete().eq('id', id);
+      return !error;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Delete Flight
+   */
+  async deleteFlight(id: string): Promise<boolean> {
+    try {
+      const { error } = await supabase.from('flight_segments').delete().eq('id', id);
+      return !error;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Save or Update a single Flight Segment in Supabase
+   */
+  async saveFlight(
+    tripId: string,
+    flight: FlightSegment,
+    fallbackTrip?: Partial<Trip>
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!tripId || !flight) {
+        return { success: false, error: 'tripId ou dados do voo ausentes' };
+      }
+
+      // 1. Ensure the parent trip exists in trips table
+      try {
+        const { data: tripCheck, error: tripCheckErr } = await supabase
+          .from('trips')
+          .select('id')
+          .eq('id', tripId)
+          .maybeSingle();
+
+        if (tripCheckErr && isSupabaseMissingTableError(tripCheckErr)) {
+          return { success: false, error: 'Tabelas do Supabase aguardando criação (execute o SQL).' };
+        }
+
+        if (!tripCheck) {
+          const tripToInsert: Partial<Trip> = {
+            id: tripId,
+            tripCode: fallbackTrip?.tripCode || `ORL-${Math.floor(1000 + Math.random() * 9000)}`,
+            tripName: fallbackTrip?.tripName || 'Minha Viagem',
+            destination: fallbackTrip?.destination || 'Orlando, FL',
+            startDate: fallbackTrip?.startDate || '2026-12-30',
+            durationDays: fallbackTrip?.durationDays || 10,
+            travelersCount: fallbackTrip?.travelersCount || 1,
+            dollarRate: fallbackTrip?.dollarRate || 5.75,
+            totalBudgetGoalBRL: fallbackTrip?.totalBudgetGoalBRL || 0,
+            status: fallbackTrip?.status || 'Planejando',
+            coverTheme: fallbackTrip?.coverTheme || 'magic',
+            travelers: fallbackTrip?.travelers || [],
+            expenses: [],
+            rawDays: [],
+            flights: [flight],
+            createdAt: new Date().toISOString().split('T')[0],
+          };
+          const tripDb = mapTripToDb(tripToInsert);
+          await supabase.from('trips').upsert(tripDb, { onConflict: 'id' });
+        }
+      } catch (errCheck: any) {
+        console.warn('Trip verification notice in saveFlight:', errCheck);
+      }
+
+      // 2. Upsert flight_segments
+      const dbRow = mapFlightToDb(flight, tripId);
+      const { error } = await supabase
+        .from('flight_segments')
+        .upsert(dbRow, { onConflict: 'id' });
+
+      if (error) {
+        if (isSupabaseMissingTableError(error)) {
+          return { success: false, error: 'Tabela flight_segments aguardando criação no Supabase.' };
+        }
+        return { success: false, error: error.message };
+      }
+
+      // 3. Sincronizar com a tabela de expenses
+      await syncToExpenses(tripId, 'flight', flight.id, {
+        title: `Passagem: ${flight.airline || 'Voo'} (${flight.typeLabel || 'Voo'}${flight.flightNumber ? ' ' + flight.flightNumber : ''})`,
+        category: 'Passagens',
+        usd: flight.ticketCostUSD || 0,
+        brl: flight.ticketCostBRL || 0,
+        payerId: flight.payerId || 'all',
+        travelerIds: flight.travelerIds || ['all'],
+        status: (flight.status === 'Emitido / Confirmado' || flight.status === 'Check-in Realizado' || flight.status === 'Embarcado' || flight.status === 'Concluído') ? 'Pago' : 'Pendente',
+        notes: `Trecho: ${flight.originCity || flight.originAirport || 'Origem'} ➔ ${flight.destinationCity || flight.destinationAirport || 'Destino'}`
+      }, fallbackTrip);
+
+      return { success: true };
+    } catch (err: any) {
+      if (!isSupabaseMissingTableError(err)) {
+        console.error('SupabaseService.saveFlight failed:', err);
+      }
+      return { success: false, error: err?.message || 'Erro ao salvar voo no banco' };
+    }
+  },
+
+  /**
+   * Delete Car Rental
+   */
+  async deleteCarRental(id: string): Promise<boolean> {
+    try {
+      const { error } = await supabase.from('car_rentals').delete().eq('id', id);
+      return !error;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Delete Accommodation
+   */
+  async deleteAccommodation(id: string): Promise<boolean> {
+    try {
+      const { error } = await supabase.from('accommodations').delete().eq('id', id);
+      return !error;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Fetch accommodations by Trip ID directly from Supabase
+   */
+  async fetchAccommodationsByTripId(tripId: string): Promise<AccommodationBooking[] | null> {
+    try {
+      if (!tripId) return null;
+      const { data, error } = await supabase
+        .from('accommodations')
+        .select('*')
+        .eq('trip_id', tripId)
+        .order('check_in_date', { ascending: true });
+
+      if (error) {
+        if (!isSupabaseMissingTableError(error)) {
+          console.error('fetchAccommodationsByTripId error:', error);
+        }
+        return null;
+      }
+
+      return (data || []).map(mapDbToAccommodation);
+    } catch (err) {
+      console.warn('fetchAccommodationsByTripId exception:', err);
+      return null;
+    }
+  },
+
+  /**
+   * Sync all accommodations for a trip (upsert existing & delete removed)
+   */
+  async syncAccommodations(
+    tripId: string,
+    accommodations: AccommodationBooking[],
+    fallbackTrip?: Partial<Trip>
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!tripId) return { success: false, error: 'tripId obrigatório' };
+
+      // Ensure parent trip exists
+      try {
+        const { data: tripCheck } = await supabase.from('trips').select('id').eq('id', tripId).maybeSingle();
+        if (!tripCheck) {
+          const tripToInsert: Partial<Trip> = {
+            id: tripId,
+            tripCode: fallbackTrip?.tripCode || `ORL-${Math.floor(1000 + Math.random() * 9000)}`,
+            tripName: fallbackTrip?.tripName || 'Minha Viagem',
+            destination: fallbackTrip?.destination || 'Orlando, FL',
+            startDate: fallbackTrip?.startDate || '2026-12-30',
+            durationDays: fallbackTrip?.durationDays || 10,
+            travelersCount: fallbackTrip?.travelersCount || 1,
+            dollarRate: fallbackTrip?.dollarRate || 5.75,
+            totalBudgetGoalBRL: fallbackTrip?.totalBudgetGoalBRL || 0,
+            status: fallbackTrip?.status || 'Planejando',
+            coverTheme: fallbackTrip?.coverTheme || 'magic',
+            travelers: fallbackTrip?.travelers || [],
+            expenses: [],
+            rawDays: [],
+            accommodations: accommodations,
+            createdAt: new Date().toISOString().split('T')[0],
+          };
+          const tripDb = mapTripToDb(tripToInsert);
+          await supabase.from('trips').upsert(tripDb, { onConflict: 'id' });
+        }
+      } catch (e) {
+        console.warn('Trip check in syncAccommodations:', e);
+      }
+
+      const currentIds = (accommodations || []).map((a) => a.id).filter(Boolean);
+      const { data: existing } = await supabase.from('accommodations').select('id').eq('trip_id', tripId);
+      if (existing && existing.length > 0) {
+        const toDelete = existing.map((r: any) => r.id).filter((id: string) => !currentIds.includes(id));
+        if (toDelete.length > 0) {
+          await supabase.from('accommodations').delete().eq('trip_id', tripId).in('id', toDelete);
+        }
+      }
+
+      if (accommodations && accommodations.length > 0) {
+        const dbRows = accommodations.map((a) => mapAccommodationToDb(a, tripId));
+        const { error: upsertErr } = await supabase.from('accommodations').upsert(dbRows, { onConflict: 'id' });
+        if (upsertErr) {
+          if (isSupabaseMissingTableError(upsertErr)) {
+            return { success: false, error: 'Tabela accommodations aguardando criação no Supabase.' };
+          }
+          return { success: false, error: upsertErr.message };
+        }
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro ao sincronizar acomodações' };
+    }
+  },
+
+  /**
+   * Save or Update a single Accommodation in Supabase
+   */
+  async saveAccommodation(
+    tripId: string,
+    accommodation: AccommodationBooking,
+    fallbackTrip?: Partial<Trip>
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!tripId || !accommodation) {
+        return { success: false, error: 'tripId ou dados da acomodação ausentes' };
+      }
+
+      // 1. Ensure the parent trip exists in trips table
+      try {
+        const { data: tripCheck, error: tripCheckErr } = await supabase
+          .from('trips')
+          .select('id')
+          .eq('id', tripId)
+          .maybeSingle();
+
+        if (tripCheckErr && isSupabaseMissingTableError(tripCheckErr)) {
+          return { success: false, error: 'Tabelas do Supabase aguardando criação (execute o SQL).' };
+        }
+
+        if (!tripCheck) {
+          const tripToInsert: Partial<Trip> = {
+            id: tripId,
+            tripCode: fallbackTrip?.tripCode || `ORL-${Math.floor(1000 + Math.random() * 9000)}`,
+            tripName: fallbackTrip?.tripName || 'Minha Viagem',
+            destination: fallbackTrip?.destination || 'Orlando, FL',
+            startDate: fallbackTrip?.startDate || '2026-12-30',
+            durationDays: fallbackTrip?.durationDays || 10,
+            travelersCount: fallbackTrip?.travelersCount || 1,
+            dollarRate: fallbackTrip?.dollarRate || 5.75,
+            totalBudgetGoalBRL: fallbackTrip?.totalBudgetGoalBRL || 0,
+            status: fallbackTrip?.status || 'Planejando',
+            coverTheme: fallbackTrip?.coverTheme || 'magic',
+            travelers: fallbackTrip?.travelers || [],
+            expenses: [],
+            rawDays: [],
+            accommodations: [accommodation],
+            createdAt: new Date().toISOString().split('T')[0],
+          };
+          const tripDb = mapTripToDb(tripToInsert);
+          await supabase.from('trips').upsert(tripDb, { onConflict: 'id' });
+        }
+      } catch (errCheck: any) {
+        console.warn('Trip verification notice in saveAccommodation:', errCheck);
+      }
+
+      // 2. Upsert accommodation
+      const dbRow = mapAccommodationToDb(accommodation, tripId);
+      const { error } = await supabase
+        .from('accommodations')
+        .upsert(dbRow, { onConflict: 'id' });
+
+      if (error) {
+        if (isSupabaseMissingTableError(error)) {
+          return { success: false, error: 'Tabela accommodations aguardando criação no Supabase.' };
+        }
+        return { success: false, error: error.message };
+      }
+
+      // 3. Sincronizar com a tabela de expenses
+      await syncToExpenses(tripId, 'accommodation', accommodation.id, {
+        title: `Hospedagem: ${accommodation.name || 'Reserva'}`,
+        category: 'Hospedagem',
+        usd: accommodation.costUSD || 0,
+        brl: accommodation.costBRL || 0,
+        payerId: accommodation.payerId || 'all',
+        travelerIds: accommodation.travelerIds || ['all'],
+        status: (accommodation.status === 'Pago' || accommodation.status === 'Concluído') ? 'Pago' : 'Pendente',
+        notes: `Check-in: ${accommodation.checkInDate || '---'} | Check-out: ${accommodation.checkOutDate || '---'}`
+      }, fallbackTrip);
+
+      return { success: true };
+    } catch (err: any) {
+      if (!isSupabaseMissingTableError(err)) {
+        console.error('SupabaseService.saveAccommodation failed:', err);
+      }
+      return { success: false, error: err?.message || 'Erro ao salvar acomodação no banco' };
+    }
+  },
+
+  /**
+   * Delete Park Day Booking
+   */
+  async deleteParkBooking(itineraryDayId: string): Promise<boolean> {
+    try {
+      const { error } = await supabase.from('park_day_bookings').delete().eq('itinerary_day_id', itineraryDayId);
+      return !error;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Delete Baggage Item
+   */
+  async deleteBaggageItem(id: string): Promise<boolean> {
+    try {
+      const { error } = await supabase.from('baggage_items').delete().eq('id', id);
+      return !error;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Save or Update a single Baggage Item to Supabase
+   */
+  async saveBaggageItem(
+    tripId: string,
+    item: BaggageItem,
+    fallbackTrip?: Partial<Trip>
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!tripId || !item) return { success: false, error: 'Parâmetros inválidos' };
+
+      // Ensure parent trip exists
+      try {
+        const { data: tripCheck } = await supabase.from('trips').select('id').eq('id', tripId).maybeSingle();
+        if (!tripCheck) {
+          const tripToInsert: Partial<Trip> = {
+            id: tripId,
+            tripCode: fallbackTrip?.tripCode || `ORL-${Math.floor(1000 + Math.random() * 9000)}`,
+            tripName: fallbackTrip?.tripName || 'Minha Viagem',
+            destination: fallbackTrip?.destination || 'Orlando, FL',
+            startDate: fallbackTrip?.startDate || '2026-12-30',
+            durationDays: fallbackTrip?.durationDays || 10,
+            travelersCount: fallbackTrip?.travelersCount || 1,
+            dollarRate: fallbackTrip?.dollarRate || 5.75,
+            totalBudgetGoalBRL: fallbackTrip?.totalBudgetGoalBRL || 0,
+            status: fallbackTrip?.status || 'Planejando',
+            coverTheme: fallbackTrip?.coverTheme || 'magic',
+            travelers: fallbackTrip?.travelers || [],
+            expenses: [],
+            rawDays: [],
+            createdAt: new Date().toISOString().split('T')[0],
+          };
+          const tripDb = mapTripToDb(tripToInsert);
+          await supabase.from('trips').upsert(tripDb, { onConflict: 'id' });
+        }
+      } catch (e) {
+        console.warn('Trip check in saveBaggageItem:', e);
+      }
+
+      const dbRow = mapBaggageToDb(item, tripId);
+      const { error: upsertErr } = await supabase.from('baggage_items').upsert(dbRow, { onConflict: 'id' });
+
+      if (upsertErr) {
+        if (isSupabaseMissingTableError(upsertErr)) {
+          return { success: false, error: 'Tabela baggage_items aguardando criação no Supabase.' };
+        }
+        return { success: false, error: upsertErr.message };
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro ao salvar item de mala' };
+    }
+  },
+
+  /**
+   * Sync all baggage items for a trip
+   */
+  async syncBaggageItems(
+    tripId: string,
+    items: BaggageItem[],
+    fallbackTrip?: Partial<Trip>
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!tripId) return { success: false, error: 'tripId obrigatório' };
+
+      // Ensure parent trip exists
+      try {
+        const { data: tripCheck } = await supabase.from('trips').select('id').eq('id', tripId).maybeSingle();
+        if (!tripCheck) {
+          const tripToInsert: Partial<Trip> = {
+            id: tripId,
+            tripCode: fallbackTrip?.tripCode || `ORL-${Math.floor(1000 + Math.random() * 9000)}`,
+            tripName: fallbackTrip?.tripName || 'Minha Viagem',
+            destination: fallbackTrip?.destination || 'Orlando, FL',
+            startDate: fallbackTrip?.startDate || '2026-12-30',
+            durationDays: fallbackTrip?.durationDays || 10,
+            travelersCount: fallbackTrip?.travelersCount || 1,
+            dollarRate: fallbackTrip?.dollarRate || 5.75,
+            totalBudgetGoalBRL: fallbackTrip?.totalBudgetGoalBRL || 0,
+            status: fallbackTrip?.status || 'Planejando',
+            coverTheme: fallbackTrip?.coverTheme || 'magic',
+            travelers: fallbackTrip?.travelers || [],
+            expenses: [],
+            rawDays: [],
+            createdAt: new Date().toISOString().split('T')[0],
+          };
+          const tripDb = mapTripToDb(tripToInsert);
+          await supabase.from('trips').upsert(tripDb, { onConflict: 'id' });
+        }
+      } catch (e) {
+        console.warn('Trip check in syncBaggageItems:', e);
+      }
+
+      const currentIds = (items || []).map((i) => i.id).filter(Boolean);
+      const { data: existing } = await supabase.from('baggage_items').select('id').eq('trip_id', tripId);
+      if (existing && existing.length > 0) {
+        const toDelete = existing.map((r: any) => r.id).filter((id: string) => !currentIds.includes(id));
+        if (toDelete.length > 0) {
+          await supabase.from('baggage_items').delete().eq('trip_id', tripId).in('id', toDelete);
+        }
+      }
+
+      if (items && items.length > 0) {
+        const dbRows = items.map((i) => mapBaggageToDb(i, tripId));
+        const { error: upsertErr } = await supabase.from('baggage_items').upsert(dbRows, { onConflict: 'id' });
+        if (upsertErr) {
+          if (isSupabaseMissingTableError(upsertErr)) {
+            return { success: false, error: 'Tabela baggage_items aguardando criação no Supabase.' };
+          }
+          return { success: false, error: upsertErr.message };
+        }
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro ao sincronizar itens de mala' };
+    }
+  },
+
+  /**
+   * Delete Itinerary Day
+   */
+  async deleteItineraryDay(id: string): Promise<boolean> {
+    try {
+      const { error } = await supabase.from('itinerary_days').delete().eq('id', id);
+      return !error;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Save or Update a single Car Rental in Supabase
+   */
+  async saveCarRental(
+    tripId: string,
+    rental: CarRentalBooking,
+    fallbackTrip?: Partial<Trip>
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!tripId || !rental) return { success: false, error: 'Parâmetros inválidos' };
+
+      // Ensure parent trip exists
+      try {
+        const { data: tripCheck } = await supabase.from('trips').select('id').eq('id', tripId).maybeSingle();
+        if (!tripCheck) {
+          const tripToInsert: Partial<Trip> = {
+            id: tripId,
+            tripCode: fallbackTrip?.tripCode || `ORL-${Math.floor(1000 + Math.random() * 9000)}`,
+            tripName: fallbackTrip?.tripName || 'Minha Viagem',
+            destination: fallbackTrip?.destination || 'Orlando, FL',
+            startDate: fallbackTrip?.startDate || '2026-12-30',
+            durationDays: fallbackTrip?.durationDays || 10,
+            travelersCount: fallbackTrip?.travelersCount || 1,
+            dollarRate: fallbackTrip?.dollarRate || 5.75,
+            totalBudgetGoalBRL: fallbackTrip?.totalBudgetGoalBRL || 0,
+            status: fallbackTrip?.status || 'Planejando',
+            coverTheme: fallbackTrip?.coverTheme || 'magic',
+            travelers: fallbackTrip?.travelers || [],
+            expenses: [],
+            rawDays: [],
+            createdAt: new Date().toISOString().split('T')[0],
+          };
+          const tripDb = mapTripToDb(tripToInsert);
+          await supabase.from('trips').upsert(tripDb, { onConflict: 'id' });
+        }
+      } catch (e) {
+        console.warn('Trip check in saveCarRental:', e);
+      }
+
+      const dbRow = mapCarRentalToDb(rental, tripId);
+      const { error: upsertErr } = await supabase.from('car_rentals').upsert(dbRow, { onConflict: 'id' });
+
+      if (upsertErr) {
+        if (isSupabaseMissingTableError(upsertErr)) {
+          return { success: false, error: 'Tabela car_rentals aguardando criação no Supabase.' };
+        }
+        return { success: false, error: upsertErr.message };
+      }
+
+      // Sincronizar com a tabela de expenses
+      await syncToExpenses(tripId, 'car_rental', rental.id, {
+        title: `Transporte: Aluguel de Carro (${rental.company || 'Locadora'})`,
+        category: 'Transporte',
+        usd: rental.costUSD || 0,
+        brl: rental.costBRL || 0,
+        payerId: rental.payerId || 'all',
+        travelerIds: rental.travelerIds || ['all'],
+        status: (rental.status === 'Pago' || rental.status === 'Concluído') ? 'Pago' : 'Pendente',
+        notes: `Período: ${rental.pickupDate || '---'} a ${rental.dropoffDate || '---'}`
+      });
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro ao salvar aluguel de carro' };
+    }
+  },
+
+  /**
+   * Delete Park Photo Package and its records
+   */
+  async deleteParkPhotoPackage(id: string): Promise<boolean> {
+    try {
+      if (!id) return false;
+      const cleanId = ensureValidUUID(id, 'photo-pkg', id);
+      await Promise.allSettled([
+        supabase.from('park_photo_packages').delete().eq('id', cleanId),
+        supabase.from('park_photo_packages').delete().eq('id', id),
+        supabase.from('park_photo_packages').delete().eq('park_day_booking_id', id),
+        supabase.from('park_photo_packages').delete().eq('itinerary_day_id', id),
+        supabase.from('park_day_bookings').update({ photo_package: null, has_photo_package: false }).eq('photo_package', cleanId),
+        supabase.from('park_day_bookings').update({ photo_package: null, has_photo_package: false }).eq('photo_package', id),
+        supabase.from('park_day_bookings').update({ photo_package: null, has_photo_package: false }).eq('park_day_booking_id', id),
+        supabase.from('park_day_bookings').update({ photo_package: null, has_photo_package: false }).eq('itinerary_day_id', id),
+      ]);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Delete Park Ticket and its linked expense
+   */
+  async deleteParkTicket(id: string): Promise<boolean> {
+    try {
+      if (!id) return false;
+      const cleanId = ensureValidUUID(id, 'ticket', id);
+      const expId = generateDeterministicUUID('ticket-expense', cleanId);
+      const expIdOld = generateDeterministicUUID('ticket-expense', id);
+      
+      await Promise.allSettled([
+        supabase.from('park_ticket_purchases').delete().eq('id', cleanId),
+        supabase.from('park_ticket_purchases').delete().eq('id', id),
+        supabase.from('expenses').delete().eq('id', expId),
+        supabase.from('expenses').delete().eq('id', expIdOld),
+        supabase.from('expenses').delete().eq('source_id', cleanId),
+        supabase.from('expenses').delete().eq('source_id', id),
+      ]);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Fetch park ticket purchases by Trip ID directly from Supabase
+   */
+  async fetchParkTicketsByTripId(tripId: string): Promise<ParkTicketPurchase[] | null> {
+    try {
+      if (!tripId) return null;
+      const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+      const { data, error } = await supabase
+        .from('park_ticket_purchases')
+        .select('*')
+        .eq('trip_id', cleanTripId)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        if (!isSupabaseMissingTableError(error)) {
+          console.error('fetchParkTicketsByTripId error:', error);
+        }
+        return null;
+      }
+
+      return (data || []).map(mapDbToParkTicket);
+    } catch (err) {
+      console.warn('fetchParkTicketsByTripId exception:', err);
+      return null;
+    }
+  },
+
+  /**
+   * Sync all park tickets for a trip (upsert existing & delete removed)
+   */
+  async syncParkTickets(
+    tripId: string,
+    tickets: ParkTicketPurchase[],
+    fallbackTrip?: Partial<Trip>
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!tripId) return { success: false, error: 'tripId obrigatório' };
+      const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+
+      // Ensure parent trip exists
+      try {
+        const { data: tripCheck } = await supabase.from('trips').select('id').eq('id', cleanTripId).maybeSingle();
+        if (!tripCheck) {
+          const tripToInsert: Partial<Trip> = {
+            id: cleanTripId,
+            tripCode: fallbackTrip?.tripCode || `ORL-${Math.floor(1000 + Math.random() * 9000)}`,
+            tripName: fallbackTrip?.tripName || 'Minha Viagem',
+            destination: fallbackTrip?.destination || 'Orlando, FL',
+            startDate: fallbackTrip?.startDate || '2026-12-30',
+            durationDays: fallbackTrip?.durationDays || 10,
+            travelersCount: fallbackTrip?.travelersCount || 1,
+            dollarRate: fallbackTrip?.dollarRate || 5.75,
+            totalBudgetGoalBRL: fallbackTrip?.totalBudgetGoalBRL || 0,
+            status: fallbackTrip?.status || 'Planejando',
+            coverTheme: fallbackTrip?.coverTheme || 'magic',
+            travelers: fallbackTrip?.travelers || [],
+            expenses: [],
+            rawDays: [],
+            createdAt: new Date().toISOString().split('T')[0],
+          };
+          const tripDb = mapTripToDb(tripToInsert);
+          await supabase.from('trips').upsert(tripDb, { onConflict: 'id' });
+        }
+      } catch (e) {
+        console.warn('Trip check in syncParkTickets:', e);
+      }
+
+      // Ensure travelers exist in DB
+      if (fallbackTrip?.travelers && fallbackTrip.travelers.length > 0) {
+        try {
+          const dbTravelers = fallbackTrip.travelers.map((t) => mapTravelerToDb(t, cleanTripId));
+          await supabase.from('travelers').upsert(dbTravelers, { onConflict: 'id' });
+        } catch (trvErr) {
+          console.warn('Travelers pre-sync in syncParkTickets note:', trvErr);
+        }
+      }
+
+      const currentDbRows = (tickets || []).map((t) => mapParkTicketToDb(t, cleanTripId));
+      const currentIds = currentDbRows.map((r) => r.id).filter(Boolean);
+
+      const { data: existing } = await supabase.from('park_ticket_purchases').select('id').eq('trip_id', cleanTripId);
+      if (existing && existing.length > 0) {
+        const toDelete = existing.map((r: any) => r.id).filter((id: string) => !currentIds.includes(id));
+        if (toDelete.length > 0) {
+          await supabase.from('park_ticket_purchases').delete().eq('trip_id', cleanTripId).in('id', toDelete);
+          // Delete related expenses
+          for (const delId of toDelete) {
+            const expId = generateDeterministicUUID('ticket-expense', delId);
+            await supabase.from('expenses').delete().eq('id', expId);
+            await supabase.from('expenses').delete().eq('source_id', delId);
+          }
+        }
+      }
+
+      if (currentDbRows.length > 0) {
+        const { error: upsertErr } = await supabase.from('park_ticket_purchases').upsert(currentDbRows, { onConflict: 'id' });
+        if (upsertErr) {
+          if (isSupabaseMissingTableError(upsertErr)) {
+            return { success: false, error: 'Tabela park_ticket_purchases aguardando criação no Supabase.' };
+          }
+          return { success: false, error: upsertErr.message };
+        }
+
+        // Sync every ticket to expenses table automatically
+        for (const t of tickets) {
+          const cleanTicketId = ensureValidUUID(t.id, 'ticket', cleanTripId + '-' + t.title);
+          await syncToExpenses(cleanTripId, 'park_ticket', cleanTicketId, {
+            title: `Ingresso: ${t.title || 'Ingresso de Parques'}`,
+            category: 'Ingressos',
+            usd: t.costUSD || 0,
+            brl: t.costBRL || 0,
+            payerId: t.payerId || 'all',
+            travelerIds: t.travelerIds || ['all'],
+            status: t.paymentStatus === 'Pago' ? 'Pago' : 'Pendente',
+            notes: `Voucher: ${t.confirmationCode || '---'} | Qtd: ${t.quantity || 1}`
+          }, fallbackTrip);
+        }
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro ao sincronizar ingressos' };
+    }
+  },
+
+  /**
+   * Save or Update a single Park Ticket Purchase in Supabase
+   */
+  async saveParkTicket(
+    tripId: string,
+    ticket: ParkTicketPurchase,
+    fallbackTrip?: Partial<Trip>
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!tripId || !ticket) return { success: false, error: 'Parâmetros inválidos' };
+
+      const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+
+      // Ensure parent trip exists
+      try {
+        const { data: tripCheck } = await supabase.from('trips').select('id').eq('id', cleanTripId).maybeSingle();
+        if (!tripCheck) {
+          const tripToInsert: Partial<Trip> = {
+            id: cleanTripId,
+            tripCode: fallbackTrip?.tripCode || `ORL-${Math.floor(1000 + Math.random() * 9000)}`,
+            tripName: fallbackTrip?.tripName || 'Minha Viagem',
+            destination: fallbackTrip?.destination || 'Orlando, FL',
+            startDate: fallbackTrip?.startDate || '2026-12-30',
+            durationDays: fallbackTrip?.durationDays || 10,
+            travelersCount: fallbackTrip?.travelersCount || 1,
+            dollarRate: fallbackTrip?.dollarRate || 5.75,
+            totalBudgetGoalBRL: fallbackTrip?.totalBudgetGoalBRL || 0,
+            status: fallbackTrip?.status || 'Planejando',
+            coverTheme: fallbackTrip?.coverTheme || 'magic',
+            travelers: fallbackTrip?.travelers || [],
+            expenses: [],
+            rawDays: [],
+            createdAt: new Date().toISOString().split('T')[0],
+          };
+          const tripDb = mapTripToDb(tripToInsert);
+          await supabase.from('trips').upsert(tripDb, { onConflict: 'id' });
+        }
+      } catch (e) {
+        console.warn('Trip check in saveParkTicket:', e);
+      }
+
+      // Ensure travelers exist in DB before saving ticket to avoid Foreign Key violations on payer_id!
+      if (fallbackTrip?.travelers && fallbackTrip.travelers.length > 0) {
+        try {
+          const dbTravelers = fallbackTrip.travelers.map((t) => mapTravelerToDb(t, cleanTripId));
+          await supabase.from('travelers').upsert(dbTravelers, { onConflict: 'id' });
+        } catch (trvErr) {
+          console.warn('Travelers pre-sync in saveParkTicket note:', trvErr);
+        }
+      }
+
+      const dbRow = mapParkTicketToDb(ticket, cleanTripId);
+      const { error: upsertErr } = await supabase.from('park_ticket_purchases').upsert(dbRow, { onConflict: 'id' });
+
+      if (upsertErr) {
+        console.error('saveParkTicket error:', upsertErr);
+        if (isSupabaseMissingTableError(upsertErr)) {
+          return { success: false, error: 'Tabela park_ticket_purchases aguardando criação no Supabase.' };
+        }
+        return { success: false, error: upsertErr.message };
+      }
+
+      // Sincronizar automaticamente com a tabela de expenses
+      const cleanTicketId = dbRow.id || ensureValidUUID(ticket.id, 'ticket', cleanTripId + '-' + ticket.title);
+      await syncToExpenses(cleanTripId, 'park_ticket', cleanTicketId, {
+        title: `Ingresso: ${ticket.title || 'Ingresso de Parques'}`,
+        category: 'Ingressos',
+        usd: ticket.costUSD || 0,
+        brl: ticket.costBRL || 0,
+        payerId: ticket.payerId || 'all',
+        travelerIds: ticket.travelerIds || ['all'],
+        status: ticket.paymentStatus === 'Pago' ? 'Pago' : 'Pendente',
+        notes: `Voucher: ${ticket.confirmationCode || '---'} | Qtd: ${ticket.quantity || 1}`
+      }, fallbackTrip);
+
+      return { success: true };
+    } catch (err: any) {
+      console.error('saveParkTicket exception:', err);
+      return { success: false, error: err?.message || 'Erro ao salvar ingresso' };
+    }
+  },
+  async saveItineraryDay(
+    tripId: string,
+    day: Omit<ItineraryDay, 'date'> & { date?: string },
+    fallbackTrip?: Partial<Trip>
+  ): Promise<{ success: boolean; error?: string; resolvedDayId?: string; hourlyCount?: number; debugLogs?: string[] }> {
+    const debugLogs: string[] = [];
+    const addLog = (msg: string) => {
+      debugLogs.push(msg);
+    };
+
+    try {
+      if (!tripId || !day) {
+        return { success: false, error: 'tripId ou dados do dia ausentes' };
+      }
+
+      addLog(`Iniciando salvamento do Dia ${day.dayNumber} (ID: ${day.id}) para Viagem ${tripId}`);
+
+      // 1. Ensure the parent trip exists in `trips` table to prevent FK violations
+      try {
+        const { data: tripCheck, error: tripCheckErr } = await supabase
+          .from('trips')
+          .select('id')
+          .eq('id', tripId)
+          .maybeSingle();
+
+        if (tripCheckErr && isSupabaseMissingTableError(tripCheckErr)) {
+          addLog('Tabela trips ainda não existe no Supabase (SQL pendente).');
+          return { success: false, error: 'Tabelas do Supabase aguardando criação (execute o SQL).', debugLogs };
+        }
+
+        if (!tripCheck) {
+          addLog(`Viagem ${tripId} não encontrada na tabela trips. Criando registro da viagem no Supabase...`);
+          const tripToInsert: Partial<Trip> = {
+            id: tripId,
+            tripCode: fallbackTrip?.tripCode || `ORL-${Math.floor(1000 + Math.random() * 9000)}`,
+            tripName: fallbackTrip?.tripName || 'Minha Viagem',
+            destination: fallbackTrip?.destination || 'Orlando, FL',
+            startDate: fallbackTrip?.startDate || '2026-12-30',
+            durationDays: fallbackTrip?.durationDays || 10,
+            travelersCount: fallbackTrip?.travelersCount || 1,
+            dollarRate: fallbackTrip?.dollarRate || 5.75,
+            totalBudgetGoalBRL: fallbackTrip?.totalBudgetGoalBRL || 0,
+            status: fallbackTrip?.status || 'Planejando',
+            coverTheme: fallbackTrip?.coverTheme || 'magic',
+            travelers: fallbackTrip?.travelers || [],
+            expenses: [],
+            rawDays: [day],
+            createdAt: new Date().toISOString().split('T')[0],
+          };
+          const tripDb = mapTripToDb(tripToInsert);
+          const { error: tripUpsertErr } = await supabase.from('trips').upsert(tripDb, { onConflict: 'id' });
+          if (tripUpsertErr) {
+            addLog(`Aviso ao criar viagem preliminar: ${tripUpsertErr.message}`);
+          } else {
+            addLog(`Viagem ${tripId} garantida na tabela trips.`);
+          }
+        }
+      } catch (fkCheckErr: any) {
+        addLog(`Verificação de viagem (não-fatal): ${fkCheckErr?.message}`);
+      }
+
+      // 2. Check if a row exists in `itinerary_days` for (trip_id, day_number) or by day.id
+      let resolvedDayId = day.id;
+      try {
+        if (day.id) {
+          const { data: byIdRow } = await supabase
+            .from('itinerary_days')
+            .select('id, day_number')
+            .eq('id', day.id)
+            .maybeSingle();
+          if (byIdRow && byIdRow.id) {
+            resolvedDayId = byIdRow.id;
+          }
+        }
+
+        if (!resolvedDayId || resolvedDayId === day.id) {
+          const { data: existingDays, error: checkDayErr } = await supabase
+            .from('itinerary_days')
+            .select('id, day_number')
+            .eq('trip_id', tripId)
+            .eq('day_number', day.dayNumber)
+            .limit(1);
+
+          if (!checkDayErr && existingDays && existingDays.length > 0) {
+            resolvedDayId = existingDays[0].id;
+            addLog(`Dia ${day.dayNumber} já existe no banco com ID: ${resolvedDayId}. Atualizando este registro (título: ${day.title}).`);
+          }
+        }
+      } catch (errExisting) {
+        addLog(`Aviso ao buscar dia existente: ${errExisting?.message}`);
+      }
+
+      // Guarantee that all events with date and time (shows, encerramento, abertura, refeições, fastpass, etc.)
+      // are synchronized into day.hourlySchedule BEFORE writing to itinerary_days and hourly_schedules
+      const fullHourlyItems = syncAllEventsToHourlySchedule(day, fallbackTrip);
+      day.hourlySchedule = fullHourlyItems;
+      const ensuredDay = ensureHourlyScheduleItems(day);
+      day.hourlySchedule = ensuredDay.hourlySchedule;
+
+      // 3. Upsert into `itinerary_days` table
+      const dayDb = mapItineraryDayToDb({ ...day, id: resolvedDayId }, tripId);
+      const { error: dayErr } = await supabase
+        .from('itinerary_days')
+        .upsert(dayDb, { onConflict: 'id' });
+
+      if (dayErr) {
+        addLog(`Erro ao salvar itinerary_days: ${dayErr.message}`);
+        return { success: false, error: dayErr.message, resolvedDayId, debugLogs };
+      }
+
+      addLog(`Tabela itinerary_days atualizada com sucesso para o Dia ${day.dayNumber} (ID: ${resolvedDayId}).`);
+
+      // 4. Synchronize the dedicated `hourly_schedules` table for this day
+      try {
+        // Fetch existing hourly items for this day
+        const { data: existingHourly, error: fetchHourlyErr } = await supabase
+          .from('hourly_schedules')
+          .select('id')
+          .eq('itinerary_day_id', resolvedDayId);
+
+        if (fetchHourlyErr && isSupabaseMissingTableError(fetchHourlyErr)) {
+          addLog('Tabela hourly_schedules não existe; horário persistido na coluna JSONB de itinerary_days.');
+        } else {
+          const seenIds = new Set<string>();
+          const dbHourlyRows: any[] = [];
+          fullHourlyItems.forEach((item, index) => {
+            const row = mapHourlyScheduleToDb(item, resolvedDayId, tripId, index);
+            if (row.id && !seenIds.has(row.id)) {
+              seenIds.add(row.id);
+              dbHourlyRows.push(row);
+            }
+          });
+
+          const currentDbHourlyIds = dbHourlyRows.map((r) => r.id).filter(Boolean);
+
+          if (existingHourly && existingHourly.length > 0) {
+            const toDelete = existingHourly
+              .map((r: any) => r.id)
+              .filter((id: string) => !currentDbHourlyIds.includes(id));
+            if (toDelete.length > 0) {
+              await supabase
+                .from('hourly_schedules')
+                .delete()
+                .eq('itinerary_day_id', resolvedDayId)
+                .in('id', toDelete);
+              addLog(`Removidos ${toDelete.length} horários antigos/duplicados da tabela hourly_schedules.`);
+            }
+          }
+
+          if (dbHourlyRows.length > 0) {
+            const { error: upsertHourlyErr } = await supabase
+              .from('hourly_schedules')
+              .upsert(dbHourlyRows, { onConflict: 'id' });
+
+            if (upsertHourlyErr) {
+              addLog(`Aviso ao gravar em hourly_schedules: ${upsertHourlyErr.message}. Executando recriação limpa...`);
+              await supabase.from('hourly_schedules').delete().eq('itinerary_day_id', resolvedDayId);
+              const { error: insertErr } = await supabase.from('hourly_schedules').insert(dbHourlyRows);
+              if (insertErr) {
+                addLog(`Erro no insert de hourly_schedules: ${insertErr.message}`);
+              } else {
+                addLog(`${dbHourlyRows.length} horários gravados na tabela hourly_schedules com sucesso.`);
+              }
+            } else {
+              addLog(`${dbHourlyRows.length} horários gravados na tabela hourly_schedules com sucesso.`);
+            }
+          }
+        }
+      } catch (hourlyErr: any) {
+        addLog(`Aviso sync hourly_schedules: ${hourlyErr?.message}`);
+      }
+
+      // 5. Synchronize park_day_bookings table and secondary event tables for this day
+      try {
+        if (day.parkBooking && day.park && day.park !== 'Sem Parque') {
+          const pbDb = mapParkBookingToDb(day.parkBooking, resolvedDayId, tripId);
+          await supabase.from('park_day_bookings').upsert(pbDb, { onConflict: 'itinerary_day_id' });
+          addLog(`Registro de reserva de parque salvo na tabela park_day_bookings.`);
+
+          const bookingId = pbDb.id || ensureValidUUID(day.parkBooking.id, 'park-booking', resolvedDayId);
+
+          // 5.1 Sincronização de tabelas secundárias para Fast Passes, Refeições e Shows
+          try {
+            // Fast Passes
+            const fastPasses = day.parkBooking.fastPasses || [];
+            const fpRows = fastPasses.map((fp) => ({
+              id: ensureValidUUID(fp.id, 'fastpass', `${bookingId}-${fp.attractionName}-${fp.timeWindow}`),
+              trip_id: tripId,
+              park_day_booking_id: bookingId,
+              itinerary_day_id: resolvedDayId,
+              attraction_name: fp.attractionName || 'Atração',
+              time_window: fp.timeWindow || '',
+              pass_type: fp.type || 'Lightning Lane Multi Pass',
+              tier: fp.tier || null,
+              status: fp.status || 'Agendado',
+              party_members: fp.partyMembers || null,
+              notes: fp.notes || null,
+              updated_at: new Date().toISOString(),
+            }));
+            await supabase.from('park_fast_passes').delete().eq('itinerary_day_id', resolvedDayId);
+            if (fpRows.length > 0) {
+              await supabase.from('park_fast_passes').upsert(fpRows, { onConflict: 'id' });
+              addLog(`${fpRows.length} FastPasses sincronizados na tabela secundária park_fast_passes.`);
+            }
+
+            // Refeições / Almoço / Jantar
+            const diningList = day.parkBooking.diningReservations || [];
+            const dinRows = diningList.map((dr) => ({
+              id: ensureValidUUID(dr.id, 'dining', `${bookingId}-${dr.restaurantName}-${dr.time}`),
+              trip_id: tripId,
+              park_day_booking_id: bookingId,
+              itinerary_day_id: resolvedDayId,
+              restaurant_name: dr.restaurantName || 'Restaurante',
+              meal_type: dr.mealType || 'Almoço (Lunch)',
+              reservation_time: dr.time || '12:30',
+              confirmation_code: dr.confirmationCode || null,
+              party_size: dr.partySize || null,
+              table_service: Boolean(dr.tableService),
+              status: dr.status || 'Confirmada',
+              cancellation_policy_notes: dr.cancellationPolicyNotes || null,
+              notes: dr.notes || null,
+              updated_at: new Date().toISOString(),
+            }));
+            await supabase.from('park_dining_reservations').delete().eq('itinerary_day_id', resolvedDayId);
+            if (dinRows.length > 0) {
+              await supabase.from('park_dining_reservations').upsert(dinRows, { onConflict: 'id' });
+              addLog(`${dinRows.length} refeições sincronizadas na tabela secundária park_dining_reservations.`);
+            }
+
+            // Shows e Paradas
+            const showsList = day.parkBooking.showsAndParades || [];
+            const showRows = showsList.map((show) => ({
+              id: ensureValidUUID(show.id, 'show', `${bookingId}-${show.showName}-${show.time}`),
+              trip_id: tripId,
+              park_day_booking_id: bookingId,
+              itinerary_day_id: resolvedDayId,
+              show_name: show.showName || 'Show',
+              show_time: show.time || '20:00',
+              location: show.location || null,
+              reserved_area: show.reservedArea || null,
+              status: show.status || 'Agendado',
+              notes: show.notes || null,
+              updated_at: new Date().toISOString(),
+            }));
+            await supabase.from('park_shows_reservations').delete().eq('itinerary_day_id', resolvedDayId);
+            if (showRows.length > 0) {
+              await supabase.from('park_shows_reservations').upsert(showRows, { onConflict: 'id' });
+              addLog(`${showRows.length} shows sincronizados na tabela secundária park_shows_reservations.`);
+
+              // Garantia absoluta: Todo show/encerramento salvo deve existir na tabela hourly_schedules
+              try {
+                const showHourlyRows = showRows.map((s, idx) => {
+                  const sTime = s.show_time && s.show_time.match(/\d{1,2}:\d{2}/) ? s.show_time.match(/\d{1,2}:\d{2}/)![0] : '20:00';
+                  const formattedTime = sTime.length === 4 ? `0${sTime}` : sTime;
+                  const titleFormatted = s.show_name?.startsWith('🎆')
+                    ? s.show_name
+                    : (s.show_name?.toLowerCase().includes('show') || s.show_name?.toLowerCase().includes('fogos') || s.show_name?.toLowerCase().includes('encerramento')
+                        ? `🎆 ${s.show_name}`
+                        : `🎆 Show / Parada: ${s.show_name}`);
+
+                  return {
+                    id: ensureValidUUID(s.id, 'hourly-show', `${resolvedDayId}-${s.id}-${formattedTime}-${idx}`),
+                    itinerary_day_id: resolvedDayId,
+                    trip_id: tripId,
+                    time: formattedTime,
+                    title: titleFormatted,
+                    location: s.location || (day.park || 'Parque'),
+                    category: 'park',
+                    completed: (s.status as any) === 'Assistido' || (s.status as any) === 'Concluído',
+                    notes: s.notes || (s.reserved_area ? `Área: ${s.reserved_area}` : null),
+                    source_type: 'show',
+                    source_id: s.id,
+                    created_at: new Date().toISOString(),
+                  };
+                });
+                await supabase.from('hourly_schedules').upsert(showHourlyRows, { onConflict: 'id' });
+                addLog(`${showHourlyRows.length} shows/encerramentos sincronizados com sucesso na tabela hourly_schedules.`);
+              } catch (showSyncErr) {
+                console.warn('Sync shows to hourly_schedules note:', showSyncErr);
+              }
+            }
+            // Photo Package
+            const pkg = day.parkBooking.hasPhotoPackage && day.parkBooking.photoPackage ? day.parkBooking.photoPackage : null;
+            if (pkg && (pkg.costUSD || pkg.costBRL || pkg.name)) {
+              const photoPkgRow = {
+                id: ensureValidUUID(pkg.id, 'photo-pkg', `${bookingId}-${pkg.name}`),
+                trip_id: tripId,
+                park_day_booking_id: bookingId,
+                itinerary_day_id: resolvedDayId,
+                name: pkg.name || 'Pacote de Fotos',
+                package_type: pkg.type || 'trip_30days',
+                validity_description: pkg.validityDescription || null,
+                complex: pkg.complex || 'Disney',
+                included_parks: pkg.includedParks || [],
+                confirmation_code: pkg.confirmationCode || null,
+                account_email_or_user: pkg.accountEmailOrUser || null,
+                cost_usd: pkg.costUSD !== undefined ? Number(pkg.costUSD) : null,
+                cost_brl: pkg.costBRL !== undefined ? Number(pkg.costBRL) : null,
+                status: pkg.status || 'Confirmado',
+                payment_status: pkg.paymentStatus || 'Reservado / Confirmado',
+                payer_id: pkg.payerId || 'all',
+                traveler_ids: pkg.travelerIds || ['all'],
+                notes: pkg.notes || null,
+                updated_at: new Date().toISOString(),
+              };
+              await supabase.from('park_photo_packages').upsert(photoPkgRow, { onConflict: 'id' });
+              addLog(`Pacote de fotos sincronizado na tabela park_photo_packages.`);
+            } else {
+              await supabase.from('park_photo_packages').delete().eq('itinerary_day_id', resolvedDayId);
+            }
+          } catch (secErr: any) {
+            if (!isSupabaseMissingTableError(secErr)) {
+              console.warn('Sync secondary park tables note:', secErr);
+            }
+          }
+        } else {
+          await supabase.from('park_day_bookings').delete().eq('itinerary_day_id', resolvedDayId);
+          try {
+            await Promise.allSettled([
+              supabase.from('park_fast_passes').delete().eq('itinerary_day_id', resolvedDayId),
+              supabase.from('park_dining_reservations').delete().eq('itinerary_day_id', resolvedDayId),
+              supabase.from('park_shows_reservations').delete().eq('itinerary_day_id', resolvedDayId),
+              supabase.from('park_photo_packages').delete().eq('itinerary_day_id', resolvedDayId),
+            ]);
+          } catch {}
+        }
+      } catch (pbErr: any) {
+        addLog(`Aviso sync park_day_bookings: ${pbErr?.message}`);
+      }
+
+      return {
+        success: true,
+        resolvedDayId,
+        hourlyCount: fullHourlyItems.length,
+        debugLogs,
+      };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro desconhecido ao salvar dia', debugLogs };
+    }
+  },
+
+  /**
+   * Fetch expenses by Trip ID directly from Supabase
+   */
+  async fetchExpensesByTripId(tripId: string): Promise<ExpenseItem[] | null> {
+    try {
+      if (!tripId) return null;
+      const { data, error } = await supabase
+        .from('expenses')
+        .select('*')
+        .eq('trip_id', tripId)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        if (!isSupabaseMissingTableError(error)) {
+          console.error('fetchExpensesByTripId error:', error);
+        }
+        return null;
+      }
+
+      return (data || []).map(mapDbToExpense);
+    } catch (err) {
+      console.warn('fetchExpensesByTripId exception:', err);
+      return null;
+    }
+  },
+
+  /**
+   * Sync all expenses for a trip (upsert existing & delete removed)
+   */
+  async syncExpenses(
+    tripId: string,
+    expenses: ExpenseItem[],
+    fallbackTrip?: Partial<Trip>
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!tripId) return { success: false, error: 'tripId obrigatório' };
+      const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+
+      // Ensure parent trip exists
+      try {
+        const { data: tripCheck } = await supabase.from('trips').select('id').eq('id', cleanTripId).maybeSingle();
+        if (!tripCheck) {
+          const tripToInsert: Partial<Trip> = {
+            id: cleanTripId,
+            tripCode: fallbackTrip?.tripCode || `ORL-${Math.floor(1000 + Math.random() * 9000)}`,
+            tripName: fallbackTrip?.tripName || 'Minha Viagem',
+            destination: fallbackTrip?.destination || 'Orlando, FL',
+            startDate: fallbackTrip?.startDate || '2026-12-30',
+            durationDays: fallbackTrip?.durationDays || 10,
+            travelersCount: fallbackTrip?.travelersCount || 1,
+            dollarRate: fallbackTrip?.dollarRate || 5.75,
+            totalBudgetGoalBRL: fallbackTrip?.totalBudgetGoalBRL || 0,
+            status: fallbackTrip?.status || 'Planejando',
+            coverTheme: fallbackTrip?.coverTheme || 'magic',
+            travelers: fallbackTrip?.travelers || [],
+            expenses: expenses,
+            rawDays: [],
+            createdAt: new Date().toISOString().split('T')[0],
+          };
+          const tripDb = mapTripToDb(tripToInsert);
+          await supabase.from('trips').upsert(tripDb, { onConflict: 'id' });
+        }
+      } catch (e) {
+        console.warn('Trip check in syncExpenses:', e);
+      }
+
+      // Ensure travelers exist in DB
+      if (fallbackTrip?.travelers && fallbackTrip.travelers.length > 0) {
+        try {
+          const dbTravelers = fallbackTrip.travelers.map((t) => mapTravelerToDb(t, cleanTripId));
+          await supabase.from('travelers').upsert(dbTravelers, { onConflict: 'id' });
+        } catch (trvErr) {
+          console.warn('Travelers pre-sync in syncExpenses note:', trvErr);
+        }
+      }
+
+      const currentIds = (expenses || []).map((e) => e.id).filter(Boolean);
+      const { data: existing } = await supabase.from('expenses').select('id').eq('trip_id', cleanTripId);
+      if (existing && existing.length > 0) {
+        const toDelete = existing.map((r: any) => r.id).filter((id: string) => !currentIds.includes(id));
+        if (toDelete.length > 0) {
+          await supabase.from('expenses').delete().eq('trip_id', cleanTripId).in('id', toDelete);
+        }
+      }
+
+      if (expenses && expenses.length > 0) {
+        const dbRows = expenses.map((e) => mapExpenseToDb(e, cleanTripId));
+        const { error: upsertErr } = await supabase.from('expenses').upsert(dbRows, { onConflict: 'id' });
+        if (upsertErr) {
+          if (isSupabaseMissingTableError(upsertErr)) {
+            return { success: false, error: 'Tabela expenses aguardando criação no Supabase.' };
+          }
+          return { success: false, error: upsertErr.message };
+        }
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro ao sincronizar despesas' };
+    }
+  },
+
+  /**
+   * Save or Update a single Expense to Supabase
+   */
+  async saveExpense(
+    tripId: string,
+    expense: ExpenseItem,
+    fallbackTrip?: Partial<Trip>
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!tripId || !expense) return { success: false, error: 'Parâmetros inválidos' };
+      const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+
+      // Ensure parent trip exists
+      try {
+        const { data: tripCheck } = await supabase.from('trips').select('id').eq('id', cleanTripId).maybeSingle();
+        if (!tripCheck) {
+          const tripToInsert: Partial<Trip> = {
+            id: cleanTripId,
+            tripCode: fallbackTrip?.tripCode || `ORL-${Math.floor(1000 + Math.random() * 9000)}`,
+            tripName: fallbackTrip?.tripName || 'Minha Viagem',
+            destination: fallbackTrip?.destination || 'Orlando, FL',
+            startDate: fallbackTrip?.startDate || '2026-12-30',
+            durationDays: fallbackTrip?.durationDays || 10,
+            travelersCount: fallbackTrip?.travelersCount || 1,
+            dollarRate: fallbackTrip?.dollarRate || 5.75,
+            totalBudgetGoalBRL: fallbackTrip?.totalBudgetGoalBRL || 0,
+            status: fallbackTrip?.status || 'Planejando',
+            coverTheme: fallbackTrip?.coverTheme || 'magic',
+            travelers: fallbackTrip?.travelers || [],
+            expenses: [expense],
+            rawDays: [],
+            createdAt: new Date().toISOString().split('T')[0],
+          };
+          const tripDb = mapTripToDb(tripToInsert);
+          await supabase.from('trips').upsert(tripDb, { onConflict: 'id' });
+        }
+      } catch (e) {
+        console.warn('Trip check in saveExpense:', e);
+      }
+
+      // Ensure travelers exist in DB before saving expense to avoid FK violations
+      if (fallbackTrip?.travelers && fallbackTrip.travelers.length > 0) {
+        try {
+          const dbTravelers = fallbackTrip.travelers.map((t) => mapTravelerToDb(t, cleanTripId));
+          await supabase.from('travelers').upsert(dbTravelers, { onConflict: 'id' });
+        } catch (trvErr) {
+          console.warn('Travelers pre-sync in saveExpense note:', trvErr);
+        }
+      }
+
+      const row = mapExpenseToDb(expense, cleanTripId);
+      const { error } = await supabase.from('expenses').upsert(row, { onConflict: 'id' });
+
+      if (error) {
+        if (isSupabaseMissingTableError(error)) {
+          return { success: false, error: 'Tabela expenses ainda não foi criada no Supabase.' };
+        }
+        console.error('saveExpense error:', error);
+        return { success: false, error: error.message };
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      console.warn('saveExpense exception:', err);
+      return { success: false, error: err?.message || 'Erro ao salvar despesa' };
+    }
+  },
+
+  /**
+   * Delete Hourly Schedule Item
+   */
+  async deleteHourlySchedule(id: string): Promise<boolean> {
+    try {
+      const { error } = await supabase.from('hourly_schedules').delete().eq('id', id);
+      return !error;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Delete Hourly Schedules by source_id
+   */
+  async deleteHourlySchedulesBySource(sourceId: string): Promise<boolean> {
+    try {
+      const { error } = await supabase.from('hourly_schedules').delete().eq('source_id', sourceId);
+      return !error;
+    } catch {
+      return false;
+    }
+  },
+
+  /**
+   * Sync all preparation documents for a trip (upsert existing & delete removed)
+   */
+  async syncPrepDocuments(
+    tripId: string,
+    prepDocs: PreparationDocument[],
+    fallbackTrip?: Partial<Trip>
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!tripId) return { success: false, error: 'tripId obrigatório' };
+
+      // Ensure parent trip exists
+      try {
+        const { data: tripCheck } = await supabase.from('trips').select('id').eq('id', tripId).maybeSingle();
+        if (!tripCheck) {
+          const tripToInsert: Partial<Trip> = {
+            id: tripId,
+            tripCode: fallbackTrip?.tripCode || `ORL-${Math.floor(1000 + Math.random() * 9000)}`,
+            tripName: fallbackTrip?.tripName || 'Minha Viagem',
+            destination: fallbackTrip?.destination || 'Orlando, FL',
+            startDate: fallbackTrip?.startDate || '2026-12-30',
+            durationDays: fallbackTrip?.durationDays || 10,
+            travelersCount: fallbackTrip?.travelersCount || 1,
+            dollarRate: fallbackTrip?.dollarRate || 5.75,
+            totalBudgetGoalBRL: fallbackTrip?.totalBudgetGoalBRL || 0,
+            status: fallbackTrip?.status || 'Planejando',
+            coverTheme: fallbackTrip?.coverTheme || 'magic',
+            travelers: fallbackTrip?.travelers || [],
+            expenses: [],
+            rawDays: [],
+            createdAt: new Date().toISOString().split('T')[0],
+          };
+          const tripDb = mapTripToDb(tripToInsert);
+          await supabase.from('trips').upsert(tripDb, { onConflict: 'id' });
+        }
+      } catch (e) {
+        console.warn('Trip check in syncPrepDocuments:', e);
+      }
+
+      // Ensure travelers exist in DB before prep docs to avoid foreign key errors
+      if (fallbackTrip?.travelers && fallbackTrip.travelers.length > 0) {
+        try {
+          const dbTravelers = fallbackTrip.travelers.map((t) => mapTravelerToDb(t, tripId));
+          await supabase.from('travelers').upsert(dbTravelers, { onConflict: 'id' });
+        } catch (trvErr) {
+          console.warn('Travelers pre-sync in syncPrepDocuments note:', trvErr);
+        }
+      }
+
+      const dbRows = (prepDocs || []).map((d) => mapPrepDocToDb(d, tripId));
+      const currentIds = dbRows.map((r) => r.id).filter(Boolean);
+
+      const { data: existing } = await supabase.from('preparation_documents').select('id').eq('trip_id', tripId);
+      if (existing && existing.length > 0) {
+        const toDelete = existing.map((r: any) => r.id).filter((id: string) => !currentIds.includes(id));
+        if (toDelete.length > 0) {
+          await supabase.from('preparation_documents').delete().eq('trip_id', tripId).in('id', toDelete);
+        }
+      }
+
+      if (dbRows.length > 0) {
+        const { error: upsertErr } = await supabase.from('preparation_documents').upsert(dbRows, { onConflict: 'id' });
+        if (upsertErr) {
+          if (isSupabaseMissingTableError(upsertErr)) {
+            return { success: false, error: 'Tabela preparation_documents aguardando criação no Supabase.' };
+          }
+          return { success: false, error: upsertErr.message };
+        }
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro ao sincronizar documentos de preparação' };
+    }
+  },
+
+  /**
+   * Fetch settlement payments / adjustments for a trip
+   */
+  async fetchSettlementPayments(tripId: string): Promise<SettlementPayment[]> {
+    try {
+      if (!tripId) return [];
+      const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+      const { data, error } = await supabase
+        .from('settlement_payments')
+        .select('*')
+        .eq('trip_id', cleanTripId)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        if (isSupabaseMissingTableError(error)) {
+          console.warn('Tabela settlement_payments aguardando criação no Supabase.');
+          return [];
+        }
+        console.error('fetchSettlementPayments error:', error);
+        return [];
+      }
+
+      return (data || []).map(mapDbToSettlementPayment);
+    } catch (err) {
+      console.warn('fetchSettlementPayments exception:', err);
+      return [];
+    }
+  },
+
+  /**
+   * Save / Upsert a single Settlement Payment in Supabase
+   */
+  async saveSettlementPayment(
+    tripId: string,
+    payment: SettlementPayment,
+    fallbackTrip?: Partial<Trip>
+  ): Promise<{ success: boolean; data?: SettlementPayment; error?: string }> {
+    try {
+      if (!tripId || !payment) {
+        return { success: false, error: 'Parâmetros inválidos para o pagamento' };
+      }
+
+      const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+
+      // Ensure trip exists in DB
+      try {
+        const { data: tripCheck } = await supabase.from('trips').select('id').eq('id', cleanTripId).maybeSingle();
+        if (!tripCheck) {
+          const tripToInsert: Partial<Trip> = {
+            id: cleanTripId,
+            tripCode: fallbackTrip?.tripCode || `ORL-${Math.floor(1000 + Math.random() * 9000)}`,
+            tripName: fallbackTrip?.tripName || 'Minha Viagem',
+            destination: fallbackTrip?.destination || 'Orlando, FL',
+            startDate: fallbackTrip?.startDate || '2026-12-30',
+            durationDays: fallbackTrip?.durationDays || 10,
+            travelersCount: fallbackTrip?.travelersCount || 1,
+            dollarRate: fallbackTrip?.dollarRate || 5.75,
+            totalBudgetGoalBRL: fallbackTrip?.totalBudgetGoalBRL || 0,
+            status: fallbackTrip?.status || 'Planejando',
+            coverTheme: fallbackTrip?.coverTheme || 'magic',
+            travelers: fallbackTrip?.travelers || [],
+            expenses: [],
+            rawDays: [],
+            createdAt: new Date().toISOString().split('T')[0],
+          };
+          const tripDb = mapTripToDb(tripToInsert);
+          await supabase.from('trips').upsert(tripDb, { onConflict: 'id' });
+        }
+      } catch (e) {
+        console.warn('Trip check in saveSettlementPayment:', e);
+      }
+
+      // Ensure travelers exist in DB before saving settlement payment
+      if (fallbackTrip?.travelers && fallbackTrip.travelers.length > 0) {
+        try {
+          const dbTravelers = fallbackTrip.travelers.map((t) => mapTravelerToDb(t, cleanTripId));
+          await supabase.from('travelers').upsert(dbTravelers, { onConflict: 'id' });
+        } catch (trvErr) {
+          console.warn('Travelers pre-sync in saveSettlementPayment notice:', trvErr);
+        }
+      }
+
+      const dbRow = mapSettlementPaymentToDb(payment, cleanTripId);
+      const { data, error } = await supabase
+        .from('settlement_payments')
+        .upsert(dbRow, { onConflict: 'id' })
+        .select()
+        .maybeSingle();
+
+      if (error) {
+        if (isSupabaseMissingTableError(error)) {
+          return { success: false, error: 'Tabela settlement_payments aguardando criação no Supabase.' };
+        }
+        console.error('saveSettlementPayment error:', error);
+        return { success: false, error: error.message };
+      }
+
+      const saved = data ? mapDbToSettlementPayment(data) : payment;
+      return { success: true, data: saved };
+    } catch (err: any) {
+      console.warn('saveSettlementPayment exception:', err);
+      return { success: false, error: err?.message || 'Erro ao salvar acerto de contas' };
+    }
+  },
+
+  /**
+   * Delete a Settlement Payment from Supabase
+   */
+  async deleteSettlementPayment(id: string): Promise<boolean> {
+    try {
+      if (!id) return false;
+      const { error } = await supabase.from('settlement_payments').delete().eq('id', id);
+      if (error) {
+        console.error('deleteSettlementPayment error:', error);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.warn('deleteSettlementPayment exception:', err);
+      return false;
+    }
+  },
+
+  /**
+   * Save all rule-generated hourly schedules for a trip to the hourly_schedules table
+   */
+  async saveAllHourlySchedules(tripId: string, days: ItineraryDay[]): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!tripId || !days) return { success: false, error: 'Parâmetros inválidos' };
+      const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+
+      const allHourlyItems: Array<{ item: HourlyScheduleItem; dayId: string }> = [];
+      days.forEach((d) => {
+        if (d.id && d.hourlySchedule) {
+          d.hourlySchedule.forEach((h) => {
+            allHourlyItems.push({ item: h, dayId: d.id });
+          });
+        }
+      });
+
+      if (allHourlyItems.length === 0) return { success: true };
+
+      const dbHourlyRows = allHourlyItems.map(({ item, dayId }, index) =>
+        mapHourlyScheduleToDb(item, dayId, cleanTripId, index)
+      );
+
+      for (let i = 0; i < dbHourlyRows.length; i += 50) {
+        const chunk = dbHourlyRows.slice(i, i + 50);
+        const { error } = await supabase.from('hourly_schedules').upsert(chunk, { onConflict: 'id' });
+        if (error) {
+          if (!isSupabaseMissingTableError(error)) {
+            console.error('saveAllHourlySchedules batch error:', error);
+          }
+        }
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      console.warn('saveAllHourlySchedules exception:', err);
+      return { success: false, error: err?.message || 'Erro ao salvar cronograma hora a hora' };
+    }
+  },
+};

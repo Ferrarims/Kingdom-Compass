@@ -1,0 +1,6 @@
+{
+  "summary": "Plano de implementação detalhado para o sistema de troca e permuta de dias de parques na aba Parques do KingdomCompass. Cobre a modal SwapParkDayModal com prévia em tempo real (transferência para dias livres ou permuta mútua entre dias com parques), preservação de integridade de voos/acomodações e persistência integrada no PlannerContext e Supabase.",
+  "updatedAt": "2026-10-15T14:40:32.081033700Z",
+  "requestFeedback": true,
+  "userFacing": true
+}
