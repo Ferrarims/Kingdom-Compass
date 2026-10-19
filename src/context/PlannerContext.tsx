@@ -1044,11 +1044,26 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     try {
       const check = await checkSupabaseConnection();
       if (!check.ok || !check.tablesExist) {
-        setSupabaseStatus((prev) => ({ ...prev, syncing: false }));
+        setSupabaseStatus((prev) => ({ ...prev, syncing: false, error: 'Conexão ou tabelas do Supabase não encontradas' }));
         return false;
       }
 
-      const remoteTrips = await SupabaseService.fetchAllTrips();
+      const result = await SupabaseService.fetchAllTrips();
+      if (!result || result.errors.length > 0) {
+        const errorMsg = result?.errors?.length
+          ? `Falha na leitura do Supabase: ${result.errors.map(e => `Tabela '${e.table}' (Viagem: ${e.tripId}): ${e.message}`).join('; ')}`
+          : 'Falha ao carregar dados do Supabase. Dados locais preservados.';
+        
+        console.error('[Supabase Read Failure]:', result?.errors);
+        setSupabaseStatus((prev) => ({
+          ...prev,
+          syncing: false,
+          error: errorMsg,
+        }));
+        return false;
+      }
+
+      const remoteTrips = result.trips;
       if (remoteTrips && remoteTrips.length > 0) {
         setTrips((prevTrips) => {
           const merged = mergeLocalAndRemoteTrips(prevTrips, remoteTrips);
@@ -1070,8 +1085,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           error: null,
         }));
         return true;
-      } else if (remoteTrips !== null && remoteTrips.length === 0) {
-        // If remote database is empty, but local trips exist, push local trips to Supabase!
+      } else if (remoteTrips.length === 0) {
+        // Só trate o banco como realmente vazio quando a consulta de trips tiver sido concluída sem erro e retornar zero registros.
+        // Nunca inicie sincronização de dados locais para o Supabase como consequência de uma falha de leitura.
         if (trips.length > 0) {
           for (const localT of trips) {
             await SupabaseService.syncTripToSupabase(localT);
@@ -1089,7 +1105,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         }));
         return true;
       }
-      setSupabaseStatus((prev) => ({ ...prev, syncing: false }));
+      setSupabaseStatus((prev) => ({ ...prev, syncing: false, error: 'Nenhum dado retornado do Supabase' }));
       return false;
     } catch (err: any) {
       setSupabaseStatus((prev) => ({ ...prev, syncing: false, error: err?.message || 'Erro ao carregar do Supabase' }));
@@ -1112,8 +1128,17 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         }));
 
         if (check.tablesExist) {
-          const remoteTrips = await SupabaseService.fetchAllTrips();
+          const result = await SupabaseService.fetchAllTrips();
           if (!isMounted) return;
+          if (!result || result.errors.length > 0) {
+            const errorMsg = result?.errors?.length
+              ? `Falha ao carregar tabelas do Supabase: ${result.errors.map(e => `${e.table} (${e.tripId}): ${e.message}`).join(', ')}`
+              : 'Erro ao carregar dados do Supabase';
+            setSupabaseStatus((prev) => ({ ...prev, error: errorMsg }));
+            return;
+          }
+
+          const remoteTrips = result.trips;
           if (remoteTrips && remoteTrips.length > 0) {
             setTrips((prevTrips) => {
               const merged = mergeLocalAndRemoteTrips(prevTrips, remoteTrips);
@@ -1144,20 +1169,28 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
                 return newSession;
               });
             }
-          } else if (remoteTrips !== null && remoteTrips.length === 0) {
+            const now = new Date();
+            const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+            setSupabaseStatus((prev) => ({
+              ...prev,
+              lastSynced: `Hoje às ${timeStr}`,
+              error: null,
+            }));
+          } else if (remoteTrips.length === 0) {
             // If remote DB is empty, auto-push local trips if any exist
             if (trips.length > 0) {
               for (const localT of trips) {
                 await SupabaseService.syncTripToSupabase(localT);
               }
             }
+            const now = new Date();
+            const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+            setSupabaseStatus((prev) => ({
+              ...prev,
+              lastSynced: `Hoje às ${timeStr}`,
+              error: null,
+            }));
           }
-          const now = new Date();
-          const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-          setSupabaseStatus((prev) => ({
-            ...prev,
-            lastSynced: `Hoje às ${timeStr}`,
-          }));
         }
       } else {
         setSupabaseStatus((prev) => ({
