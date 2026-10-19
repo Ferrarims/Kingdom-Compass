@@ -59,14 +59,7 @@ export const AccommodationsView: React.FC = () => {
     openOverviewModal,
   } = usePlanner();
 
-  // Executar a regra inteligente de acomodações na montagem da tela:
-  // Verifica voo, carro alugado, tempo maps e atualiza check-in e roteiro sem duplicidades
-  useEffect(() => {
-    applySmartAccommodationRules();
-    if (accommodations.length > 0 && supabaseStatus.connected) {
-      syncAccommodationsToSupabase();
-    }
-  }, []);
+  // Determine min and max allowed dates for the active trip
 
 
 

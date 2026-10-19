@@ -29,7 +29,7 @@ import { fetchLiveExchangeRate } from '../services/exchangeRateService';
 import { supabase, checkSupabaseConnection } from '../services/supabaseClient';
 import { SupabaseService } from '../services/supabaseService';
 import { detectGenderByName, Gender } from '../utils/genderDetector';
-import { clearParkReferencesFromDay, generateParkHourlySchedule, generateParkScheduleResult, deduplicateHourlySchedule, cleanInvalidAutoItems, isDayWithPark, isNonParkEvent, syncAllEventsToHourlySchedule, adjustScheduleForCheckoutAndDeparture, compareScheduleItemOrder, calculateDay1AccommodationTimeline, Day1AirportAccommodationTimeline, addMinutesToTimeString, maxTimeString, syncFlightsWithItineraryDays, isDefaultItineraryDayTitle, syncAccommodationsWithItineraryDays, auditAndCorrectTrip } from '../utils/parkScheduleUtils';
+import { clearParkReferencesFromDay, generateParkHourlySchedule, generateParkScheduleResult, deduplicateHourlySchedule, cleanInvalidAutoItems, isDayWithPark, isNonParkEvent, syncAllEventsToHourlySchedule, adjustScheduleForCheckoutAndDeparture, compareScheduleItemOrder, calculateDay1AccommodationTimeline, Day1AirportAccommodationTimeline, addMinutesToTimeString, maxTimeString, syncFlightsWithItineraryDays, isDefaultItineraryDayTitle, syncAccommodationsWithItineraryDays, auditAndCorrectTrip, ensureHourlyScheduleItems } from '../utils/parkScheduleUtils';
 import { generateEssentialBaggageItems, BaggageTemplateOptions, WeatherCondition, detectOrlandoWeatherFromTrip } from '../utils/baggageGenerator';
 import { normalizeAttractionName } from '../utils/attractionUtils';
 import {
@@ -566,6 +566,8 @@ interface PlannerContextType {
   // Itinerary
   itineraryDays: ItineraryDay[];
   updateItineraryDay: (id: string, updates: Partial<ItineraryDay>) => void;
+  saveHourlyScheduleItem: (dayId: string, item: HourlyScheduleItem) => Promise<boolean>;
+  deleteHourlyScheduleItem: (dayId: string, itemId: string) => Promise<boolean>;
   swapOrMoveParkDay: (sourceDayNumber: number, targetDayNumber: number) => void;
   toggleDayCompleted: (id: string) => void;
   addItineraryDay: () => void;
@@ -728,16 +730,35 @@ export function mergeLocalAndRemoteTrips(localList: Trip[], remoteList: Trip[]):
     if (!localTrip) {
       mergedMap.set(rTrip.id, rTrip);
     } else {
-      // Merge properties safely, keeping whichever has more records
+      // Merge properties safely, keeping whichever has more records or merging collections cleanly
       const merged: Trip = {
         ...rTrip,
         ...localTrip,
         expenses: (localTrip.expenses?.length || 0) >= (rTrip.expenses?.length || 0)
           ? (localTrip.expenses || [])
           : (rTrip.expenses || []),
-        rawDays: (localTrip.rawDays?.length || 0) >= (rTrip.rawDays?.length || 0)
-          ? (localTrip.rawDays || [])
-          : (rTrip.rawDays || []),
+        rawDays: (() => {
+          if (!rTrip.rawDays || rTrip.rawDays.length === 0) return localTrip.rawDays || [];
+          if (!localTrip.rawDays || localTrip.rawDays.length === 0) return rTrip.rawDays || [];
+
+          // Preservar os dias e horários persistidos remotamente do Supabase
+          return rTrip.rawDays.map((rDay) => {
+            const lDay = (localTrip.rawDays || []).find((ld) => ld.id === rDay.id || ld.dayNumber === rDay.dayNumber);
+            if (!lDay) return rDay;
+
+            const rHourly = rDay.hourlySchedule || [];
+            const lHourly = lDay.hourlySchedule || [];
+            const mergedHourly = deduplicateHourlySchedule([...rHourly, ...lHourly]);
+
+            return {
+              ...lDay,
+              ...rDay,
+              hourlySchedule: mergedHourly,
+              parkBooking: rDay.parkBooking || lDay.parkBooking,
+              attachments: rDay.attachments && rDay.attachments.length > 0 ? rDay.attachments : (lDay.attachments || []),
+            };
+          });
+        })(),
         prepDocuments: (localTrip.prepDocuments?.length || 0) >= (rTrip.prepDocuments?.length || 0)
           ? (localTrip.prepDocuments || [])
           : (rTrip.prepDocuments || []),
@@ -2411,17 +2432,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     });
   }, [rawDays, accommodations, settings.startDate, settings.isFlexibleDates]);
 
-  // Auto-save rule-generated hourly schedules to Supabase when itineraryDays changes
-  useEffect(() => {
-    if (!activeTripId || itineraryDays.length === 0) return;
-    const timer = setTimeout(() => {
-      SupabaseService.saveAllHourlySchedules(activeTripId, itineraryDays).catch((err) => {
-        console.warn('Auto-save hourly schedules note:', err);
-      });
-    }, 1200);
-    return () => clearTimeout(timer);
-  }, [itineraryDays, activeTripId]);
-
   // Dynamic calculation: Calculate Milestones Target Dates
   const fullMilestones: BookingMilestone[] = useMemo(() => {
     return bookingMilestones.map((m) => {
@@ -2976,6 +2986,13 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       updates.park === '' ||
       (updates.parkBooking === undefined && 'parkBooking' in updates);
 
+    const isParkChanged = Boolean(
+      currentDay &&
+      updates.park &&
+      updates.park !== 'Sem Parque' &&
+      updates.park.trim().toLowerCase() !== (currentDay.park || '').trim().toLowerCase()
+    );
+
     let finalUpdates = { ...updates };
 
     if (isRemovingPark && currentDay) {
@@ -3010,7 +3027,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         hourlySchedule: updates.hourlySchedule !== undefined ? updates.hourlySchedule : cleaned.hourlySchedule,
       };
     } else if (updates.park && updates.park !== 'Sem Parque' && currentDay) {
-      const isParkChanged = updates.park.trim().toLowerCase() !== (currentDay.park || '').trim().toLowerCase();
       const isNonPark = isNonParkEvent(updates.park);
 
       if (isNonPark) {
@@ -3103,11 +3119,16 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           attachments: finalUpdates.attachments || [],
         } as Omit<ItineraryDay, 'date'>);
 
-    // Garante sincronização integral de todos os eventos (Shows, Encerramento, Abertura, FastPass, Dining)
-    const tripContext = { flights, accommodations, carRentals };
-    const fullySyncedHourly = syncAllEventsToHourlySchedule(dayToSave, tripContext);
-    dayToSave.hourlySchedule = fullySyncedHourly;
-    finalUpdates.hourlySchedule = fullySyncedHourly;
+    // Se hourlySchedule foi fornecido explicitamente, respeitar exatamente os itens fornecidos
+    // (não executar syncAllEventsToHourlySchedule para não regenerar itens excluídos ou criar horários fictícios)
+    if (updates.hourlySchedule !== undefined) {
+      dayToSave.hourlySchedule = finalUpdates.hourlySchedule || [];
+    } else if (isParkChanged) {
+      const tripContext = { flights, accommodations, carRentals };
+      const fullySyncedHourly = syncAllEventsToHourlySchedule(dayToSave, tripContext);
+      dayToSave.hourlySchedule = fullySyncedHourly;
+      finalUpdates.hourlySchedule = fullySyncedHourly;
+    }
 
     // 2. Update rawDays state immediately
     setRawDays((prev) => {
@@ -3175,6 +3196,102 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     addNotification(`Atualizou o roteiro`);
   };
+
+  const saveHourlyScheduleItem = useCallback(
+    async (dayId: string, item: HourlyScheduleItem): Promise<boolean> => {
+      const rowId = item.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.id)
+        ? item.id
+        : generateUUID();
+      const itemToSave: HourlyScheduleItem = { ...item, id: rowId };
+
+      setRawDays((prevDays) => {
+        return prevDays.map((d) => {
+          if (d.id === dayId) {
+            const currentSched = d.hourlySchedule || [];
+            const idx = currentSched.findIndex((i) => i.id === item.id || i.id === rowId);
+            let nextSched: HourlyScheduleItem[];
+            if (idx >= 0) {
+              nextSched = [...currentSched];
+              nextSched[idx] = itemToSave;
+            } else {
+              nextSched = [...currentSched, itemToSave];
+            }
+            nextSched.sort(compareScheduleItemOrder);
+            return { ...d, hourlySchedule: nextSched };
+          }
+          return d;
+        });
+      });
+
+      setTrips((prevTrips) =>
+        prevTrips.map((t) => {
+          if (t.id === activeTripId) {
+            const currentDays = t.rawDays || [];
+            const updatedDays = currentDays.map((d) => {
+              if (d.id === dayId) {
+                const currentSched = d.hourlySchedule || [];
+                const idx = currentSched.findIndex((i) => i.id === item.id || i.id === rowId);
+                let nextSched: HourlyScheduleItem[];
+                if (idx >= 0) {
+                  nextSched = [...currentSched];
+                  nextSched[idx] = itemToSave;
+                } else {
+                  nextSched = [...currentSched, itemToSave];
+                }
+                nextSched.sort(compareScheduleItemOrder);
+                return { ...d, hourlySchedule: nextSched };
+              }
+              return d;
+            });
+            return { ...t, rawDays: updatedDays };
+          }
+          return t;
+        })
+      );
+
+      if (activeTripId) {
+        const res = await SupabaseService.saveHourlyScheduleItem(activeTripId, dayId, itemToSave);
+        return res.success;
+      }
+      return true;
+    },
+    [activeTripId]
+  );
+
+  const deleteHourlyScheduleItem = useCallback(
+    async (dayId: string, itemId: string): Promise<boolean> => {
+      setRawDays((prevDays) => {
+        return prevDays.map((d) => {
+          if (d.id === dayId) {
+            const nextSched = (d.hourlySchedule || []).filter((i) => i.id !== itemId);
+            return { ...d, hourlySchedule: nextSched };
+          }
+          return d;
+        });
+      });
+
+      setTrips((prevTrips) =>
+        prevTrips.map((t) => {
+          if (t.id === activeTripId) {
+            const currentDays = t.rawDays || [];
+            const updatedDays = currentDays.map((d) => {
+              if (d.id === dayId) {
+                const nextSched = (d.hourlySchedule || []).filter((i) => i.id !== itemId);
+                return { ...d, hourlySchedule: nextSched };
+              }
+              return d;
+            });
+            return { ...t, rawDays: updatedDays };
+          }
+          return t;
+        })
+      );
+
+      const success = await SupabaseService.deleteHourlySchedule(itemId);
+      return success;
+    },
+    [activeTripId]
+  );
 
   const swapOrMoveParkDay = (sourceDayNumber: number, targetDayNumber: number) => {
     if (sourceDayNumber === targetDayNumber) return;
@@ -4288,8 +4405,16 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
 
       if (activeTripId) {
-        result.updatedDays.forEach((dayToSave) => {
-          SupabaseService.saveItineraryDay(activeTripId, dayToSave, activeTrip || undefined);
+        result.updatedDays.forEach((dayToSave, idx) => {
+          const prevDay = prevDays[idx];
+          const prevSched = prevDay?.hourlySchedule || [];
+          const nextSched = dayToSave.hourlySchedule || [];
+          const isAffected =
+            JSON.stringify(prevSched) !== JSON.stringify(nextSched) ||
+            prevDay?.title !== dayToSave.title;
+          if (isAffected) {
+            SupabaseService.saveItineraryDay(activeTripId, dayToSave, activeTrip || undefined);
+          }
         });
       }
 
@@ -4339,7 +4464,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
     }
 
-    // Sincronizar no cronograma diário incondicionalmente
+    // Sincronizar no cronograma diário apenas os dias afetados
     setRawDays((prevDays) => {
       const result = syncFlightsWithItineraryDays({
         days: prevDays,
@@ -4361,8 +4486,16 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
 
       if (activeTripId) {
-        result.updatedDays.forEach((dayToSave) => {
-          SupabaseService.saveItineraryDay(activeTripId, dayToSave, activeTrip || undefined);
+        result.updatedDays.forEach((dayToSave, idx) => {
+          const prevDay = prevDays[idx];
+          const prevSched = prevDay?.hourlySchedule || [];
+          const nextSched = dayToSave.hourlySchedule || [];
+          const isAffected =
+            JSON.stringify(prevSched) !== JSON.stringify(nextSched) ||
+            prevDay?.title !== dayToSave.title;
+          if (isAffected) {
+            SupabaseService.saveItineraryDay(activeTripId, dayToSave, activeTrip || undefined);
+          }
         });
       }
 
@@ -4389,9 +4522,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     SupabaseService.deleteFlight(id);
     SupabaseService.deleteExpense(expId);
-    SupabaseService.deleteHourlySchedulesBySource(id);
+    SupabaseService.deleteHourlySchedulesBySource(id, 'flight');
 
-    // Re-sincronizar todos os dias
+    // Re-sincronizar apenas os dias afetados
     setRawDays((prevDays) => {
       const result = syncFlightsWithItineraryDays({
         days: prevDays,
@@ -4403,8 +4536,16 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       });
 
       if (activeTripId) {
-        result.updatedDays.forEach((dayToSave) => {
-          SupabaseService.saveItineraryDay(activeTripId, dayToSave, activeTrip || undefined);
+        result.updatedDays.forEach((dayToSave, idx) => {
+          const prevDay = prevDays[idx];
+          const prevSched = prevDay?.hourlySchedule || [];
+          const nextSched = dayToSave.hourlySchedule || [];
+          const isAffected =
+            JSON.stringify(prevSched) !== JSON.stringify(nextSched) ||
+            prevDay?.title !== dayToSave.title;
+          if (isAffected) {
+            SupabaseService.saveItineraryDay(activeTripId, dayToSave, activeTrip || undefined);
+          }
         });
       }
 
@@ -4655,14 +4796,14 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       prevDays.map((d) => ({
         ...d,
         hourlySchedule: (d.hourlySchedule || []).filter(
-          (item) => !(item.sourceType === 'car_rental' && (item.sourceId === id || !item.sourceId)) && !item.id.includes(id)
+          (item) => !(item.sourceType === 'car_rental' && (item.sourceId === id || item.id.includes(id)))
         ),
       }))
     );
     SupabaseService.deleteCarRental(id);
     SupabaseService.deleteExpense(expId);
     SupabaseService.deleteExpense(`exp-car-${id}`);
-    SupabaseService.deleteHourlySchedulesBySource(id);
+    SupabaseService.deleteHourlySchedulesBySource(id, 'car_rental');
     if (rental) {
       addNotification(`Removeu aluguel do veículo ${rental.company} e seus horários do roteiro`);
     }
@@ -4722,7 +4863,23 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         totalDays: prevDays.length,
       };
 
+      const affectedDayIndexes = new Set<number>();
+      prevDays.forEach((d, index) => {
+        const calculatedDate = calculateDateOffset(settings.startDate, index);
+        const isAffected =
+          index === 0 ||
+          (acc.checkInDate && calculatedDate === acc.checkInDate) ||
+          (acc.checkOutDate && calculatedDate === acc.checkOutDate) ||
+          (acc.checkInDate && acc.checkOutDate && calculatedDate >= acc.checkInDate && calculatedDate <= acc.checkOutDate);
+        if (isAffected) {
+          affectedDayIndexes.add(index);
+        }
+      });
+
       const updatedDays = prevDays.map((d, index) => {
+        if (!affectedDayIndexes.has(index)) {
+          return d;
+        }
         const calculatedDate = calculateDateOffset(settings.startDate, index);
         const dayWithDate = { ...d, date: calculatedDate };
         const newSchedule = syncAllEventsToHourlySchedule(dayWithDate, tripContext);
@@ -4742,8 +4899,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           travelers: settings.travelers,
           rawDays: updatedDays,
         };
-        updatedDays.forEach((dayToSave) => {
-          SupabaseService.saveItineraryDay(activeTripId, dayToSave, fallbackTrip);
+        // Gravar no banco somente os dias afetados pela acomodação
+        affectedDayIndexes.forEach((idx) => {
+          if (updatedDays[idx]) {
+            SupabaseService.saveItineraryDay(activeTripId, updatedDays[idx], fallbackTrip);
+          }
         });
         setTrips((prevTrips) =>
           prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: currentAccs, rawDays: updatedDays } : t))
@@ -4839,7 +4999,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     SupabaseService.deleteAccommodation(id);
     SupabaseService.deleteExpense(expId);
     SupabaseService.deleteExpense(`exp-acc-${id}`);
-    SupabaseService.deleteHourlySchedulesBySource(id);
+    SupabaseService.deleteHourlySchedulesBySource(id, 'accommodation');
     if (acc) {
       addNotification(`Removeu hospedagem ${acc.name} do roteiro e do banco de dados`);
     }
@@ -4952,15 +5112,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   const applySmartAccommodationRules = useCallback(() => {
     if (accommodations.length === 0) return;
 
-    const timeline = calculateDay1AccommodationTimeline({
-      flights,
-      carRentals,
-      accommodations,
-      startDate: settings.startDate,
-      day1Date: settings.startDate,
-    });
-
-    // Sincronizar todos os dias do roteiro aplicando regras inteligentes de acomodação e logística
+    // Sincronizar apenas os dias cobertos por acomodações
     setRawDays((prevDays) => {
       const tripContext = {
         flights,
@@ -4970,7 +5122,22 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         totalDays: prevDays.length,
       };
 
+      const affectedDayIndexes = new Set<number>();
+      prevDays.forEach((d, index) => {
+        const calculatedDate = calculateDateOffset(settings.startDate, index);
+        const hasMatchingAcc = accommodations.some(
+          (a) =>
+            a.checkInDate === calculatedDate ||
+            a.checkOutDate === calculatedDate ||
+            (a.checkInDate && a.checkOutDate && calculatedDate >= a.checkInDate && calculatedDate <= a.checkOutDate)
+        );
+        if (hasMatchingAcc || index === 0) {
+          affectedDayIndexes.add(index);
+        }
+      });
+
       const synchronized = prevDays.map((d, index) => {
+        if (!affectedDayIndexes.has(index)) return d;
         const calculatedDate = calculateDateOffset(settings.startDate, index);
         const dayWithDate = { ...d, date: calculatedDate };
         const newSchedule = syncAllEventsToHourlySchedule(dayWithDate, tripContext);
@@ -4993,21 +5160,17 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           travelers: settings.travelers,
           rawDays: synchronized,
         };
-        synchronized.forEach((dayToSave) => {
-          SupabaseService.saveItineraryDay(activeTripId, dayToSave, fallbackTrip);
+        // Gravar no banco apenas os dias afetados
+        affectedDayIndexes.forEach((idx) => {
+          if (synchronized[idx]) {
+            SupabaseService.saveItineraryDay(activeTripId, synchronized[idx], fallbackTrip);
+          }
         });
       }
 
       return synchronized;
     });
   }, [accommodations, flights, carRentals, settings.startDate, activeTripId, activeTrip]);
-
-  // Auto-sincronização do roteiro ao carregar ou alterar dados de hospedagens/voos/carros
-  useEffect(() => {
-    if (accommodations.length > 0) {
-      applySmartAccommodationRules();
-    }
-  }, [accommodations, flights, carRentals, settings.startDate, activeTripId]);
 
   const syncExpensesToSupabase = async (): Promise<boolean> => {
     if (!activeTripId) return false;
@@ -5585,6 +5748,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         financialSummary,
         itineraryDays,
         updateItineraryDay,
+        saveHourlyScheduleItem,
+        deleteHourlyScheduleItem,
         swapOrMoveParkDay,
         toggleDayCompleted,
         addItineraryDay,

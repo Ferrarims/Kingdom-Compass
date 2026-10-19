@@ -600,6 +600,8 @@ export function cleanInvalidAutoItems(
 ): HourlyScheduleItem[] {
   return (schedule || []).filter((item) => {
     if (!item) return false;
+    // Itens manuais cadastrados pelo usuário devem sempre ser preservados
+    if (item.sourceType === 'manual') return true;
     const idLower = (item.id || '').toLowerCase();
     const titleLower = (item.title || '').toLowerCase();
     const locLower = (item.location || '').toLowerCase();
@@ -4196,151 +4198,76 @@ export function syncAccommodationsWithItineraryDays(params: {
 }
 
 /**
-3:   * Audits and corrects persisted trip data and itinerary agenda items,
-4:   * ensuring correct flights, accommodations, addresses, and chronological schedules.
-5:   */
+ * Retorna os itens de cronograma de um dia, garantindo que um dia sem eventos reais
+ * permaneça vazio sem criar nenhum evento artificial (como evento às 10:00 com o título do dia).
+ * A ausência de registros é válida e não deve gravar eventos fictícios no banco.
+ */
+export function ensureHourlyScheduleItems(
+  dayOrSchedule?: { hourlySchedule?: HourlyScheduleItem[]; title?: string } | HourlyScheduleItem[] | null
+): HourlyScheduleItem[] {
+  if (!dayOrSchedule) return [];
+  const items = Array.isArray(dayOrSchedule)
+    ? dayOrSchedule
+    : (dayOrSchedule.hourlySchedule || []);
+
+  if (!items || items.length === 0) return [];
+
+  const dayTitle = !Array.isArray(dayOrSchedule) && dayOrSchedule?.title ? dayOrSchedule.title.trim().toLowerCase() : '';
+
+  // Purgar quaisquer itens fictícios legados (ex: eventos artificiais de placeholder às 10:00 com título genérico ou título do dia)
+  const cleanItems = items.filter((item) => {
+    if (!item) return false;
+    const id = (item.id || '').toLowerCase();
+    const t = (item.title || '').trim().toLowerCase();
+    if (id.startsWith('artificial-') || id === 'auto-empty-placeholder') {
+      return false;
+    }
+    // Não permitir evento automático sem origem real criado apenas para preencher o dia
+    const isGenericTitle =
+      (dayTitle && t === dayTitle) ||
+      t === 'programação livre' ||
+      t === 'programacao livre' ||
+      t === 'planejamento livre' ||
+      t === 'novo dia mágico' ||
+      t === 'novo dia magico' ||
+      t === 'dia livre' ||
+      t === 'sem parque' ||
+      t === 'dia livre / sem parque';
+
+    if (
+      item.time === '10:00' &&
+      (id.includes('empty-schedule') || id.includes('placeholder') || isGenericTitle) &&
+      (!item.sourceType || item.sourceType === 'manual' || item.sourceType === 'gen') &&
+      (!item.notes || !item.notes.trim()) &&
+      (!item.location || !item.location.trim())
+    ) {
+      return false;
+    }
+    return true;
+  });
+
+  return deduplicateHourlySchedule(cleanItems);
+}
+
+/**
+ * Audita dados da viagem garantindo integridade dos dias sem inventar
+ * voos, acomodações ou horários fictícios no banco.
+ */
 export function auditAndCorrectTrip(trip: any): any {
   if (!trip) return trip;
   const startDate = trip.startDate || '2026-12-27';
-  const durationDays = Math.max(1, trip.durationDays || 16);
+  const durationDays = Math.max(1, trip.durationDays || (trip.rawDays?.length || 16));
 
-  // Ensure flights
-  let flights = trip.flights || [];
-  const hasDM5220 = flights.some((f: any) => f.flightNumber === 'DM5220' || f.destinationAirport?.includes('SFB'));
-  if (!hasDM5220 && flights.length === 0) {
-    flights = [
-      {
-        id: 'flight-outbound-sfb',
-        type: 'outbound',
-        typeLabel: 'Voo de Ida',
-        airline: 'Cia Aérea',
-        flightNumber: 'DM5220',
-        pnrLocator: 'K9X2PZ',
-        originAirport: 'São Paulo - Guarulhos (GRU)',
-        originCity: 'São Paulo',
-        originCode: 'GRU',
-        destinationAirport: 'Orlando-Sanford International (SFB)',
-        destinationCity: 'Orlando',
-        destinationCode: 'SFB',
-        departureDate: '2026-12-27',
-        departureTime: '06:00',
-        arrivalDate: '2026-12-27',
-        arrivalTime: '13:35',
-        duration: '8h 35m',
-        stopovers: 'Voo Direto',
-        cabinClass: 'Econômica',
-        seats: '12A',
-        baggageAllowance: { personalItem: true, carryOnQty: 1, checkedQty: 2, notes: 'Franquia padrão' },
-        status: 'Emitido / Confirmado',
-        ticketCostUSD: 800,
-        ticketCostBRL: 4600,
-        travelerIds: ['1'],
-        payerId: '1',
-      },
-      {
-        id: 'flight-inbound-sfb-gru',
-        type: 'inbound',
-        typeLabel: 'Voo de Volta',
-        airline: 'Cia Aérea',
-        flightNumber: 'DM5221/DM6088',
-        pnrLocator: 'R8Y1W9',
-        originAirport: 'Orlando-Sanford International (SFB)',
-        originCity: 'Orlando',
-        originCode: 'SFB',
-        destinationAirport: 'São Paulo - Guarulhos (GRU)',
-        destinationCity: 'São Paulo',
-        destinationCode: 'GRU',
-        departureDate: '2027-01-10',
-        departureTime: '15:05',
-        arrivalDate: '2027-01-11',
-        arrivalTime: '04:20',
-        duration: '10h 15m',
-        stopovers: 'Voo Direto',
-        cabinClass: 'Econômica',
-        seats: '14A',
-        baggageAllowance: { personalItem: true, carryOnQty: 1, checkedQty: 2, notes: 'Franquia padrão' },
-        status: 'Emitido / Confirmado',
-        ticketCostUSD: 900,
-        ticketCostBRL: 5175,
-        travelerIds: ['1'],
-        payerId: '1',
-      }
-    ];
-  }
+  const flights = trip.flights || [];
+  const accommodations = trip.accommodations || [];
+  let rawDays = trip.rawDays || [];
 
-  // Ensure accommodations
-  let accommodations = trip.accommodations || [];
-  const hasComfortInn = accommodations.some((a: any) => (a.name || '').toLowerCase().includes('comfort inn'));
-  const hasModernRetreat = accommodations.some((a: any) => (a.name || '').toLowerCase().includes('modern retreat'));
-  if (!hasComfortInn || !hasModernRetreat) {
-    accommodations = [
-      {
-        id: 'acc-comfort-inn-brickell',
-        type: 'hotel',
-        name: 'Comfort Inn & Suites Downtown Brickell-Port of Miami',
-        confirmationCode: 'CI-839201',
-        address: '100 Southeast 4th Street, Brickell, Miami, FL 33131',
-        checkInDate: '2026-12-27',
-        checkInTime: '15:35',
-        checkOutDate: '2026-12-29',
-        checkOutTime: '11:00',
-        status: 'Reservado / Confirmado',
-        costUSD: 450,
-        costBRL: 2587.50,
-        travelerIds: ['1'],
-        payerId: '1',
-      },
-      {
-        id: 'acc-modern-retreat',
-        type: 'resort',
-        name: 'Modern Retreat Resort',
-        confirmationCode: 'MR-992841',
-        address: '4009 Venetian Bay Dr, Kissimmee, FL 34741',
-        checkInDate: '2026-12-29',
-        checkInTime: '16:00',
-        checkOutDate: '2027-01-10',
-        checkOutTime: '10:00',
-        status: 'Reservado / Confirmado',
-        costUSD: 2400,
-        costBRL: 13800,
-        travelerIds: ['1'],
-        payerId: '1',
-      }
-    ];
-  } else {
-    accommodations = accommodations.map((acc: any) => {
-      const name = (acc.name || '').toLowerCase();
-      if (name.includes('comfort inn')) {
-        return {
-          ...acc,
-          address: '100 Southeast 4th Street, Brickell, Miami, FL 33131',
-          checkInDate: '2026-12-27',
-          checkInTime: '15:35',
-          checkOutDate: '2026-12-29',
-          checkOutTime: '11:00',
-        };
-      }
-      if (name.includes('modern retreat')) {
-        return {
-          ...acc,
-          address: '4009 Venetian Bay Dr, Kissimmee, FL 34741',
-          checkInDate: '2026-12-29',
-          checkInTime: '16:00',
-          checkOutDate: '2027-01-10',
-          checkOutTime: '10:00',
-        };
-      }
-      return acc;
-    });
-  }
-
-  // Ensure rawDays
-  const generateDays = (count: number) => {
-    return Array.from({ length: count }, (_, i) => {
+  if (rawDays.length === 0 && durationDays > 0) {
+    rawDays = Array.from({ length: durationDays }, (_, i) => {
       const dayNum = i + 1;
       let title = 'Sem Parque';
       if (dayNum === 1) title = 'Chegada';
-      else if (dayNum === count && count > 1) title = 'Partida';
+      else if (dayNum === durationDays && durationDays > 1) title = 'Partida';
       return {
         id: `day-${dayNum}-${Date.now()}`,
         dayNumber: dayNum,
@@ -4355,26 +4282,7 @@ export function auditAndCorrectTrip(trip: any): any {
         attachments: [],
       };
     });
-  };
-
-  let rawDays = trip.rawDays && trip.rawDays.length > 0 ? trip.rawDays : generateDays(durationDays);
-  if (rawDays.length !== durationDays) {
-    if (rawDays.length < durationDays) {
-      const added = generateDays(durationDays).slice(rawDays.length);
-      rawDays = [...rawDays, ...added];
-    } else {
-      rawDays = rawDays.slice(0, durationDays);
-    }
   }
-
-  const updatedDays = syncAccommodationsWithItineraryDays({
-    currentDays: rawDays,
-    accommodations,
-    flights,
-    carRentals: trip.carRentals || [],
-    startDate,
-    durationDays,
-  });
 
   return {
     ...trip,
@@ -4382,80 +4290,8 @@ export function auditAndCorrectTrip(trip: any): any {
     durationDays,
     flights,
     accommodations,
-    rawDays: updatedDays,
+    rawDays,
   };
 }
-
-/**
- * Ensures that every itinerary day has at least basic hourly schedule items
- * generated from morning, afternoon, night, or default title, so that
- * hourly_schedules table always contains records for all days.
- */
-export function ensureHourlyScheduleItems(day: Omit<ItineraryDay, 'date'>): Omit<ItineraryDay, 'date'> {
-  const schedule = [...(day.hourlySchedule || [])];
-  const dayId = day.id || `day-${day.dayNumber}`;
-
-  if (day.morning && (day.morning.where || day.morning.dining || day.morning.notes)) {
-    const hasMorning = schedule.some(i => i.time <= '12:00' || (i.title || '').toLowerCase().includes('matutino') || (i.title || '').toLowerCase().includes('manhã'));
-    if (!hasMorning) {
-      schedule.push({
-        id: generateDeterministicUUID('h-m', `${dayId}-${day.morning.where}`),
-        time: '09:00',
-        title: day.morning.where || day.title || 'Atividade Matutina',
-        location: day.morning.dining || undefined,
-        category: 'other',
-        notes: day.morning.notes || undefined,
-        completed: false,
-      });
-    }
-  }
-
-  if (day.afternoon && (day.afternoon.where || day.afternoon.dining || day.afternoon.notes)) {
-    const hasAfternoon = schedule.some(i => i.time > '12:00' && i.time <= '17:00' || (i.title || '').toLowerCase().includes('vespertino') || (i.title || '').toLowerCase().includes('tarde'));
-    if (!hasAfternoon) {
-      schedule.push({
-        id: generateDeterministicUUID('h-a', `${dayId}-${day.afternoon.where}`),
-        time: '13:00',
-        title: day.afternoon.where || 'Atividade Vespertina',
-        location: day.afternoon.dining || undefined,
-        category: 'other',
-        notes: day.afternoon.notes || undefined,
-        completed: false,
-      });
-    }
-  }
-
-  if (day.night && (day.night.where || day.night.dining || day.night.notes)) {
-    const hasNight = schedule.some(i => i.time > '17:00' || (i.title || '').toLowerCase().includes('noturno') || (i.title || '').toLowerCase().includes('noite'));
-    if (!hasNight) {
-      schedule.push({
-        id: generateDeterministicUUID('h-n', `${dayId}-${day.night.where}`),
-        time: '19:00',
-        title: day.night.where || 'Atividade Noturna',
-        location: day.night.dining || undefined,
-        category: 'dining',
-        notes: day.night.notes || undefined,
-        completed: false,
-      });
-    }
-  }
-
-  if (schedule.length === 0) {
-    schedule.push({
-      id: generateDeterministicUUID('h-def', `${dayId}-default`),
-      time: '10:00',
-      title: day.title || `Programação do Dia ${day.dayNumber}`,
-      category: 'other',
-      notes: day.generalNotes || 'Atividade programada para o dia.',
-      completed: false,
-    });
-  }
-
-  return {
-    ...day,
-    hourlySchedule: deduplicateHourlySchedule(schedule),
-  };
-}
-
 
 

@@ -58,6 +58,7 @@ import { ParkBookingModal } from './ParkBookingModal';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { SupabaseService } from '../services/supabaseService';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
+import { generateUUID } from '../utils/uuid';
 
 const cleanText = (text?: string): string => {
   if (!text) return '';
@@ -146,6 +147,8 @@ export const ItineraryPlanner: React.FC = () => {
   const {
     itineraryDays,
     updateItineraryDay,
+    saveHourlyScheduleItem,
+    deleteHourlyScheduleItem,
     toggleDayCompleted,
     addItineraryDay,
     deleteItineraryDay,
@@ -615,38 +618,24 @@ export const ItineraryPlanner: React.FC = () => {
   };
 
   // Toggle single hourly item
-  const handleToggleScheduleItem = (dayId: string, itemId: string) => {
+  const handleToggleScheduleItem = async (dayId: string, itemId: string) => {
     const day = itineraryDays.find((d) => d.id === dayId);
     if (!day) return;
 
-    const currentSchedule = getHourlySchedule(day);
-    const updatedSchedule = currentSchedule.map((item) => {
-      if (item.id === itemId) {
-        const isCurrentEffective = isScheduleItemEffectivelyCompleted(day.date, item, settings.isFlexibleDates);
-        return { ...item, completed: !isCurrentEffective };
-      }
-      return item;
-    });
+    const item = (day.hourlySchedule || []).find((i) => i.id === itemId);
+    if (!item) return;
 
-    updateItineraryDay(dayId, {
-      dayNumber: day.dayNumber,
-      hourlySchedule: updatedSchedule,
-    });
+    const isCurrentEffective = isScheduleItemEffectivelyCompleted(day.date, item, settings.isFlexibleDates);
+    const updatedItem: HourlyScheduleItem = {
+      ...item,
+      completed: !isCurrentEffective,
+    };
+    await saveHourlyScheduleItem(dayId, updatedItem);
   };
 
   // Delete hourly item
-  const handleDeleteScheduleItem = (dayId: string, itemId: string) => {
-    const day = itineraryDays.find((d) => d.id === dayId);
-    if (!day) return;
-
-    const currentSchedule = getHourlySchedule(day);
-    const updatedSchedule = currentSchedule.filter((item) => item.id !== itemId);
-
-    updateItineraryDay(dayId, {
-      dayNumber: day.dayNumber,
-      hourlySchedule: updatedSchedule,
-    });
-    SupabaseService.deleteHourlySchedule(itemId);
+  const handleDeleteScheduleItem = async (dayId: string, itemId: string) => {
+    await deleteHourlyScheduleItem(dayId, itemId);
   };
 
   // Open Hourly modal for add or edit
@@ -676,7 +665,7 @@ export const ItineraryPlanner: React.FC = () => {
   };
 
   // Save hourly item
-  const handleSaveHourlyItem = (e?: React.FormEvent) => {
+  const handleSaveHourlyItem = async (e?: React.FormEvent) => {
     if (e && typeof e.preventDefault === 'function') {
       e.preventDefault();
     }
@@ -696,43 +685,33 @@ export const ItineraryPlanner: React.FC = () => {
     }
     const targetDayId = targetDay.id;
 
-    const currentSchedule = getHourlySchedule(targetDay);
-
-    let updatedSchedule: HourlyScheduleItem[];
     if (editingHourlyItemId) {
-      updatedSchedule = currentSchedule.map((item) => {
-        if (item.id === editingHourlyItemId) {
-          return {
-            ...item,
-            time: hourlyForm.time || '08:00',
-            title: hourlyForm.title.trim(),
-            location: hourlyForm.location.trim() || targetDay.park || '',
-            category: hourlyForm.category || 'park',
-            notes: hourlyForm.notes.trim(),
-          };
-        }
-        return item;
-      });
+      const existing = (targetDay.hourlySchedule || []).find((i) => i.id === editingHourlyItemId);
+      const updatedItem: HourlyScheduleItem = {
+        id: editingHourlyItemId,
+        time: hourlyForm.time || '08:00',
+        title: hourlyForm.title.trim(),
+        location: hourlyForm.location.trim() || targetDay.park || '',
+        category: hourlyForm.category || 'park',
+        notes: hourlyForm.notes.trim(),
+        completed: existing?.completed || false,
+        sourceType: existing?.sourceType || 'manual',
+        sourceId: existing?.sourceId,
+      };
+      await saveHourlyScheduleItem(targetDayId, updatedItem);
     } else {
       const newItem: HourlyScheduleItem = {
-        id: `sch-${targetDay.dayNumber || '1'}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        id: generateUUID(),
         time: hourlyForm.time || '08:00',
         title: hourlyForm.title.trim(),
         location: hourlyForm.location.trim() || targetDay.park || '',
         category: hourlyForm.category || 'park',
         completed: false,
         notes: hourlyForm.notes.trim(),
+        sourceType: 'manual',
       };
-      updatedSchedule = [...currentSchedule, newItem];
+      await saveHourlyScheduleItem(targetDayId, newItem);
     }
-
-    // Sort by time and priority
-    updatedSchedule.sort(compareScheduleItemOrder);
-
-    updateItineraryDay(targetDayId, {
-      dayNumber: targetDay.dayNumber,
-      hourlySchedule: updatedSchedule,
-    });
 
     setIsHourlyModalOpen(false);
     setEditingHourlyItemId(null);
@@ -2205,6 +2184,9 @@ export const ItineraryPlanner: React.FC = () => {
               <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
                 Selecione o Dia da Viagem:
               </span>
+              <span className="text-[11px] text-slate-400 font-semibold">
+                {itineraryDays.filter((d) => d.completed).length} de {itineraryDays.length} concluídos
+              </span>
             </div>
 
             <div className="flex items-center gap-2 overflow-x-auto pb-2 custom-scrollbar">
@@ -2232,6 +2214,11 @@ export const ItineraryPlanner: React.FC = () => {
                       <span className={`text-[10px] font-bold uppercase tracking-wider ${isSelected ? 'text-[#D4AF37]' : 'text-slate-400'}`}>
                         Dia {day.dayNumber}
                       </span>
+                      {day.completed ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                      ) : (
+                        <Circle className={`w-3 h-3 ${isSelected ? 'text-slate-400' : 'text-slate-300'}`} />
+                      )}
                     </div>
                     <p className="text-xs font-bold truncate leading-tight">
                       {isDayWithPark(day) ? (day.park || day.title).split('/')[0] : (day.title || day.park || 'Sem Parque')}
@@ -2396,6 +2383,30 @@ export const ItineraryPlanner: React.FC = () => {
                         </div>
                       ))}
                     </div>
+                  );
+                })()}
+              </div>
+
+              {/* Day Header Right CTAs */}
+              <div className="flex items-center gap-2 flex-wrap">
+                {(() => {
+                  const isDayDone = isDayEffectivelyCompleted(activeDay, settings.isFlexibleDates);
+                  const isPastDate = isDateInPast(activeDay.date, settings.isFlexibleDates);
+
+                  return (
+                    <button
+                      id={`btn-toggle-complete-day-${activeDay.id}`}
+                      onClick={() => toggleDayCompleted(activeDay.id)}
+                      className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                        isDayDone
+                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200'
+                      }`}
+                      title={isPastDate ? 'Concluído automaticamente pois a data já passou' : 'Clique para alternar o status do dia'}
+                    >
+                      <CheckCircle2 className={`w-4 h-4 ${isDayDone ? 'text-emerald-600' : 'text-slate-400'}`} />
+                      <span>{isDayDone ? (isPastDate ? 'Dia Concluído (Automático)' : 'Dia Concluído') : 'Marcar Concluído'}</span>
+                    </button>
                   );
                 })()}
               </div>
@@ -2567,17 +2578,55 @@ export const ItineraryPlanner: React.FC = () => {
                   return (
                     <div
                       key={`${item.id}-${iIdx}`}
-                      className="relative bg-white rounded-xl p-3.5 border border-slate-200 shadow-xs hover:border-slate-300 transition-all"
+                      className={`relative bg-white rounded-xl p-3.5 border transition-all ${
+                        isItemDone
+                          ? 'bg-slate-50/80 border-slate-200 opacity-75'
+                          : isParkOpening
+                          ? 'border-amber-300 bg-amber-50/30 shadow-xs'
+                          : isCarPickup
+                          ? 'border-blue-300 bg-blue-50/30 shadow-xs'
+                          : isFireworks
+                          ? 'border-purple-300 bg-purple-50/30 shadow-xs'
+                          : 'border-slate-200 shadow-xs hover:border-slate-300'
+                      }`}
                     >
                       {/* Timeline Dot on the left line */}
-                      <div className="absolute -left-[23px] sm:-left-[31px] top-4 w-3.5 h-3.5 rounded-full border-2 bg-white border-[#1A2B4C]" />
+                      <div
+                        className={`absolute -left-[23px] sm:-left-[31px] top-4 w-3.5 h-3.5 rounded-full border-2 bg-white ${
+                          isItemDone
+                            ? 'border-emerald-500 bg-emerald-500'
+                            : 'border-[#1A2B4C]'
+                        }`}
+                      />
 
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                         <div className="flex items-start gap-3">
+                          {/* Complete Checkbox */}
+                          <button
+                            type="button"
+                            onClick={() => handleToggleScheduleItem(activeDay.id, item.id)}
+                            className="mt-0.5 p-1 text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer shrink-0"
+                            title={
+                              isItemDone
+                                ? isTimePast
+                                  ? 'Concluído automaticamente pelo horário. Clique para alternar'
+                                  : 'Marcar como não feito'
+                                : 'Marcar como concluído'
+                            }
+                          >
+                            {isItemDone ? (
+                              <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                            ) : (
+                              <Circle className="w-5 h-5 text-slate-300 hover:text-slate-500" />
+                            )}
+                          </button>
+
                           <div className="space-y-1">
                             <div className="flex flex-wrap items-center gap-2">
                               {/* Time Pill */}
-                              <span className="font-mono text-xs font-bold px-2.5 py-0.5 rounded-md border text-[#1A2B4C] bg-slate-100 border-slate-200">
+                              <span className={`font-mono text-xs font-bold px-2.5 py-0.5 rounded-md border ${
+                                isItemDone ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'text-[#1A2B4C] bg-slate-100 border-slate-200'
+                              }`}>
                                 {item.time}
                               </span>
 
@@ -2601,7 +2650,7 @@ export const ItineraryPlanner: React.FC = () => {
                               )}
                             </div>
 
-                            <h4 className="text-sm font-bold text-[#1A2B4C]">
+                            <h4 className={`text-sm font-bold ${isItemDone ? 'line-through text-slate-400' : 'text-[#1A2B4C]'}`}>
                               {item.title}
                             </h4>
 
@@ -2749,6 +2798,12 @@ export const ItineraryPlanner: React.FC = () => {
                           <span className="bg-white/10 px-2 py-0.5 rounded text-[10px] font-bold text-white">
                             {day.park}
                           </span>
+                          {isDayEffectivelyCompleted(day, settings.isFlexibleDates) && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
+                              <CheckCircle2 className="w-3 h-3" />
+                              Concluído {isDateInPast(day.date, settings.isFlexibleDates) ? '(Auto)' : ''}
+                            </span>
+                          )}
                         </div>
                         <h3 className="text-base sm:text-lg font-bold font-serif text-white">
                           {day.title}
@@ -2863,11 +2918,36 @@ export const ItineraryPlanner: React.FC = () => {
                             return (
                               <div
                                 key={`${item.id}-${sIdx}`}
-                                className="relative bg-white rounded-xl p-3 border border-slate-200 shadow-2xs"
+                                className={`relative bg-white rounded-xl p-3 border transition-all ${
+                                  isItemDone
+                                    ? 'bg-slate-50 border-slate-200 opacity-75'
+                                    : 'border-slate-200 shadow-2xs'
+                                }`}
                               >
                                 <div className="flex items-center justify-between gap-3">
                                   <div className="flex items-center gap-2.5 truncate">
-                                    <span className="font-mono text-xs font-bold px-2 py-0.5 rounded border shrink-0 text-[#1A2B4C] bg-slate-100 border-slate-200">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleScheduleItem(day.id, item.id)}
+                                      className="p-0.5 text-slate-400 hover:text-emerald-600 transition-colors cursor-pointer shrink-0"
+                                      title={
+                                        isItemDone
+                                          ? isTimePast
+                                            ? 'Concluído automaticamente pelo horário. Clique para alternar'
+                                            : 'Marcar como não feito'
+                                          : 'Marcar como concluído'
+                                      }
+                                    >
+                                      {isItemDone ? (
+                                        <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                                      ) : (
+                                        <Circle className="w-4 h-4 text-slate-300" />
+                                      )}
+                                    </button>
+
+                                    <span className={`font-mono text-xs font-bold px-2 py-0.5 rounded border shrink-0 ${
+                                      isItemDone ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'text-[#1A2B4C] bg-slate-100 border-slate-200'
+                                    }`}>
                                       {item.time}
                                     </span>
 
@@ -2876,7 +2956,7 @@ export const ItineraryPlanner: React.FC = () => {
                                       {badge.label}
                                     </span>
 
-                                    <span className="text-xs font-bold truncate text-[#1A2B4C]">
+                                    <span className={`text-xs font-bold truncate ${isItemDone ? 'line-through text-slate-400' : 'text-[#1A2B4C]'}`}>
                                       {item.title}
                                     </span>
 

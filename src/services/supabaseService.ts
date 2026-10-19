@@ -1,7 +1,7 @@
 import { supabase, isSupabaseMissingTableError } from './supabaseClient';
 import { ensureValidUUID, generateDeterministicUUID } from '../utils/uuid';
 import { ensurePreparationDocsForTravelers } from '../utils/prepDocs';
-import { deduplicateHourlySchedule, syncAllEventsToHourlySchedule, syncAccommodationsWithItineraryDays, ensureHourlyScheduleItems } from '../utils/parkScheduleUtils';
+import { deduplicateHourlySchedule, syncAllEventsToHourlySchedule, ensureHourlyScheduleItems } from '../utils/parkScheduleUtils';
 import { normalizeAttractionName } from '../utils/attractionUtils';
 import {
   Trip,
@@ -1351,14 +1351,10 @@ export const SupabaseService = {
           }
         }
 
-        // Garante sincronização integral de todos os eventos com data/hora em hourlySchedule
-        const tripContextOnLoad = {
-          flights: (fltData || []).map(mapDbToFlight),
-          accommodations: (accData || []).map(mapDbToAccommodation),
-          carRentals: (carData || []).map(mapDbToCarRental),
-        };
+        // Ao carregar do banco, ler e exibir estritamente os horários já persistidos.
+        // Não gerar novos horários nem sobrescrever/reconciliar na leitura.
         rawDays.forEach((rd) => {
-          rd.hourlySchedule = syncAllEventsToHourlySchedule(rd, tripContextOnLoad);
+          rd.hourlySchedule = ensureHourlyScheduleItems(rd.hourlySchedule || []);
         });
 
         const rawDocs = (docData || []).map(mapDbToPrepDoc);
@@ -1461,38 +1457,20 @@ export const SupabaseService = {
       // 2. Expenses
       await syncSubCollection('expenses', trip.expenses, mapExpenseToDb);
 
-      // 3. Itinerary Days & Hourly Schedules (Fully synchronized with all events and hourly items)
-      const syncedRawDays = syncAccommodationsWithItineraryDays({
-        currentDays: trip.rawDays || [],
-        accommodations: trip.accommodations || [],
-        flights: trip.flights || [],
-        carRentals: trip.carRentals || [],
-        startDate: trip.startDate || '2026-12-30',
-        durationDays: trip.durationDays || 10,
-      }).map(ensureHourlyScheduleItems);
-
-      await syncSubCollection('itinerary_days', syncedRawDays, mapItineraryDayToDb);
+      // 3. Itinerary Days
+      await syncSubCollection('itinerary_days', trip.rawDays, mapItineraryDayToDb);
 
       // 3b. Hourly Schedules (Dedicated table with FK to itinerary_days and trips)
       try {
         const allHourlyItems: Array<{ item: HourlyScheduleItem; dayId: string }> = [];
-        syncedRawDays.forEach((d) => {
+        (trip.rawDays || []).forEach((d) => {
           (d.hourlySchedule || []).forEach((h) => {
             allHourlyItems.push({ item: h, dayId: d.id });
           });
         });
 
-        const currentHourlyIds = allHourlyItems.map((x) => x.item.id).filter(Boolean);
-        const { data: existingHourly } = await supabase.from('hourly_schedules').select('id').eq('trip_id', tripId);
-        if (existingHourly && existingHourly.length > 0) {
-          const hourlyToDelete = existingHourly.map((r: any) => r.id).filter((id: string) => !currentHourlyIds.includes(id));
-          if (hourlyToDelete.length > 0) {
-            await supabase.from('hourly_schedules').delete().eq('trip_id', tripId).in('id', hourlyToDelete);
-          }
-        }
-
         if (allHourlyItems.length > 0) {
-          const dbHourlyRows = allHourlyItems.map(({ item, dayId }, index) => mapHourlyScheduleToDb(item, dayId, tripId, index));
+          const dbHourlyRows = allHourlyItems.map(({ item, dayId }) => mapHourlyScheduleToDb(item, dayId, tripId));
           await supabase.from('hourly_schedules').upsert(dbHourlyRows, { onConflict: 'id' });
         }
       } catch (hourlySyncErr) {
@@ -2718,12 +2696,9 @@ export const SupabaseService = {
         addLog(`Aviso ao buscar dia existente: ${errExisting?.message}`);
       }
 
-      // Guarantee that all events with date and time (shows, encerramento, abertura, refeições, fastpass, etc.)
-      // are synchronized into day.hourlySchedule BEFORE writing to itinerary_days and hourly_schedules
-      const fullHourlyItems = syncAllEventsToHourlySchedule(day, fallbackTrip);
+      // Manter os itens de horário fornecidos sem forçar sincronização automática artificial
+      const fullHourlyItems = ensureHourlyScheduleItems(day.hourlySchedule || []);
       day.hourlySchedule = fullHourlyItems;
-      const ensuredDay = ensureHourlyScheduleItems(day);
-      day.hourlySchedule = ensuredDay.hourlySchedule;
 
       // 3. Upsert into `itinerary_days` table
       const dayDb = mapItineraryDayToDb({ ...day, id: resolvedDayId }, tripId);
@@ -2740,58 +2715,25 @@ export const SupabaseService = {
 
       // 4. Synchronize the dedicated `hourly_schedules` table for this day
       try {
-        // Fetch existing hourly items for this day
-        const { data: existingHourly, error: fetchHourlyErr } = await supabase
-          .from('hourly_schedules')
-          .select('id')
-          .eq('itinerary_day_id', resolvedDayId);
-
-        if (fetchHourlyErr && isSupabaseMissingTableError(fetchHourlyErr)) {
-          addLog('Tabela hourly_schedules não existe; horário persistido na coluna JSONB de itinerary_days.');
-        } else {
-          const seenIds = new Set<string>();
-          const dbHourlyRows: any[] = [];
-          fullHourlyItems.forEach((item, index) => {
-            const row = mapHourlyScheduleToDb(item, resolvedDayId, tripId, index);
-            if (row.id && !seenIds.has(row.id)) {
-              seenIds.add(row.id);
-              dbHourlyRows.push(row);
-            }
-          });
-
-          const currentDbHourlyIds = dbHourlyRows.map((r) => r.id).filter(Boolean);
-
-          if (existingHourly && existingHourly.length > 0) {
-            const toDelete = existingHourly
-              .map((r: any) => r.id)
-              .filter((id: string) => !currentDbHourlyIds.includes(id));
-            if (toDelete.length > 0) {
-              await supabase
-                .from('hourly_schedules')
-                .delete()
-                .eq('itinerary_day_id', resolvedDayId)
-                .in('id', toDelete);
-              addLog(`Removidos ${toDelete.length} horários antigos/duplicados da tabela hourly_schedules.`);
-            }
+        const seenIds = new Set<string>();
+        const dbHourlyRows: any[] = [];
+        fullHourlyItems.forEach((item, index) => {
+          const row = mapHourlyScheduleToDb(item, resolvedDayId, tripId, index);
+          if (row.id && !seenIds.has(row.id)) {
+            seenIds.add(row.id);
+            dbHourlyRows.push(row);
           }
+        });
 
-          if (dbHourlyRows.length > 0) {
-            const { error: upsertHourlyErr } = await supabase
-              .from('hourly_schedules')
-              .upsert(dbHourlyRows, { onConflict: 'id' });
+        if (dbHourlyRows.length > 0) {
+          const { error: upsertHourlyErr } = await supabase
+            .from('hourly_schedules')
+            .upsert(dbHourlyRows, { onConflict: 'id' });
 
-            if (upsertHourlyErr) {
-              addLog(`Aviso ao gravar em hourly_schedules: ${upsertHourlyErr.message}. Executando recriação limpa...`);
-              await supabase.from('hourly_schedules').delete().eq('itinerary_day_id', resolvedDayId);
-              const { error: insertErr } = await supabase.from('hourly_schedules').insert(dbHourlyRows);
-              if (insertErr) {
-                addLog(`Erro no insert de hourly_schedules: ${insertErr.message}`);
-              } else {
-                addLog(`${dbHourlyRows.length} horários gravados na tabela hourly_schedules com sucesso.`);
-              }
-            } else {
-              addLog(`${dbHourlyRows.length} horários gravados na tabela hourly_schedules com sucesso.`);
-            }
+          if (upsertHourlyErr) {
+            addLog(`Aviso ao gravar em hourly_schedules: ${upsertHourlyErr.message}. Mantendo registros existentes para segurança.`);
+          } else {
+            addLog(`${dbHourlyRows.length} horários gravados na tabela hourly_schedules com sucesso.`);
           }
         }
       } catch (hourlyErr: any) {
@@ -3138,6 +3080,43 @@ export const SupabaseService = {
   },
 
   /**
+   * Salva ou atualiza um item de horário individual diretamente no banco,
+   * persistindo o item de forma explícita sem substituir ou apagar outros itens do dia.
+   */
+  async saveHourlyScheduleItem(
+    tripId: string,
+    itineraryDayId: string,
+    item: HourlyScheduleItem
+  ): Promise<{ success: boolean; error?: string; rowId?: string }> {
+    try {
+      if (!tripId || !itineraryDayId || !item) {
+        return { success: false, error: 'tripId, itineraryDayId e item são obrigatórios' };
+      }
+
+      const rowId = item.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.id)
+        ? item.id
+        : ensureValidUUID(item.id, 'hourly', `${itineraryDayId}-${item.sourceType || 'manual'}-${item.time}-${(item.title || '').trim()}`);
+
+      const itemWithValidId = { ...item, id: rowId };
+      const dbRow = mapHourlyScheduleToDb(itemWithValidId, itineraryDayId, tripId);
+
+      const { error: upsertErr } = await supabase
+        .from('hourly_schedules')
+        .upsert(dbRow, { onConflict: 'id' });
+
+      if (upsertErr) {
+        console.error('Erro ao salvar item em hourly_schedules:', upsertErr.message);
+        return { success: false, error: upsertErr.message };
+      }
+
+      return { success: true, rowId };
+    } catch (err: any) {
+      console.error('Falha ao salvar item de horário:', err);
+      return { success: false, error: err?.message || 'Falha ao salvar horário' };
+    }
+  },
+
+  /**
    * Delete Hourly Schedule Item
    */
   async deleteHourlySchedule(id: string): Promise<boolean> {
@@ -3150,11 +3129,16 @@ export const SupabaseService = {
   },
 
   /**
-   * Delete Hourly Schedules by source_id
+   * Delete Hourly Schedules by source_id and optionally source_type
    */
-  async deleteHourlySchedulesBySource(sourceId: string): Promise<boolean> {
+  async deleteHourlySchedulesBySource(sourceId: string, sourceType?: string): Promise<boolean> {
     try {
-      const { error } = await supabase.from('hourly_schedules').delete().eq('source_id', sourceId);
+      if (!sourceId) return true;
+      let query = supabase.from('hourly_schedules').delete();
+      if (sourceType) {
+        query = query.eq('source_type', sourceType);
+      }
+      const { error } = await query.or(`source_id.eq.${sourceId},source_id.like.%${sourceId}%`);
       return !error;
     } catch {
       return false;
@@ -3357,46 +3341,6 @@ export const SupabaseService = {
     } catch (err) {
       console.warn('deleteSettlementPayment exception:', err);
       return false;
-    }
-  },
-
-  /**
-   * Save all rule-generated hourly schedules for a trip to the hourly_schedules table
-   */
-  async saveAllHourlySchedules(tripId: string, days: ItineraryDay[]): Promise<{ success: boolean; error?: string }> {
-    try {
-      if (!tripId || !days) return { success: false, error: 'Parâmetros inválidos' };
-      const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
-
-      const allHourlyItems: Array<{ item: HourlyScheduleItem; dayId: string }> = [];
-      days.forEach((d) => {
-        if (d.id && d.hourlySchedule) {
-          d.hourlySchedule.forEach((h) => {
-            allHourlyItems.push({ item: h, dayId: d.id });
-          });
-        }
-      });
-
-      if (allHourlyItems.length === 0) return { success: true };
-
-      const dbHourlyRows = allHourlyItems.map(({ item, dayId }, index) =>
-        mapHourlyScheduleToDb(item, dayId, cleanTripId, index)
-      );
-
-      for (let i = 0; i < dbHourlyRows.length; i += 50) {
-        const chunk = dbHourlyRows.slice(i, i + 50);
-        const { error } = await supabase.from('hourly_schedules').upsert(chunk, { onConflict: 'id' });
-        if (error) {
-          if (!isSupabaseMissingTableError(error)) {
-            console.error('saveAllHourlySchedules batch error:', error);
-          }
-        }
-      }
-
-      return { success: true };
-    } catch (err: any) {
-      console.warn('saveAllHourlySchedules exception:', err);
-      return { success: false, error: err?.message || 'Erro ao salvar cronograma hora a hora' };
     }
   },
 };
