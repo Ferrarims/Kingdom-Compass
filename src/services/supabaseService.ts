@@ -1010,7 +1010,7 @@ export const SupabaseService = {
         const [
           { data: expData },
           { data: daysData },
-          { data: hourlyData },
+          { data: hourlyData, error: hourlyErr },
           { data: fltData },
           { data: carData },
           { data: accData },
@@ -1042,6 +1042,11 @@ export const SupabaseService = {
           supabase.from('park_fast_passes').select('*').eq('trip_id', tripId),
           supabase.from('park_photo_packages').select('*').eq('trip_id', tripId),
         ]);
+
+        if (hourlyErr && !isSupabaseMissingTableError(hourlyErr)) {
+          console.error(`[Supabase] Erro ao carregar hourly_schedules para a viagem ${tripId}:`, hourlyErr);
+          throw new Error(`Erro ao carregar a agenda de horários: ${hourlyErr.message}`);
+        }
 
         // Map photo packages by itinerary_day_id or park_day_booking_id
         const photoPackagesByDay = new Map<string, PhotoPackageItem>();
@@ -1270,13 +1275,13 @@ export const SupabaseService = {
           }
         });
 
-        // Group hourly_schedules by matching day_number or day_id
+        // Group hourly_schedules strictly by matching itinerary_day_id against real db itinerary_days id
         const hourlyByDayNumber = new Map<number, HourlyScheduleItem[]>();
         (hourlyData || []).forEach((hRow: any) => {
           const item = mapDbToHourlySchedule(hRow);
           let matchedDayNum: number | null = null;
 
-          // 1. Check if hRow.itinerary_day_id matches any db day id
+          // Correspondência estrita usando somente o itinerary_day_id real
           for (const [dNum, dRow] of dbDaysMap.entries()) {
             if (dRow.id === hRow.itinerary_day_id) {
               matchedDayNum = dNum;
@@ -1284,29 +1289,15 @@ export const SupabaseService = {
             }
           }
 
-          // 2. Extract dayNumber from hRow.id format 'sch-<dayNumber>-...'
-          if (!matchedDayNum) {
-            const schMatch = (hRow.id || '').match(/^sch-(\d+)-/);
-            if (schMatch) {
-              matchedDayNum = parseInt(schMatch[1], 10);
+          if (matchedDayNum !== null) {
+            const list = hourlyByDayNumber.get(matchedDayNum) || [];
+            if (!list.some((existing) => existing.id === item.id)) {
+              list.push(item);
             }
+            hourlyByDayNumber.set(matchedDayNum, list);
+          } else {
+            console.warn(`[DIAGNÓSTICO] Registro de horário desassociado (sem correspondência com itinerary_day_id real): ID=${hRow.id}, itinerary_day_id=${hRow.itinerary_day_id}`);
           }
-
-          // 3. Extract dayNumber from hRow.itinerary_day_id format 'day-...-<dayNumber>'
-          if (!matchedDayNum && hRow.itinerary_day_id) {
-            const parts = hRow.itinerary_day_id.split('-');
-            const lastPart = parseInt(parts[parts.length - 1], 10);
-            if (!isNaN(lastPart) && lastPart > 0) {
-              matchedDayNum = lastPart;
-            }
-          }
-
-          const targetDayNum = matchedDayNum || 1;
-          const list = hourlyByDayNumber.get(targetDayNum) || [];
-          if (!list.some((existing) => existing.id === item.id)) {
-            list.push(item);
-          }
-          hourlyByDayNumber.set(targetDayNum, list);
         });
 
         // Assemble full rawDays array ensuring all duration days exist
@@ -1321,11 +1312,8 @@ export const SupabaseService = {
             if (pb) {
               baseDay.parkBooking = pb;
             }
-            // Se existirem registros na tabela dedicada hourly_schedules para a viagem, ela é a fonte autoritativa.
-            // Não mesclar com baseDay.hourlySchedule legado para não ressuscitar horários apagados.
-            if (hourlyData && hourlyData.length > 0) {
-              baseDay.hourlySchedule = dedicatedHourly;
-            } else if (dedicatedHourly.length > 0) {
+            // Leitura por dia: A agenda de cada dia é reconstruída com base nos registros confirmados daquele dia.
+            if (dedicatedHourly.length > 0) {
               baseDay.hourlySchedule = dedicatedHourly;
             } else {
               baseDay.hourlySchedule = baseDay.hourlySchedule || [];
@@ -2737,13 +2725,27 @@ export const SupabaseService = {
             .upsert(dbHourlyRows, { onConflict: 'id' });
 
           if (upsertHourlyErr) {
-            addLog(`Aviso ao gravar em hourly_schedules: ${upsertHourlyErr.message}. Mantendo registros existentes para segurança.`);
+            addLog(`Erro ao gravar em hourly_schedules: ${upsertHourlyErr.message}`);
+            console.error('Erro de gravação em hourly_schedules:', upsertHourlyErr);
+            return {
+              success: false,
+              error: `Falha ao salvar horários da agenda: ${upsertHourlyErr.message}`,
+              resolvedDayId,
+              debugLogs,
+            };
           } else {
             addLog(`${dbHourlyRows.length} horários gravados na tabela hourly_schedules com sucesso.`);
           }
         }
       } catch (hourlyErr: any) {
-        addLog(`Aviso sync hourly_schedules: ${hourlyErr?.message}`);
+        addLog(`Erro sync hourly_schedules: ${hourlyErr?.message}`);
+        console.error('Falha ao sincronizar hourly_schedules:', hourlyErr);
+        return {
+          success: false,
+          error: `Falha ao sincronizar horários da agenda: ${hourlyErr?.message || 'Erro de conexão/banco'}`,
+          resolvedDayId,
+          debugLogs,
+        };
       }
 
       // 5. Synchronize park_day_bookings table and secondary event tables for this day
@@ -2803,7 +2805,7 @@ export const SupabaseService = {
               addLog(`${dinRows.length} refeições sincronizadas na tabela secundária park_dining_reservations.`);
             }
 
-            // Shows e Paradas
+            // Shows e Paradas (persistidos centralizadamente em park_shows_reservations e hourly_schedules principal)
             const showsList = day.parkBooking.showsAndParades || [];
             const showRows = showsList.map((show) => ({
               id: ensureValidUUID(show.id, 'show', `${bookingId}-${show.showName}-${show.time}`),
@@ -2822,38 +2824,6 @@ export const SupabaseService = {
             if (showRows.length > 0) {
               await supabase.from('park_shows_reservations').upsert(showRows, { onConflict: 'id' });
               addLog(`${showRows.length} shows sincronizados na tabela secundária park_shows_reservations.`);
-
-              // Garantia absoluta: Todo show/encerramento salvo deve existir na tabela hourly_schedules
-              try {
-                const showHourlyRows = showRows.map((s, idx) => {
-                  const sTime = s.show_time && s.show_time.match(/\d{1,2}:\d{2}/) ? s.show_time.match(/\d{1,2}:\d{2}/)![0] : '20:00';
-                  const formattedTime = sTime.length === 4 ? `0${sTime}` : sTime;
-                  const titleFormatted = s.show_name?.startsWith('🎆')
-                    ? s.show_name
-                    : (s.show_name?.toLowerCase().includes('show') || s.show_name?.toLowerCase().includes('fogos') || s.show_name?.toLowerCase().includes('encerramento')
-                        ? `🎆 ${s.show_name}`
-                        : `🎆 Show / Parada: ${s.show_name}`);
-
-                  return {
-                    id: ensureValidUUID(s.id, 'hourly-show', `${resolvedDayId}-${s.id}-${formattedTime}-${idx}`),
-                    itinerary_day_id: resolvedDayId,
-                    trip_id: tripId,
-                    time: formattedTime,
-                    title: titleFormatted,
-                    location: s.location || (day.park || 'Parque'),
-                    category: 'park',
-                    completed: (s.status as any) === 'Assistido' || (s.status as any) === 'Concluído',
-                    notes: s.notes || (s.reserved_area ? `Área: ${s.reserved_area}` : null),
-                    source_type: 'show',
-                    source_id: s.id,
-                    created_at: new Date().toISOString(),
-                  };
-                });
-                await supabase.from('hourly_schedules').upsert(showHourlyRows, { onConflict: 'id' });
-                addLog(`${showHourlyRows.length} shows/encerramentos sincronizados com sucesso na tabela hourly_schedules.`);
-              } catch (showSyncErr) {
-                console.warn('Sync shows to hourly_schedules note:', showSyncErr);
-              }
             }
             // Photo Package
             const pkg = day.parkBooking.hasPhotoPackage && day.parkBooking.photoPackage ? day.parkBooking.photoPackage : null;

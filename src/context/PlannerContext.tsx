@@ -565,7 +565,7 @@ interface PlannerContextType {
 
   // Itinerary
   itineraryDays: ItineraryDay[];
-  updateItineraryDay: (id: string, updates: Partial<ItineraryDay>) => void;
+  updateItineraryDay: (id: string, updates: Partial<ItineraryDay>) => Promise<{ success: boolean; error?: string }>;
   saveHourlyScheduleItem: (dayId: string, item: HourlyScheduleItem) => Promise<boolean>;
   deleteHourlyScheduleItem: (dayId: string, itemId: string) => Promise<boolean>;
   swapOrMoveParkDay: (sourceDayNumber: number, targetDayNumber: number) => void;
@@ -2879,23 +2879,15 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     addNotification(`Atualizou inclusão de custo no orçamento`);
   };
 
-  const updateItineraryDay = (id: string, updates: Partial<ItineraryDay>) => {
+  const updateItineraryDay = async (id: string, updates: Partial<ItineraryDay>): Promise<{ success: boolean; error?: string }> => {
     // 1. Locate existing day in current rawDays synchronously
     let currentDay = rawDays.find((d) => d.id === id);
     if (!currentDay && updates.dayNumber) {
       currentDay = rawDays.find((d) => d.dayNumber === updates.dayNumber);
     }
     if (!currentDay) {
-      const matches = id.match(/\d+/g);
-      if (matches && matches.length > 0) {
-        const lastNum = parseInt(matches[matches.length - 1], 10);
-        if (!isNaN(lastNum) && lastNum > 0) {
-          currentDay = rawDays.find((d) => d.dayNumber === lastNum);
-        }
-      }
-    }
-    if (!currentDay && rawDays.length > 0) {
-      currentDay = rawDays[0];
+      console.warn(`[DIAGNÓSTICO] updateItineraryDay: Nenhuma correspondência válida com itinerary_days ID=${id}`);
+      return { success: false, error: 'Dia do roteiro não encontrado' };
     }
 
     // Check if park is being removed, set to 'Sem Parque', or unlinked
@@ -3021,24 +3013,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       cleanInvalidAutoItems(currentScheduleToClean, hasAcc, isThemePark, effectivePark)
     );
 
-    const dayToSave: Omit<ItineraryDay, 'date'> = currentDay
-      ? { ...currentDay, ...finalUpdates }
-      : ({
-          id,
-          dayNumber: finalUpdates.dayNumber || 1,
-          title: finalUpdates.title || 'Sem Parque',
-          park: finalUpdates.park || ('Sem Parque' as any),
-          completed: Boolean(finalUpdates.completed),
-          morning: finalUpdates.morning || { notes: '', where: '', dining: '' },
-          afternoon: finalUpdates.afternoon || { notes: '', where: '', dining: '' },
-          night: finalUpdates.night || { notes: '', where: '', dining: '' },
-          generalNotes: finalUpdates.generalNotes || '',
-          hourlySchedule: finalUpdates.hourlySchedule || [],
-          attachments: finalUpdates.attachments || [],
-        } as Omit<ItineraryDay, 'date'>);
+    const dayToSave: Omit<ItineraryDay, 'date'> = { ...currentDay, ...finalUpdates };
 
     // Se hourlySchedule foi fornecido explicitamente, respeitar exatamente os itens fornecidos
-    // (não executar syncAllEventsToHourlySchedule para não regenerar itens excluídos ou criar horários fictícios)
     if (updates.hourlySchedule !== undefined) {
       dayToSave.hourlySchedule = finalUpdates.hourlySchedule || [];
     } else if (isParkChanged) {
@@ -3047,6 +3024,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       dayToSave.hourlySchedule = fullySyncedHourly;
       finalUpdates.hourlySchedule = fullySyncedHourly;
     }
+
+    // Snapshot prévio para reversão em caso de erro na gravação
+    const prevRawDays = rawDays;
+    const prevTrips = trips;
 
     // 2. Update rawDays state immediately
     setRawDays((prev) => {
@@ -3062,18 +3043,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           const newArr = [...prev];
           newArr[numIndex] = { ...prev[numIndex], ...finalUpdates };
           return newArr;
-        }
-      }
-      const matches = id.match(/\d+/g);
-      if (matches && matches.length > 0) {
-        const lastNum = parseInt(matches[matches.length - 1], 10);
-        if (!isNaN(lastNum) && lastNum > 0) {
-          const numIndex = prev.findIndex((d) => d.dayNumber === lastNum);
-          if (numIndex !== -1) {
-            const newArr = [...prev];
-            newArr[numIndex] = { ...prev[numIndex], ...finalUpdates };
-            return newArr;
-          }
         }
       }
       return prev.map((d) => (d.id === id ? { ...d, ...finalUpdates } : d));
@@ -3109,10 +3078,19 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         durationDays: settings.durationDays,
         travelers: settings.travelers,
       };
-      SupabaseService.saveItineraryDay(activeTripId, dayToSave, fallbackTrip);
+      const saveRes = await SupabaseService.saveItineraryDay(activeTripId, dayToSave, fallbackTrip);
+      if (!saveRes.success) {
+        // Reverter alterações locais em caso de falha de gravação
+        setRawDays(prevRawDays);
+        setTrips(prevTrips);
+        const errMsg = saveRes.error || 'Erro ao persistir no Supabase';
+        addNotification(`❌ Falha ao salvar no banco: ${errMsg}. Alterações revertidas.`);
+        return { success: false, error: errMsg };
+      }
     }
 
     addNotification(`Atualizou o roteiro`);
+    return { success: true };
   };
 
   const saveHourlyScheduleItem = useCallback(
@@ -3240,7 +3218,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     [activeTripId, rawDays, trips]
   );
 
-  const swapOrMoveParkDay = (sourceDayNumber: number, targetDayNumber: number) => {
+  const swapOrMoveParkDay = async (sourceDayNumber: number, targetDayNumber: number) => {
     if (sourceDayNumber === targetDayNumber) return;
 
     let sourceDayObj: ItineraryDay | null = null;
@@ -3442,8 +3420,14 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         durationDays: settings.durationDays,
         travelers: settings.travelers,
       };
-      SupabaseService.saveItineraryDay(activeTripId, sourceDayObj, fallbackTrip);
-      SupabaseService.saveItineraryDay(activeTripId, targetDayObj, fallbackTrip);
+      const [r1, r2] = await Promise.all([
+        SupabaseService.saveItineraryDay(activeTripId, sourceDayObj, fallbackTrip),
+        SupabaseService.saveItineraryDay(activeTripId, targetDayObj, fallbackTrip),
+      ]);
+      if (!r1.success || !r2.success) {
+        const err = r1.error || r2.error || 'Erro de conexão no banco';
+        addNotification(`❌ Falha ao salvar alteração de parque no banco: ${err}`);
+      }
     }
 
     if (wasMutualSwap) {
@@ -4352,7 +4336,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
 
       if (activeTripId) {
-        result.updatedDays.forEach((dayToSave, idx) => {
+        const promises = result.updatedDays.map((dayToSave, idx) => {
           const prevDay = prevDays[idx];
           const prevSched = prevDay?.hourlySchedule || [];
           const nextSched = dayToSave.hourlySchedule || [];
@@ -4360,7 +4344,15 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
             JSON.stringify(prevSched) !== JSON.stringify(nextSched) ||
             prevDay?.title !== dayToSave.title;
           if (isAffected) {
-            SupabaseService.saveItineraryDay(activeTripId, dayToSave, activeTrip || undefined);
+            return SupabaseService.saveItineraryDay(activeTripId, dayToSave, activeTrip || undefined);
+          }
+          return Promise.resolve<{ success: boolean; error?: string }>({ success: true });
+        });
+
+        Promise.all(promises).then((results) => {
+          const failed = results.find((r) => r && !r.success);
+          if (failed) {
+            addNotification(`❌ Falha ao salvar alterações da agenda no banco: ${failed.error}`);
           }
         });
       }
@@ -4433,7 +4425,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
 
       if (activeTripId) {
-        result.updatedDays.forEach((dayToSave, idx) => {
+        const promises = result.updatedDays.map((dayToSave, idx) => {
           const prevDay = prevDays[idx];
           const prevSched = prevDay?.hourlySchedule || [];
           const nextSched = dayToSave.hourlySchedule || [];
@@ -4441,7 +4433,15 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
             JSON.stringify(prevSched) !== JSON.stringify(nextSched) ||
             prevDay?.title !== dayToSave.title;
           if (isAffected) {
-            SupabaseService.saveItineraryDay(activeTripId, dayToSave, activeTrip || undefined);
+            return SupabaseService.saveItineraryDay(activeTripId, dayToSave, activeTrip || undefined);
+          }
+          return Promise.resolve<{ success: boolean; error?: string }>({ success: true });
+        });
+
+        Promise.all(promises).then((results) => {
+          const failed = results.find((r) => r && !r.success);
+          if (failed) {
+            addNotification(`❌ Falha ao salvar atualização do voo na agenda: ${failed.error}`);
           }
         });
       }
@@ -4485,7 +4485,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       });
 
       if (activeTripId) {
-        result.updatedDays.forEach((dayToSave, idx) => {
+        const promises = result.updatedDays.map((dayToSave, idx) => {
           const prevDay = prevDays[idx];
           const prevSched = prevDay?.hourlySchedule || [];
           const nextSched = dayToSave.hourlySchedule || [];
@@ -4493,7 +4493,15 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
             JSON.stringify(prevSched) !== JSON.stringify(nextSched) ||
             prevDay?.title !== dayToSave.title;
           if (isAffected) {
-            SupabaseService.saveItineraryDay(activeTripId, dayToSave, activeTrip || undefined);
+            return SupabaseService.saveItineraryDay(activeTripId, dayToSave, activeTrip || undefined);
+          }
+          return Promise.resolve<{ success: boolean; error?: string }>({ success: true });
+        });
+
+        Promise.all(promises).then((results) => {
+          const failed = results.find((r) => r && !r.success);
+          if (failed) {
+            addNotification(`❌ Falha ao salvar remoção do voo na agenda: ${failed.error}`);
           }
         });
       }
@@ -4851,9 +4859,16 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           rawDays: updatedDays,
         };
         // Gravar no banco somente os dias afetados pela acomodação
-        affectedDayIndexes.forEach((idx) => {
+        const promises = Array.from(affectedDayIndexes).map((idx) => {
           if (updatedDays[idx]) {
-            SupabaseService.saveItineraryDay(activeTripId, updatedDays[idx], fallbackTrip);
+            return SupabaseService.saveItineraryDay(activeTripId, updatedDays[idx], fallbackTrip);
+          }
+          return Promise.resolve<{ success: boolean; error?: string }>({ success: true });
+        });
+        Promise.all(promises).then((results) => {
+          const failed = results.find((r) => r && !r.success);
+          if (failed) {
+            addNotification(`❌ Falha ao salvar sincronização de hospedagem na agenda: ${failed.error}`);
           }
         });
         setTrips((prevTrips) =>
@@ -5114,9 +5129,16 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           rawDays: synchronized,
         };
         // Gravar no banco apenas os dias afetados
-        affectedDayIndexes.forEach((idx) => {
+        const promises = Array.from(affectedDayIndexes).map((idx) => {
           if (synchronized[idx]) {
-            SupabaseService.saveItineraryDay(activeTripId, synchronized[idx], fallbackTrip);
+            return SupabaseService.saveItineraryDay(activeTripId, synchronized[idx], fallbackTrip);
+          }
+          return Promise.resolve<{ success: boolean; error?: string }>({ success: true });
+        });
+        Promise.all(promises).then((results) => {
+          const failed = results.find((r) => r && !r.success);
+          if (failed) {
+            addNotification(`❌ Falha ao salvar sincronização de ingressos na agenda: ${failed.error}`);
           }
         });
       }

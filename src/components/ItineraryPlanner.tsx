@@ -3569,7 +3569,7 @@ export const ItineraryPlanner: React.FC = () => {
         onSave={(updates, targetDayId) => {
           const idToUpdate = targetDayId || activeDay?.id;
           if (idToUpdate) {
-            updateItineraryDay(idToUpdate, updates);
+            return updateItineraryDay(idToUpdate, updates);
           }
         }}
         onRemovePark={(targetDayId, cleanedDay) => {
@@ -3580,7 +3580,7 @@ export const ItineraryPlanner: React.FC = () => {
             park: 'Sem Parque',
             parkBooking: undefined,
           });
-          updateItineraryDay(idToUpdate, cleaned);
+          return updateItineraryDay(idToUpdate, cleaned);
         }}
       />
 

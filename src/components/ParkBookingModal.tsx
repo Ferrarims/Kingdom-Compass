@@ -63,8 +63,8 @@ interface ParkBookingModalProps {
   allDays?: ItineraryDay[];
   initialParkName?: string;
   initialTab?: 'general' | 'fastpass' | 'dining' | 'shows' | 'photos';
-  onSave: (updatedDay: Partial<ItineraryDay>, targetDayId?: string) => void;
-  onRemovePark?: (targetDayId: string, cleanedDay?: Partial<ItineraryDay>) => void;
+  onSave: (updatedDay: Partial<ItineraryDay>, targetDayId?: string) => Promise<{ success: boolean; error?: string }> | void;
+  onRemovePark?: (targetDayId: string, cleanedDay?: Partial<ItineraryDay>) => Promise<{ success: boolean; error?: string }> | void;
 }
 
 export const isDayViable = (d: ItineraryDay, flights: any[]): boolean => {
@@ -1003,7 +1003,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     }
   };
 
-  const handleSaveAll = () => {
+  const handleSaveAll = async () => {
     if (!activeDay) return;
 
     // Locate active accommodation for the day
@@ -1031,10 +1031,16 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
         parkBooking: undefined,
       };
 
+      let saveRes: any;
       if (onSave) {
-        onSave(dayUpdates, activeDay.id);
+        saveRes = await onSave(dayUpdates, activeDay.id);
       } else {
-        updateItineraryDay(activeDay.id, dayUpdates);
+        saveRes = await updateItineraryDay(activeDay.id, dayUpdates);
+      }
+
+      if (saveRes && typeof saveRes === 'object' && saveRes.success === false) {
+        alert(`❌ Erro ao salvar dados no banco: ${saveRes.error || 'Falha de conexão'}. Mantendo dados para nova tentativa.`);
+        return;
       }
 
       onClose();
@@ -1276,10 +1282,16 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       },
     };
 
+    let saveRes: any;
     if (onSave) {
-      onSave(dayUpdates, activeDay.id);
+      saveRes = await onSave(dayUpdates, activeDay.id);
     } else {
-      updateItineraryDay(activeDay.id, dayUpdates);
+      saveRes = await updateItineraryDay(activeDay.id, dayUpdates);
+    }
+
+    if (saveRes && typeof saveRes === 'object' && saveRes.success === false) {
+      alert(`❌ Erro ao salvar dados do parque no banco: ${saveRes.error || 'Falha de conexão'}. Mantendo dados para nova tentativa.`);
+      return;
     }
 
     // Allocate any past-midnight closing / return items to next day schedule
@@ -1287,7 +1299,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     if (nextDay) {
       const cleanedNextSchedule = cleanPreviousDayOverflowItems(nextDay.hourlySchedule || [], activeDay.dayNumber);
       const combinedNextSchedule = deduplicateHourlySchedule([...cleanedNextSchedule, ...scheduleResult.nextDayOverflowItems]);
-      updateItineraryDay(nextDay.id, {
+      await updateItineraryDay(nextDay.id, {
         hourlySchedule: combinedNextSchedule,
       });
     }
@@ -1295,20 +1307,28 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     onClose();
   };
 
-  const handleUnlinkPark = () => {
+  const handleUnlinkPark = async () => {
     if (!activeDay) return;
     const cleanedDay = clearParkReferencesFromDay(activeDay, allDays?.length || 1, activeAccommodation?.name);
+    let saveRes: any;
     if (onRemovePark) {
-      onRemovePark(activeDay.id, cleanedDay);
+      saveRes = await onRemovePark(activeDay.id, cleanedDay);
+    } else if (onSave) {
+      saveRes = await onSave(cleanedDay, activeDay.id);
     } else {
-      onSave(cleanedDay, activeDay.id);
+      saveRes = await updateItineraryDay(activeDay.id, cleanedDay);
+    }
+
+    if (saveRes && typeof saveRes === 'object' && saveRes.success === false) {
+      alert(`❌ Erro ao desvincular parque no banco: ${saveRes.error || 'Falha de conexão'}. Mantendo dados para nova tentativa.`);
+      return;
     }
 
     // Clean any overflow items in the next day
     const nextDay = (allDays || []).find((d) => d.dayNumber === activeDay.dayNumber + 1);
     if (nextDay) {
       const cleanedNextSchedule = cleanPreviousDayOverflowItems(nextDay.hourlySchedule || [], activeDay.dayNumber);
-      updateItineraryDay(nextDay.id, {
+      await updateItineraryDay(nextDay.id, {
         hourlySchedule: cleanedNextSchedule,
       });
     }
