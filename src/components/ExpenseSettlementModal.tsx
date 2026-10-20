@@ -90,7 +90,7 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
   const [adjustments, setAdjustments] = useState<CustomAdjustment[]>([]);
   const [newAdjFrom, setNewAdjFrom] = useState<string>(travelers[0]?.id || '');
   const [newAdjTo, setNewAdjTo] = useState<string>(travelers[1]?.id || travelers[0]?.id || '');
-  const [newAdjAmount, setNewAdjAmount] = useState<string>('');
+  const [newAdjAmount, setNewAdjAmount] = useState<number | null>(null);
   const [newAdjDesc, setNewAdjDesc] = useState<string>('');
   const [newAdjMethod, setNewAdjMethod] = useState<string>('PIX');
   const [newAdjDate, setNewAdjDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
@@ -421,7 +421,7 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
 
   const handleAddAdjustment = async (e: React.FormEvent) => {
     e.preventDefault();
-    const num = parseFloat(newAdjAmount.replace(',', '.'));
+    const num = newAdjAmount || 0;
     if (!num || isNaN(num) || num <= 0 || newAdjFrom === newAdjTo) return;
 
     const tempId = 'adj-' + Date.now();
@@ -1047,8 +1047,8 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
                     </label>
                     <MoneyInput
                       currency="BRL"
-                      value={parseFloat(newAdjAmount) || 0}
-                      onChange={(val) => setNewAdjAmount(val ? val.toString() : '')}
+                      value={newAdjAmount}
+                      onChange={(val) => setNewAdjAmount(val)}
                     />
                   </div>
 

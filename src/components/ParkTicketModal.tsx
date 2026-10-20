@@ -582,8 +582,8 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
   const [selectedTravelerIds, setSelectedTravelerIds] = useState<string[]>(['all']);
   const [payerId, setPayerId] = useState<string>('all');
   const [quantity, setQuantity] = useState<number>(travelers.length || 1);
-  const [unitCostUSD, setUnitCostUSD] = useState<string>('');
-  const [unitCostBRL, setUnitCostBRL] = useState<string>('');
+  const [unitCostUSD, setUnitCostUSD] = useState<number | null>(null);
+  const [unitCostBRL, setUnitCostBRL] = useState<number | null>(null);
   const [paymentStatus, setPaymentStatus] = useState<ParkTicketPurchase['paymentStatus']>('Previsão (Planejamento)');
   const [confirmationCode, setConfirmationCode] = useState<string>('');
   const [seller, setSeller] = useState<string>('');
@@ -620,13 +620,9 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
     setParksIncluded(pkg.parksIncluded);
     
     // Automatically pre-fill the cost recommendation as unit cost
-    setUnitCostUSD(pkg.recommendedUSD);
-    const num = parseFloat(pkg.recommendedUSD);
-    if (!isNaN(num)) {
-      setUnitCostBRL((num * dollarRate).toFixed(2));
-    } else {
-      setUnitCostBRL('');
-    }
+    const num = parseFloat(pkg.recommendedUSD) || 0;
+    setUnitCostUSD(num);
+    setUnitCostBRL(Math.round(num * dollarRate * 100) / 100);
   };
 
   // Switch complex
@@ -670,15 +666,15 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
           setQuantity(q);
 
           // Back-calculate unit cost from total cost
-          if (ticketToEdit.costUSD !== undefined) {
-            setUnitCostUSD((ticketToEdit.costUSD / q).toFixed(2));
+          if (ticketToEdit.costUSD !== undefined && ticketToEdit.costUSD !== null) {
+            setUnitCostUSD(ticketToEdit.costUSD / q);
           } else {
-            setUnitCostUSD('');
+            setUnitCostUSD(null);
           }
-          if (ticketToEdit.costBRL !== undefined) {
-            setUnitCostBRL((ticketToEdit.costBRL / q).toFixed(2));
+          if (ticketToEdit.costBRL !== undefined && ticketToEdit.costBRL !== null) {
+            setUnitCostBRL(ticketToEdit.costBRL / q);
           } else {
-            setUnitCostBRL('');
+            setUnitCostBRL(null);
           }
 
           setPaymentStatus(ticketToEdit.paymentStatus || 'Previsão (Planejamento)');
@@ -704,13 +700,9 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
             setTicketOption(firstPkg.ticketOption);
             setParksIncluded(firstPkg.parksIncluded);
             
-            setUnitCostUSD(firstPkg.recommendedUSD);
-            const num = parseFloat(firstPkg.recommendedUSD);
-            if (!isNaN(num)) {
-              setUnitCostBRL((num * dollarRate).toFixed(2));
-            } else {
-              setUnitCostBRL('');
-            }
+            const num = parseFloat(firstPkg.recommendedUSD) || 0;
+            setUnitCostUSD(num);
+            setUnitCostBRL(Math.round(num * dollarRate * 100) / 100);
           } else {
             setTitle('Combo Disney: 4 Dias Park Hopper');
             setType('combo');
@@ -724,8 +716,8 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
             ]);
             setDaysCount(4);
             setTicketOption('Park Hopper (Troca de parque no mesmo dia)');
-            setUnitCostUSD('580');
-            setUnitCostBRL((580 * dollarRate).toFixed(2));
+            setUnitCostUSD(580);
+            setUnitCostBRL(Math.round(580 * dollarRate * 100) / 100);
           }
 
           setSelectedTravelerIds(['all']);
@@ -742,35 +734,23 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
   }, [isOpen, ticketToEdit, travelers.length, dollarRate]);
 
   // Handle Unit USD Change with auto-calc BRL
-  const handleUnitUSDChange = (val: string) => {
+  const handleUnitUSDChange = (val: number | null) => {
     setUnitCostUSD(val);
-    const num = parseFloat(val.replace(',', '.'));
-    if (!isNaN(num) && num > 0) {
-      setUnitCostBRL((num * dollarRate).toFixed(2));
-    } else if (val === '') {
-      setUnitCostBRL('');
-    }
+    setUnitCostBRL(val !== null ? Math.round(val * dollarRate * 100) / 100 : null);
   };
 
   // Handle Unit BRL Change with auto-calc USD
-  const handleUnitBRLChange = (val: string) => {
+  const handleUnitBRLChange = (val: number | null) => {
     setUnitCostBRL(val);
-    const num = parseFloat(val.replace(',', '.'));
-    if (!isNaN(num) && num > 0 && dollarRate > 0) {
-      setUnitCostUSD((num / dollarRate).toFixed(2));
-    } else if (val === '') {
-      setUnitCostUSD('');
-    }
+    setUnitCostUSD(val !== null && dollarRate > 0 ? Math.round((val / dollarRate) * 100) / 100 : null);
   };
 
   const totalUSD = React.useMemo(() => {
-    const num = parseFloat(unitCostUSD.replace(',', '.')) || 0;
-    return num > 0 ? (num * quantity).toFixed(2) : '';
+    return unitCostUSD !== null ? unitCostUSD * quantity : null;
   }, [unitCostUSD, quantity]);
 
   const totalBRL = React.useMemo(() => {
-    const num = parseFloat(unitCostBRL.replace(',', '.')) || 0;
-    return num > 0 ? (num * quantity).toFixed(2) : '';
+    return unitCostBRL !== null ? unitCostBRL * quantity : null;
   }, [unitCostBRL, quantity]);
 
   // Toggle traveler
@@ -800,8 +780,8 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
   const handleSave = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
 
-    const usdVal = parseFloat(totalUSD.replace(',', '.')) || 0;
-    const brlVal = parseFloat(totalBRL.replace(',', '.')) || (usdVal > 0 ? usdVal * dollarRate : 0);
+    const usdVal = totalUSD !== null ? totalUSD : 0;
+    const brlVal = totalBRL !== null ? totalBRL : (usdVal > 0 ? usdVal * dollarRate : 0);
 
     const ticketData: Omit<ParkTicketPurchase, 'id'> = {
       title: title.trim() || `${complex} - Ingressos`,
@@ -1039,12 +1019,8 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
                   </label>
                   <MoneyInput
                     currency="USD"
-                    value={parseFloat(unitCostUSD) || 0}
-                    onChange={(val) => {
-                      const usd = val || 0;
-                      setUnitCostUSD(usd.toString());
-                      setUnitCostBRL((usd * dollarRate).toFixed(2));
-                    }}
+                    value={unitCostUSD}
+                    onChange={handleUnitUSDChange}
                     id="input-ticket-cost-usd"
                   />
                 </div>
@@ -1056,12 +1032,8 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
                   </label>
                   <MoneyInput
                     currency="BRL"
-                    value={parseFloat(unitCostBRL) || 0}
-                    onChange={(val) => {
-                      const brl = val || 0;
-                      setUnitCostBRL(brl.toString());
-                      setUnitCostUSD(dollarRate > 0 ? (brl / dollarRate).toFixed(2) : '0');
-                    }}
+                    value={unitCostBRL}
+                    onChange={handleUnitBRLChange}
                     id="input-ticket-cost-brl"
                   />
                 </div>
@@ -1095,11 +1067,11 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
                   <div className="flex items-center gap-3">
                     <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200 flex flex-col items-end">
                       <span className="text-[9px] text-slate-400 uppercase font-bold tracking-tight">Total USD</span>
-                      <span className="text-xs font-mono font-bold text-emerald-700">${totalUSD || '0.00'}</span>
+                      <span className="text-xs font-mono font-bold text-emerald-700">${totalUSD !== null ? totalUSD.toFixed(2) : '0.00'}</span>
                     </div>
                     <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200 flex flex-col items-end">
                       <span className="text-[9px] text-slate-400 uppercase font-bold tracking-tight">Total BRL</span>
-                      <span className="text-xs font-mono font-bold text-[#1A2B4C]">R$ {totalBRL || '0,00'}</span>
+                      <span className="text-xs font-mono font-bold text-[#1A2B4C]">R$ {totalBRL !== null ? totalBRL.toFixed(2).replace('.', ',') : '0,00'}</span>
                     </div>
                   </div>
                 </div>

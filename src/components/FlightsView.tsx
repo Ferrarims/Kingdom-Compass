@@ -1474,18 +1474,17 @@ export const FlightsView: React.FC = () => {
                         currency="USD"
                         value={unitCostUSD}
                         onChange={(val) => {
-                          const usd = val || 0;
-                          setUnitCostUSD(usd);
+                          setUnitCostUSD(val);
                           const rate = settings.dollarRate || 5.75;
-                          const brl = Math.round(usd * rate * 100) / 100;
+                          const brl = val !== null ? Math.round(val * rate * 100) / 100 : null;
                           setUnitCostBRL(brl);
                           
                           const travelers = settings.travelers || [];
                           const q = (formData.travelerIds?.includes('all') ? travelers.length : formData.travelerIds?.length) || travelers.length || 1;
                           setFormData({
                             ...formData,
-                            ticketCostUSD: usd * q,
-                            ticketCostBRL: brl * q
+                            ticketCostUSD: val !== null ? val * q : null,
+                            ticketCostBRL: brl !== null ? brl * q : null
                           });
                         }}
                       />
@@ -1500,18 +1499,17 @@ export const FlightsView: React.FC = () => {
                         currency="BRL"
                         value={unitCostBRL}
                         onChange={(val) => {
-                          const brl = val || 0;
-                          setUnitCostBRL(brl);
+                          setUnitCostBRL(val);
                           const rate = settings.dollarRate || 5.75;
-                          const usd = rate > 0 ? Math.round((brl / rate) * 100) / 100 : 0;
+                          const usd = val !== null && rate > 0 ? Math.round((val / rate) * 100) / 100 : null;
                           setUnitCostUSD(usd);
 
                           const travelers = settings.travelers || [];
                           const q = (formData.travelerIds?.includes('all') ? travelers.length : formData.travelerIds?.length) || travelers.length || 1;
                           setFormData({
                             ...formData,
-                            ticketCostBRL: brl * q,
-                            ticketCostUSD: usd * q
+                            ticketCostBRL: val !== null ? val * q : null,
+                            ticketCostUSD: usd !== null ? usd * q : null
                           });
                         }}
                       />

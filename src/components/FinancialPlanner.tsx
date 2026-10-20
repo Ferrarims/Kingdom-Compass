@@ -81,9 +81,9 @@ export const FinancialPlanner: React.FC = () => {
   // Form states
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState<ExpenseCategory>('Ingressos');
-  const [estimatedValueUSD, setEstimatedValueUSD] = useState<number>(0);
-  const [estimatedValueBRL, setEstimatedValueBRL] = useState<number>(0);
-  const [paidValueBRL, setPaidValueBRL] = useState<number>(0);
+  const [estimatedValueUSD, setEstimatedValueUSD] = useState<number | null>(null);
+  const [estimatedValueBRL, setEstimatedValueBRL] = useState<number | null>(null);
+  const [paidValueBRL, setPaidValueBRL] = useState<number | null>(null);
   const [status, setStatus] = useState<ExpenseStatus>('Pendente');
   const [notes, setNotes] = useState('');
   const [responsibleTravelerId, setResponsibleTravelerId] = useState('all');
@@ -126,9 +126,9 @@ export const FinancialPlanner: React.FC = () => {
     setEditingExpenseId(null);
     setTitle('');
     setCategory('Ingressos');
-    setEstimatedValueUSD(0);
-    setEstimatedValueBRL(0);
-    setPaidValueBRL(0);
+    setEstimatedValueUSD(null);
+    setEstimatedValueBRL(null);
+    setPaidValueBRL(null);
     setStatus('Pendente');
     setNotes('');
     setResponsibleTravelerId('all');
@@ -140,9 +140,9 @@ export const FinancialPlanner: React.FC = () => {
     setEditingExpenseId(exp.id);
     setTitle(exp.title);
     setCategory(exp.category);
-    setEstimatedValueUSD(exp.estimatedValueUSD || 0);
-    setEstimatedValueBRL(exp.estimatedValueBRL || 0);
-    setPaidValueBRL(exp.paidValueBRL || 0);
+    setEstimatedValueUSD(exp.estimatedValueUSD ?? null);
+    setEstimatedValueBRL(exp.estimatedValueBRL ?? null);
+    setPaidValueBRL(exp.paidValueBRL ?? null);
     setStatus(exp.status);
     setNotes(exp.notes || '');
     setResponsibleTravelerId(exp.responsibleTravelerId || 'all');
@@ -150,14 +150,14 @@ export const FinancialPlanner: React.FC = () => {
     setModalOpen(true);
   };
 
-  const handleUSDChange = (val: number) => {
+  const handleUSDChange = (val: number | null) => {
     setEstimatedValueUSD(val);
-    setEstimatedValueBRL(Math.round(val * settings.dollarRate * 100) / 100);
+    setEstimatedValueBRL(val !== null ? Math.round(val * settings.dollarRate * 100) / 100 : null);
   };
 
-  const handleBRLChange = (val: number) => {
+  const handleBRLChange = (val: number | null) => {
     setEstimatedValueBRL(val);
-    setEstimatedValueUSD(Math.round((val / settings.dollarRate) * 100) / 100);
+    setEstimatedValueUSD(val !== null ? Math.round((val / settings.dollarRate) * 100) / 100 : null);
   };
 
   const handleSaveExpense = async (e: React.FormEvent) => {
@@ -825,7 +825,7 @@ export const FinancialPlanner: React.FC = () => {
                       <MoneyInput
                         currency="USD"
                         value={estimatedValueUSD}
-                        onChange={(val) => handleUSDChange(val || 0)}
+                        onChange={(val) => handleUSDChange(val)}
                       />
                     </div>
 
@@ -836,7 +836,7 @@ export const FinancialPlanner: React.FC = () => {
                       <MoneyInput
                         currency="BRL"
                         value={estimatedValueBRL}
-                        onChange={(val) => handleBRLChange(val || 0)}
+                        onChange={(val) => handleBRLChange(val)}
                       />
                     </div>
 
@@ -865,7 +865,7 @@ export const FinancialPlanner: React.FC = () => {
                       <MoneyInput
                         currency="BRL"
                         value={paidValueBRL}
-                        onChange={(val) => setPaidValueBRL(val || 0)}
+                        onChange={(val) => setPaidValueBRL(val)}
                       />
                     </div>
                   )}

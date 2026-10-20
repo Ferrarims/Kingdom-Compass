@@ -1232,11 +1232,11 @@ export const AccommodationsView: React.FC = () => {
                         currency="USD"
                         value={formData.costUSD}
                         onChange={(val) => {
-                          const v = val || 0;
+                          const rate = settings.dollarRate || 5.75;
                           setFormData({
                             ...formData,
-                            costUSD: v,
-                            costBRL: v * (settings.dollarRate || 5.75),
+                            costUSD: val,
+                            costBRL: val !== null ? Math.round(val * rate * 100) / 100 : null,
                           });
                         }}
                       />
@@ -1251,12 +1251,11 @@ export const AccommodationsView: React.FC = () => {
                         currency="BRL"
                         value={formData.costBRL}
                         onChange={(val) => {
-                          const v = val || 0;
                           const rate = settings.dollarRate || 5.75;
                           setFormData({
                             ...formData,
-                            costBRL: v,
-                            costUSD: rate > 0 ? v / rate : 0,
+                            costBRL: val,
+                            costUSD: val !== null && rate > 0 ? Math.round((val / rate) * 100) / 100 : null,
                           });
                         }}
                       />

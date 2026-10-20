@@ -1328,12 +1328,11 @@ export const TransportationView: React.FC = () => {
                         currency="USD"
                         value={formData.costUSD}
                         onChange={(val) => {
-                          const usd = val || 0;
                           const rate = settings.dollarRate || 5.75;
                           setFormData({
                             ...formData,
-                            costUSD: usd,
-                            costBRL: Math.round(usd * rate * 100) / 100,
+                            costUSD: val,
+                            costBRL: val !== null ? Math.round(val * rate * 100) / 100 : null,
                           });
                         }}
                       />
@@ -1344,12 +1343,11 @@ export const TransportationView: React.FC = () => {
                         currency="BRL"
                         value={formData.costBRL}
                         onChange={(val) => {
-                          const brl = val || 0;
                           const rate = settings.dollarRate || 5.75;
                           setFormData({
                             ...formData,
-                            costBRL: brl,
-                            costUSD: rate > 0 ? Math.round((brl / rate) * 100) / 100 : 0,
+                            costBRL: val,
+                            costUSD: val !== null && rate > 0 ? Math.round((val / rate) * 100) / 100 : null,
                           });
                         }}
                       />
