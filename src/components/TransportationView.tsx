@@ -680,7 +680,7 @@ export const TransportationView: React.FC = () => {
                             {rental.pickupLocation}
                           </p>
                           <p className="text-xs text-slate-700 font-semibold pt-1">
-                            📅 {formatDateBR(rental.pickupDate)} às ⏱ a partir de {rental.pickupTime || '14:30'}
+                            📅 {formatDateBR(rental.pickupDate)} • A partir de {rental.pickupTime || '14:30'}
                           </p>
                         </div>
 
@@ -694,7 +694,7 @@ export const TransportationView: React.FC = () => {
                             {rental.dropoffLocation}
                           </p>
                           <p className="text-xs text-slate-700 font-semibold pt-1">
-                            📅 {formatDateBR(rental.dropoffDate)} às ⏱ até {rental.dropoffTime || '12:00'}
+                            📅 {formatDateBR(rental.dropoffDate)} • Até {rental.dropoffTime || '12:00'}
                           </p>
                         </div>
 
@@ -1285,7 +1285,7 @@ export const TransportationView: React.FC = () => {
                       />
                     </div>
                     <div className="space-y-1.5">
-                      <label className="text-[11px] font-bold text-slate-700 block">Hora</label>
+                      <label className="text-[11px] font-bold text-slate-700 block">Hora (A partir de - Limite inicial)</label>
                       <input
                         type="time"
                         value={formData.pickupTime}
@@ -1294,15 +1294,20 @@ export const TransportationView: React.FC = () => {
                       />
                     </div>
                     <div className="col-span-2 sm:col-span-1 space-y-1.5">
-                      <label className="text-[11px] font-bold text-slate-700 block">Status</label>
+                      <label className="text-[11px] font-bold text-slate-700 block">Status da Reserva</label>
                       <select
                         value={formData.status}
                         onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
                         className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs"
                       >
-                        <option value="Reservado / Confirmado">✅ Reservado</option>
+                        {formData.status && !['Reservado / Confirmado', 'Pago', 'Pendente', 'Concluído', 'Planejado', 'Planejando'].includes(formData.status) && (
+                          <option value={formData.status}>{formData.status} (Legado)</option>
+                        )}
+                        <option value="Reservado / Confirmado">✅ Reservado / Confirmado</option>
                         <option value="Pago">💰 Pago</option>
                         <option value="Pendente">⚠️ Pendente</option>
+                        <option value="Concluído">🏁 Concluído</option>
+                        <option value="Planejado">📋 Planejado (Legado)</option>
                       </select>
                     </div>
                   </div>
@@ -1337,7 +1342,7 @@ export const TransportationView: React.FC = () => {
                       />
                     </div>
                     <div className="space-y-1.5">
-                      <label className="text-[11px] font-bold text-slate-700 block">Hora</label>
+                      <label className="text-[11px] font-bold text-slate-700 block">Hora (Até - Prazo máximo)</label>
                       <input
                         type="time"
                         value={formData.dropoffTime}

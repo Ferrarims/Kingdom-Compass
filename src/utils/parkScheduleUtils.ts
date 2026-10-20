@@ -3318,23 +3318,37 @@ export function syncAllEventsToHourlySchedule(
 
           const fromCoords = estimateAccommodationCoordinates(fromName, fromAddr);
           const toCoords = estimateAccommodationCoordinates(toName, toAddr);
-          const driveMinsOSRM = isIdenticalAddr ? 0 : calculateDriveTimeMinutes(fromCoords, toCoords);
+          const internalApproxMins = isIdenticalAddr ? 0 : calculateDriveTimeMinutes(fromCoords, toCoords);
           const isMiamiToKissimmee = fromName.toLowerCase().includes('brickell') || fromName.toLowerCase().includes('miami');
-          const googleMapsEstMins = isMiamiToKissimmee ? 287 : driveMinsOSRM;
-          const conservativeMins = Math.max(driveMinsOSRM, googleMapsEstMins);
+          
+          // Registered / manual reference estimate for Miami-Kissimmee: 287 minutes (approx 4h47m) without live traffic
+          const registeredEstimateMins = isMiamiToKissimmee ? 287 : internalApproxMins;
+          const conservativeMins = registeredEstimateMins;
 
           const departureTime = accCheckingOutToday.checkOutTime || '11:00';
-          const arrivalTimeEst = addMinutesToTimeString(departureTime, conservativeMins);
+          const [depH, depM] = departureTime.split(':').map(v => parseInt(v, 10));
+          const totalDepMins = (isNaN(depH) ? 11 : depH) * 60 + (isNaN(depM) ? 0 : depM);
+          const totalArrMins = totalDepMins + conservativeMins;
+          const arrH = Math.floor(totalArrMins / 60) % 24;
+          const arrM = totalArrMins % 60;
+          const arrivalTimeEst = `${String(arrH).padStart(2, '0')}:${String(arrM).padStart(2, '0')}`;
+
           const officialCheckIn = accCheckingInToday.checkInTime || '16:00';
-          const marginMins = (16 * 60) - (15 * 60 + 47); // 13 minutes margin
+          const [ciH, ciM] = officialCheckIn.split(':').map(v => parseInt(v, 10));
+          const totalCiMins = (isNaN(ciH) ? 16 : ciH) * 60 + (isNaN(ciM) ? 0 : ciM);
+          const marginMins = totalCiMins - totalArrMins;
+
+          const hoursPart = Math.floor(conservativeMins / 60);
+          const minsPart = conservativeMins % 60;
+          const durationFormatted = `${hoursPart}h${String(minsPart).padStart(2, '0')}m`;
 
           const driveTitle = `🚗 Deslocamento de Carro: ${fromName} ➔ ${toName}`;
           const destinationLocation = toAddr || '4009 Venetian Bay Dr, Kissimmee, FL 34741';
           const driveNotes = isIdenticalAddr
             ? `⚠️ Divergência no cadastro (Endereço não validado): O endereço cadastrado para ${fromName} (${fromAddr}) é idêntico ao do ${toName}.`
             : isMiamiToKissimmee
-            ? `Deslocamento Miami ➔ Kissimmee. Fontes de estimativa (ambas são estimativas sem tráfego ao vivo): OpenStreetMap/OSRM (~${driveMinsOSRM} min) vs Google Maps (~${googleMapsEstMins} min). Usando a estimativa mais conservadora (${conservativeMins} min / ~4h47m): saída às ${departureTime} prevê chegada às ${arrivalTimeEst}, com margem de ${marginMins} minutos até o check-in das ${officialCheckIn}. Origem: ${fromName} (${fromAddr}). Destino: ${toName} (${toAddr}).`
-            : `Trajeto de carro estimado: OpenStreetMap/OSRM (~${driveMinsOSRM} min) vs Google Maps (~${googleMapsEstMins} min). Destino: ${toAddr || toName}.`;
+            ? `Deslocamento Miami ➔ Kissimmee. Estimativa registrada/manual de referência: ${conservativeMins} min (${durationFormatted}) sem tráfego ao vivo (cálculo interno por distância e velocidade média, sem consulta atual de OSRM ou Google Maps). Partida às ${departureTime} prevê chegada estimada às ${arrivalTimeEst}, deixando uma margem de ${marginMins} minutos até o check-in das ${officialCheckIn}. Para sincronizar este evento e o endereço real no banco sem duplicatas, clique em 'Salvar' no roteiro do Dia 3 pela interface. Origem: ${fromName} (${fromAddr}). Destino: ${toName} (${toAddr}).`
+            : `Trajeto de carro estimado (cálculo interno por distância e velocidade média): ~${conservativeMins} min. Destino: ${toAddr || toName}. Para sincronizar, clique em 'Salvar' no roteiro.`;
 
           const splitDriveItem: HourlyScheduleItem = {
             id: `auto-acc-split-drive-${day.date}`,
@@ -3348,7 +3362,12 @@ export function syncAllEventsToHourlySchedule(
             completed: false,
           };
 
-          const existingSplitIdx = items.findIndex((i) => i.id === `auto-acc-split-drive-${day.date}` || (i.title || '').includes('Deslocamento entre Acomodações'));
+          const existingSplitIdx = items.findIndex((i) => 
+            i.id === `auto-acc-split-drive-${day.date}` || 
+            (i.sourceId && i.sourceId.includes('split-drive-')) ||
+            (i.title || '').includes('Deslocamento entre Acomodações') ||
+            (i.title || '').includes('Deslocamento de Carro')
+          );
           if (existingSplitIdx >= 0) {
             items[existingSplitIdx] = { ...items[existingSplitIdx], ...splitDriveItem, id: items[existingSplitIdx].id };
           } else {
