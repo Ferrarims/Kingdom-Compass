@@ -28,24 +28,16 @@ export const LiveExchangeRateWidget: React.FC = () => {
     applyLiveRateToTrip,
   } = usePlanner();
 
-  const [exchangeData, setExchangeData] = useState<ExchangeRateData | null>(liveExchangeRate);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
-  // Sync with context's liveExchangeRate when available
-  useEffect(() => {
-    if (liveExchangeRate) {
-      setExchangeData(liveExchangeRate);
-    }
-  }, [liveExchangeRate]);
-
-  const isUnavailable = !exchangeData && !isFetchingExchangeRate;
-  const isEstimate = !!exchangeData?.isEstimate;
-  const isRealFetched = exchangeData && !exchangeData.isEstimate;
+  const isUnavailable = !liveExchangeRate && !isFetchingExchangeRate;
+  const isEstimate = !!liveExchangeRate?.isEstimate;
+  const isRealFetched = liveExchangeRate && !liveExchangeRate.isEstimate;
 
   const displayRate = isRealFetched
-    ? exchangeData.rate
+    ? liveExchangeRate.rate
     : isEstimate
-    ? exchangeData.rate
+    ? liveExchangeRate.rate
     : settings.dollarRate || 5.75;
 
   // Quick Converter / Simulator States
@@ -229,7 +221,7 @@ export const LiveExchangeRateWidget: React.FC = () => {
                       ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                       : 'bg-white text-slate-600 border-slate-200'
                   }`}>
-                    {exchangeData?.source || 'Taxa Manual da Viagem'}
+                    {liveExchangeRate?.source || 'Taxa Manual da Viagem'}
                   </span>
                 </div>
 
@@ -243,21 +235,21 @@ export const LiveExchangeRateWidget: React.FC = () => {
                     / 1 US$
                   </span>
 
-                  {isRealFetched && exchangeData?.pctChange !== undefined && (
+                  {isRealFetched && liveExchangeRate?.pctChange !== undefined && (
                     <span
                       className={`text-[11px] font-bold px-2 py-0.5 rounded-md flex items-center gap-0.5 ${
-                        exchangeData.pctChange >= 0
+                        liveExchangeRate.pctChange >= 0
                           ? 'bg-rose-100 text-rose-700'
                           : 'bg-emerald-100 text-emerald-700'
                       }`}
                     >
-                      {exchangeData.pctChange >= 0 ? (
+                      {liveExchangeRate.pctChange >= 0 ? (
                         <TrendingUp className="w-3 h-3" />
                       ) : (
                         <TrendingDown className="w-3 h-3" />
                       )}
-                      {exchangeData.pctChange >= 0 ? '+' : ''}
-                      {exchangeData.pctChange.toFixed(2)}%
+                      {liveExchangeRate.pctChange >= 0 ? '+' : ''}
+                      {liveExchangeRate.pctChange.toFixed(2)}%
                     </span>
                   )}
                 </div>
@@ -269,7 +261,7 @@ export const LiveExchangeRateWidget: React.FC = () => {
                       Máxima do Dia
                     </span>
                     <strong className="text-slate-700 font-mono">
-                      {isRealFetched && exchangeData?.high ? `R$ ${exchangeData.high.toFixed(2)}` : 'N/D (Não consultada)'}
+                      {isRealFetched && liveExchangeRate?.high ? `R$ ${liveExchangeRate.high.toFixed(2)}` : 'N/D (Não consultada)'}
                     </strong>
                   </div>
 
@@ -278,7 +270,7 @@ export const LiveExchangeRateWidget: React.FC = () => {
                       Mínima do Dia
                     </span>
                     <strong className="text-slate-700 font-mono">
-                      {isRealFetched && exchangeData?.low ? `R$ ${exchangeData.low.toFixed(2)}` : 'N/D (Não consultada)'}
+                      {isRealFetched && liveExchangeRate?.low ? `R$ ${liveExchangeRate.low.toFixed(2)}` : 'N/D (Não consultada)'}
                     </strong>
                   </div>
                 </div>
