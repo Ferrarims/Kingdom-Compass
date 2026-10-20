@@ -494,6 +494,8 @@ export interface AccommodationBooking {
 
 export interface ExchangeRateData {
   rate: number;
+  /** True only for a local reference value not returned by a quote provider. */
+  isEstimated?: boolean;
   bid?: number;
   ask?: number;
   high?: number;
