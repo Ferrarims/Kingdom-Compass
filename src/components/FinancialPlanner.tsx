@@ -820,7 +820,7 @@ export const FinancialPlanner: React.FC = () => {
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div className="space-y-1.5">
                       <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
-                        Valor a Pagar (US$)
+                        Valor a Pagar (US$) <span className="text-[9px] font-normal text-slate-400 lowercase">(vazio=0)</span>
                       </label>
                       <MoneyInput
                         currency="USD"
@@ -831,7 +831,7 @@ export const FinancialPlanner: React.FC = () => {
 
                     <div className="space-y-1.5">
                       <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
-                        Valor a Pagar (R$)
+                        Valor a Pagar (R$) <span className="text-[9px] font-normal text-slate-400 lowercase">(vazio=0)</span>
                       </label>
                       <MoneyInput
                         currency="BRL"
