@@ -10,7 +10,8 @@ export type CurrencyType = 'BRL' | 'USD';
 
 /**
  * Parses any input string, number, or null/undefined into a numeric value.
- * Handles BRL format (1.234,56) and USD format (1,234.56) strictly based on explicit currency parameter.
+ * Requires explicit currency (`'BRL'` or `'USD'`).
+ * Strict parsing: rejects non-numeric strings, handles localized formats.
  */
 export const parseInputToNumber = (valStr: string | number | undefined | null, currency: CurrencyType = 'BRL'): number => {
   if (valStr === undefined || valStr === null || valStr === '') return 0;
@@ -19,7 +20,7 @@ export const parseInputToNumber = (valStr: string | number | undefined | null, c
   let clean = String(valStr).trim();
   if (!clean) return 0;
 
-  // Remove currency symbols if present
+  // Remove currency symbols and whitespace
   clean = clean.replace(/[R$US$\s]/g, '');
 
   if (currency === 'BRL') {
