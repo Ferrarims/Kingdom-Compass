@@ -37,10 +37,15 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
     }
   }, [value, currency]);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const raw = e.target.value;
-    const digits = raw.replace(/\D/g, '');
+  const handleInput = (e: React.FormEvent<HTMLInputElement>) => {
+    const target = e.currentTarget;
+    const raw = target.value;
+    const selectionEnd = target.selectionEnd || 0;
 
+    // Count digits before cursor in raw input
+    const digitsBeforeCursor = raw.slice(0, selectionEnd).replace(/\D/g, '').length;
+
+    const digits = raw.replace(/\D/g, '');
     if (!digits) {
       setDisplayValue('');
       onChange(required ? 0 : null);
@@ -50,7 +55,26 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
     // Banking right-to-left cent insertion
     const numericVal = parseInt(digits, 10) / 100;
     onChange(numericVal);
-    setDisplayValue(formatInputDisplay(numericVal, currency));
+    const formatted = formatInputDisplay(numericVal, currency);
+    setDisplayValue(formatted);
+
+    // Restore cursor position based on digit index
+    requestAnimationFrame(() => {
+      if (inputRef.current) {
+        let digitCount = 0;
+        let newCursorPos = formatted.length;
+        for (let i = 0; i < formatted.length; i++) {
+          if (/\d/.test(formatted[i])) {
+            digitCount++;
+            if (digitCount === digitsBeforeCursor) {
+              newCursorPos = i + 1;
+              break;
+            }
+          }
+        }
+        inputRef.current.setSelectionRange(newCursorPos, newCursorPos);
+      }
+    });
   };
 
   const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
@@ -58,8 +82,11 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
     const pasteText = e.clipboardData.getData('text').trim();
     if (!pasteText) return;
 
-    // Clean currency symbol if present
-    const cleanPaste = pasteText.replace(currency === 'BRL' ? /^[R\$\s]*/i : /^[\$\s]*/, '').trim();
+    // Clean currency symbols and prefixes
+    const cleanPaste = pasteText
+      .replace(/^(R\$|US\$|\$|BRL|USD)\s*/i, '')
+      .replace(/\s*(BRL|USD)$/i, '')
+      .trim();
     
     // Strict validation using parseInputToNumber
     const parsedNum = parseInputToNumber(cleanPaste, currency);
@@ -68,7 +95,7 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
       onChange(parsedNum);
       setDisplayValue(formatInputDisplay(parsedNum, currency));
     } else {
-      alert(`Valor colado inválido para o formato ${currency}. Esperado: ${currency === 'BRL' ? '1.234,56' : '1,234.56'}`);
+      alert(`Valor colado inválido para o formato ${currency}. Esperado: ${currency === 'BRL' ? 'R$ 1.234,56' : 'US$ 1,234.56'}`);
     }
   };
 
@@ -86,7 +113,7 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
         id={id}
         name={name}
         value={displayValue}
-        onChange={handleChange}
+        onInput={handleInput}
         onPaste={handlePaste}
         placeholder={placeholder || (currency === 'BRL' ? '0,00' : '0.00')}
         disabled={disabled}

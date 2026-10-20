@@ -39,7 +39,10 @@ export const parseInputToNumber = (valStr: string | number | null | undefined, c
   if (typeof valStr === 'number') {
     return isNaN(valStr) ? null : valStr;
   }
-  const clean = String(valStr).trim();
+  const clean = String(valStr)
+    .replace(/^(R\$|US\$|\$|BRL|USD)\s*/i, '')
+    .replace(/\s*(BRL|USD)$/i, '')
+    .trim();
   if (!clean) return null;
 
   if (currency === 'BRL') {
