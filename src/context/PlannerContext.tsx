@@ -1067,21 +1067,22 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
       const remoteTrips = result.trips;
       if (remoteTrips && remoteTrips.length > 0) {
+        const targetTripId = '78bbd4b1-2857-43d0-9520-2318a3b157a3';
+        
         const reconciledTrips = await Promise.all(remoteTrips.map(async (trip) => {
-          const originalRawDays = JSON.parse(JSON.stringify(trip.rawDays || []));
-          const reconciledTrip = auditAndCorrectTrip(trip);
-          
-          if (reconciledTrip.rawDays) {
-            for (let i = 0; i < reconciledTrip.rawDays.length; i++) {
-              const day = reconciledTrip.rawDays[i];
-              const originalDay = originalRawDays[i];
-              
-              if (JSON.stringify(day.hourlySchedule || []) !== JSON.stringify(originalDay?.hourlySchedule || [])) {
-                await SupabaseService.saveItineraryDay(reconciledTrip.id, day, reconciledTrip);
+          if (trip.id === targetTripId && trip.rawDays) {
+            const day1 = trip.rawDays.find(d => d.dayNumber === 1);
+            if (day1) {
+              const success = await reconcileItineraryDay(trip, day1);
+              if (!success) {
+                setSupabaseStatus((prev) => ({ ...prev, error: `Falha ao persistir alterações automáticas no Dia 1 da viagem ${targetTripId}.` }));
+                return trip;
               }
+              // Update local object to reflect the change
+              day1.hourlySchedule = deduplicateHourlySchedule(syncAllEventsToHourlySchedule(day1, trip));
             }
           }
-          return reconciledTrip;
+          return trip;
         }));
 
         setTrips((prevTrips) => {
@@ -1159,6 +1160,20 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
           const remoteTrips = result.trips;
           if (remoteTrips && remoteTrips.length > 0) {
+            const targetTripId = '78bbd4b1-2857-43d0-9520-2318a3b157a3';
+            
+            await Promise.all(remoteTrips.map(async (trip) => {
+              if (trip.id === targetTripId && trip.rawDays) {
+                const day1 = trip.rawDays.find(d => d.dayNumber === 1);
+                if (day1) {
+                  await reconcileItineraryDay(trip, day1);
+                  // Update local object to reflect the change
+                  day1.hourlySchedule = deduplicateHourlySchedule(syncAllEventsToHourlySchedule(day1, trip));
+                }
+              }
+              return trip;
+            }));
+
             setTrips((prevTrips) => {
               const merged = mergeLocalAndRemoteTrips(prevTrips, remoteTrips);
               saveTripEmergencyBackup(merged);
@@ -6055,3 +6070,20 @@ export const usePlanner = () => {
   }
   return context;
 };
+
+export async function reconcileItineraryDay(trip: Trip, day: ItineraryDay): Promise<boolean> {
+  const originalSchedule = JSON.stringify(day.hourlySchedule || []);
+  const reconciledSchedule = syncAllEventsToHourlySchedule(day, trip);
+  const newSchedule = deduplicateHourlySchedule(reconciledSchedule);
+  
+  if (JSON.stringify(newSchedule) !== originalSchedule) {
+    const dayToPersist = { ...day, hourlySchedule: newSchedule };
+    const res = await SupabaseService.saveItineraryDay(trip.id, dayToPersist, trip);
+    if (!res.success) {
+      console.error(`Falha ao persistir Dia ${day.dayNumber}:`, res.error);
+      return false;
+    }
+    return true;
+  }
+  return true;
+}
