@@ -225,12 +225,12 @@ export const AccommodationsView: React.FC = () => {
     }
   };
 
-  const [isSaving, setIsSaving] = useState(false);
+  const [isSavingAcc, setIsSavingAcc] = useState(false);
 
   const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSaving) return;
-    setIsSaving(true);
+    if (isSavingAcc) return;
+    setIsSavingAcc(true);
     try {
       const accName = formData.name.trim() || 'Nova Hospedagem';
       const dataToSave = { ...formData, name: accName };
@@ -276,7 +276,7 @@ export const AccommodationsView: React.FC = () => {
     } catch (err: any) {
       setValidationError(err?.message || 'Erro inesperado ao salvar hospedagem.');
     } finally {
-      setIsSaving(false);
+      setIsSavingAcc(false);
     }
   };
 
@@ -286,18 +286,24 @@ export const AccommodationsView: React.FC = () => {
     setTimeout(() => setCopiedCodeId(null), 2500);
   };
 
-  const handleAddAttachmentSubmit = (e: React.FormEvent) => {
+  const [isSavingAttachment, setIsSavingAttachment] = useState(false);
+  const handleAddAttachmentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!attachmentModalAccId || !newAttName) return;
-
-    addAccommodationAttachment(attachmentModalAccId, {
-      name: newAttName,
-      type: newAttType,
-      url: '#',
-    });
-
-    setNewAttName('');
-    setAttachmentModalAccId(null);
+    if (!attachmentModalAccId || !newAttName || isSavingAttachment) return;
+    setIsSavingAttachment(true);
+    try {
+      await addAccommodationAttachment(attachmentModalAccId, {
+        name: newAttName,
+        type: newAttType,
+        url: '#',
+      });
+      setNewAttName('');
+      setAttachmentModalAccId(null);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsSavingAttachment(false);
+    }
   };
 
   const { handleBackdropClick: handleAccModalBackdrop } = useModalKeyEvents({
@@ -1634,9 +1640,20 @@ export const AccommodationsView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 rounded-lg bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] cursor-pointer"
+                  disabled={isSavingAttachment}
+                  className="px-4 py-1.5 rounded-lg bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
                 >
-                  Salvar
+                  {isSavingAttachment ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Salvando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Salvar</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

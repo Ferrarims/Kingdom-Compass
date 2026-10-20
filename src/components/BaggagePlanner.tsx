@@ -96,19 +96,26 @@ export const BaggagePlanner: React.FC = () => {
     });
   };
 
-  const handleSaveEdit = (e?: React.FormEvent) => {
+  const [isSaving, setIsSaving] = useState(false);
+  const handleSaveEdit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!editingItem || !editForm.name.trim()) return;
-
-    updateBaggageItem({
-      ...editingItem,
-      name: editForm.name.trim(),
-      category: editForm.category,
-      quantity: Math.max(1, editForm.quantity || 1),
-      travelerId: editForm.travelerId,
-      packed: editForm.packed,
-    });
-    setEditingItem(null);
+    if (!editingItem || !editForm.name.trim() || isSaving) return;
+    setIsSaving(true);
+    try {
+      updateBaggageItem({
+        ...editingItem,
+        name: editForm.name.trim(),
+        category: editForm.category,
+        quantity: Math.max(1, editForm.quantity || 1),
+        travelerId: editForm.travelerId,
+        packed: editForm.packed,
+      });
+      setEditingItem(null);
+    } catch (err) {
+      console.error('Erro ao salvar bagagem:', err);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Weather & duration detected automatically from "Planeje a Data"
@@ -1508,11 +1515,16 @@ export const BaggagePlanner: React.FC = () => {
                 </button>
                 <button
                   type="submit"
+                  disabled={isSaving}
                   id="btn-save-edit-baggage"
-                  className="px-5 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#253D6B] inline-flex items-center gap-2 cursor-pointer shadow-sm transition-all"
+                  className="px-5 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#253D6B] inline-flex items-center gap-2 cursor-pointer shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Check className="w-4 h-4 text-[#D4AF37]" />
-                  <span>Salvar</span>
+                  {isSaving ? (
+                    <RefreshCw className="w-4 h-4 animate-spin text-[#D4AF37]" />
+                  ) : (
+                    <Check className="w-4 h-4 text-[#D4AF37]" />
+                  )}
+                  <span>{isSaving ? 'Salvando...' : 'Salvar'}</span>
                 </button>
               </div>
             </form>

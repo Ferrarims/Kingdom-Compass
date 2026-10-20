@@ -27,6 +27,7 @@ import {
   CreditCard,
   X,
   Eye,
+  RefreshCw,
 } from 'lucide-react';
 import { usePlanner, formatDisplayDate, getTripEndDate } from '../context/PlannerContext';
 import { FlightSegment } from '../types';
@@ -166,6 +167,7 @@ export const FlightsView: React.FC = () => {
     setTimeout(() => setCopiedPnr(null), 2000);
   };
 
+  const [isSaving, setIsSaving] = useState(false);
   const handleOpenAddModal = () => {
     setEditingFlight(null);
     setFormData({
