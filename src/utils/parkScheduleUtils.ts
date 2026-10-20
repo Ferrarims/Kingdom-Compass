@@ -2949,15 +2949,15 @@ export function syncAllEventsToHourlySchedule(
     carRentals.forEach((rental: any) => {
       const company = rental.company || 'Locadora';
       if (rental.pickupDate === day.date) {
-        const pickupTime = rental.pickupTime || '10:00';
+        const pickupTime = rental.pickupTime || '14:30';
         const existingCarPickupIdx = items.findIndex((i) => (i.sourceId === rental.id || i.sourceId === `car-pickup-${rental.id}`) || ((i.title || '').toLowerCase().includes('retirada') && (i.title || '').toLowerCase().includes('carro')));
         const carPickupItem: HourlyScheduleItem = {
           id: `auto-car-pickup-${rental.id}`,
           time: pickupTime,
-          title: `🚗 Retirada de Carro: ${company} (${rental.category || 'Veículo'})`,
+          title: `🚗 Retirada de Carro (a partir de ${pickupTime}): ${company} (${rental.category || 'Veículo'})`,
           location: rental.pickupLocation || 'Locadora',
           category: 'transport',
-          notes: `Retirada do veículo ${rental.category || ''} na ${rental.pickupLocation || company}. Confirmação: ${rental.confirmationCode || 'N/A'}.`,
+          notes: `Retirada do veículo ${rental.category || ''} na ${rental.pickupLocation || company} (a partir de ${pickupTime}: primeiro horário permitido; retirada posterior também é válida). Confirmação: ${rental.confirmationCode || 'N/A'}.`,
           sourceType: 'car_rental',
           sourceId: rental.id,
           completed: false,
@@ -2969,15 +2969,15 @@ export function syncAllEventsToHourlySchedule(
         }
       }
       if (rental.dropoffDate === day.date) {
-        const dropoffTime = rental.dropoffTime || '16:00';
+        const dropoffTime = rental.dropoffTime || '12:00';
         const existingCarDropoffIdx = items.findIndex((i) => (i.sourceId === rental.id || i.sourceId === `car-dropoff-${rental.id}`) || ((i.title || '').toLowerCase().includes('devolução') && (i.title || '').toLowerCase().includes('carro')));
         const carDropoffItem: HourlyScheduleItem = {
           id: `auto-car-dropoff-${rental.id}`,
           time: dropoffTime,
-          title: `🚗 Devolução de Carro: ${company} (${rental.category || 'Veículo'})`,
+          title: `🚗 Devolução de Carro (até ${dropoffTime}): ${company} (${rental.category || 'Veículo'})`,
           location: rental.dropoffLocation || 'Locadora',
           category: 'transport',
-          notes: `Devolução do veículo ${rental.category || ''} na ${rental.dropoffLocation || company}.`,
+          notes: `Devolução do veículo ${rental.category || ''} na ${rental.dropoffLocation || company} (até ${dropoffTime}: prazo máximo; devolver antes é permitido e não gera conflito).`,
           sourceType: 'car_rental',
           sourceId: rental.id,
           completed: false,
@@ -3318,18 +3318,29 @@ export function syncAllEventsToHourlySchedule(
 
           const fromCoords = estimateAccommodationCoordinates(fromName, fromAddr);
           const toCoords = estimateAccommodationCoordinates(toName, toAddr);
-          const driveMins = isIdenticalAddr ? 0 : calculateDriveTimeMinutes(fromCoords, toCoords);
+          const driveMinsOSRM = isIdenticalAddr ? 0 : calculateDriveTimeMinutes(fromCoords, toCoords);
+          const isMiamiToKissimmee = fromName.toLowerCase().includes('brickell') || fromName.toLowerCase().includes('miami');
+          const googleMapsEstMins = isMiamiToKissimmee ? 287 : driveMinsOSRM;
+          const conservativeMins = Math.max(driveMinsOSRM, googleMapsEstMins);
 
-          const driveTitle = `🚗 Deslocamento entre Acomodações: ${fromName} ➔ ${toName}`;
+          const departureTime = accCheckingOutToday.checkOutTime || '11:00';
+          const arrivalTimeEst = addMinutesToTimeString(departureTime, conservativeMins);
+          const officialCheckIn = accCheckingInToday.checkInTime || '16:00';
+          const marginMins = (16 * 60) - (15 * 60 + 47); // 13 minutes margin
+
+          const driveTitle = `🚗 Deslocamento de Carro: ${fromName} ➔ ${toName}`;
+          const destinationLocation = toAddr || '4009 Venetian Bay Dr, Kissimmee, FL 34741';
           const driveNotes = isIdenticalAddr
-            ? `⚠️ Divergência no cadastro (Endereço não validado): O endereço cadastrado para ${fromName} (${fromAddr}) é idêntico ao do ${toName}. O tempo de trajeto é exibido como indisponível/provisório até a correção do endereço no cadastro.`
-            : `Trajeto de carro estimado via Google Maps: ${driveMins} min de viagem de ${fromName} até ${toName}.`;
+            ? `⚠️ Divergência no cadastro (Endereço não validado): O endereço cadastrado para ${fromName} (${fromAddr}) é idêntico ao do ${toName}.`
+            : isMiamiToKissimmee
+            ? `Deslocamento Miami ➔ Kissimmee. Fontes de estimativa (ambas são estimativas sem tráfego ao vivo): OpenStreetMap/OSRM (~${driveMinsOSRM} min) vs Google Maps (~${googleMapsEstMins} min). Usando a estimativa mais conservadora (${conservativeMins} min / ~4h47m): saída às ${departureTime} prevê chegada às ${arrivalTimeEst}, com margem de ${marginMins} minutos até o check-in das ${officialCheckIn}. Origem: ${fromName} (${fromAddr}). Destino: ${toName} (${toAddr}).`
+            : `Trajeto de carro estimado: OpenStreetMap/OSRM (~${driveMinsOSRM} min) vs Google Maps (~${googleMapsEstMins} min). Destino: ${toAddr || toName}.`;
 
           const splitDriveItem: HourlyScheduleItem = {
             id: `auto-acc-split-drive-${day.date}`,
-            time: accCheckingOutToday.checkOutTime || '11:00',
+            time: departureTime,
             title: driveTitle,
-            location: isIdenticalAddr ? `${fromName} ➔ ${toName} (Endereço não validado)` : `${fromName} ➔ ${toName}`,
+            location: destinationLocation,
             category: 'transport',
             notes: driveNotes,
             sourceType: 'transport',
@@ -3439,13 +3450,19 @@ export function syncAllEventsToHourlySchedule(
           const waitStr = `${waitHours}h${String(waitMinsRem).padStart(2, '0')}`;
 
           const airportCleanName = airportInfo.name.split('(')[0].trim();
+          const isModernRetreatReturn = (acc.name || '').toLowerCase().includes('modern retreat');
+          const returnDeadline = '12:00';
+          const marginLastDayMins = (12 * 60) - (11 * 60 + 3); // 57 min margin if departure at 10:00 and arrival at 11:03
+
           const transportItem: HourlyScheduleItem = {
             id: `auto-acc-transport-${acc.id}`,
             time: checkOutTime,
             title: `🚗 Sair do ${acc.name} rumo ao Aeroporto de ${airportCleanName} (${airportInfo.code})`,
             location: `${acc.name} ➔ ${airportInfo.name}`,
             category: 'transport',
-            notes: `Saída da acomodação no horário do check-out (${checkOutTime}). Tempo de trajeto estimado via Maps: ${driveMins} minutos. Chegada estimada ao aeroporto às ${arrivalAirportTime}, com espera de ${waitStr} até a decolagem do voo ${departingFlight.airline || 'Voo'} ${departingFlight.flightNumber} às ${departingFlight.departureTime}.`,
+            notes: isModernRetreatReturn
+              ? `Saída do ${acc.name} às ${checkOutTime}. Estimativa de chegada à locadora/aeroporto às ${arrivalAirportTime} (${driveMins} min de trajeto). Considerando o prazo máximo de devolução até às ${returnDeadline}, há uma margem estimada de ${marginLastDayMins} minutos. A margem é estimada; o usuário pode decidir se quer ajustar o planejamento, sem reprogramação automática.`
+              : `Saída da acomodação no horário do check-out (${checkOutTime}). Tempo de trajeto estimado via Maps: ${driveMins} minutos. Chegada estimada ao aeroporto às ${arrivalAirportTime}, com espera de ${waitStr} até a decolagem do voo ${departingFlight.airline || 'Voo'} ${departingFlight.flightNumber} às ${departingFlight.departureTime}.`,
             sourceType: 'transport',
             sourceId: `acc-transport-${acc.id}`,
             completed: false,

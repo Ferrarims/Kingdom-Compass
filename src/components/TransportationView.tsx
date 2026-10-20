@@ -680,7 +680,7 @@ export const TransportationView: React.FC = () => {
                             {rental.pickupLocation}
                           </p>
                           <p className="text-xs text-slate-700 font-semibold pt-1">
-                            📅 {formatDateBR(rental.pickupDate)} às ⏱ {rental.pickupTime}
+                            📅 {formatDateBR(rental.pickupDate)} às ⏱ a partir de {rental.pickupTime || '14:30'}
                           </p>
                         </div>
 
@@ -694,7 +694,7 @@ export const TransportationView: React.FC = () => {
                             {rental.dropoffLocation}
                           </p>
                           <p className="text-xs text-slate-700 font-semibold pt-1">
-                            📅 {formatDateBR(rental.dropoffDate)} às ⏱ {rental.dropoffTime}
+                            📅 {formatDateBR(rental.dropoffDate)} às ⏱ até {rental.dropoffTime || '12:00'}
                           </p>
                         </div>
 
