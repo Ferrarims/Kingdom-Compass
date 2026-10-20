@@ -20,6 +20,7 @@ import {
 import { ParkTicketPurchase, Traveler } from '../types';
 import { usePlanner } from '../context/PlannerContext';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
+import { MoneyInput } from './MoneyInput';
 
 interface ParkTicketModalProps {
   isOpen: boolean;
@@ -1030,23 +1031,22 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
               4. Valores & Pagamento
             </label>
             <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="space-y-1">
                   <label className="text-[11px] font-bold text-slate-600 flex items-center justify-between">
                     Valor a Pagar (US$)
                     <span className="text-[9px] text-slate-400 font-mono">USD</span>
                   </label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">$</span>
-                    <input
-                      type="text"
-                      value={unitCostUSD}
-                      onChange={(e) => handleUnitUSDChange(e.target.value)}
-                      placeholder="0.00"
-                      className="w-full bg-white border border-slate-200 rounded-xl pl-7 pr-3 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                      id="input-ticket-cost-usd"
-                    />
-                  </div>
+                  <MoneyInput
+                    currency="USD"
+                    value={parseFloat(unitCostUSD) || 0}
+                    onChange={(val) => {
+                      const usd = val || 0;
+                      setUnitCostUSD(usd.toString());
+                      setUnitCostBRL((usd * dollarRate).toFixed(2));
+                    }}
+                    id="input-ticket-cost-usd"
+                  />
                 </div>
 
                 <div className="space-y-1">
@@ -1054,17 +1054,16 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
                     Valor a Pagar (R$)
                     <span className="text-[9px] text-slate-400 font-mono">BRL</span>
                   </label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">R$</span>
-                    <input
-                      type="text"
-                      value={unitCostBRL}
-                      onChange={(e) => handleUnitBRLChange(e.target.value)}
-                      placeholder="0,00"
-                      className="w-full bg-white border border-slate-200 rounded-xl pl-8 pr-3 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                      id="input-ticket-cost-brl"
-                    />
-                  </div>
+                  <MoneyInput
+                    currency="BRL"
+                    value={parseFloat(unitCostBRL) || 0}
+                    onChange={(val) => {
+                      const brl = val || 0;
+                      setUnitCostBRL(brl.toString());
+                      setUnitCostUSD(dollarRate > 0 ? (brl / dollarRate).toFixed(2) : '0');
+                    }}
+                    id="input-ticket-cost-brl"
+                  />
                 </div>
 
                 <div className="space-y-1">

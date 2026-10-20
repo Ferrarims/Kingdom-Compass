@@ -4,6 +4,7 @@ import { CarRentalBooking } from '../types';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { parseInputToNumber, formatInputDisplay } from '../utils/currency';
 import { TravelerSelector } from './TravelerSelector';
+import { MoneyInput } from './MoneyInput';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
 import {
   Car,
@@ -1323,17 +1324,11 @@ export const TransportationView: React.FC = () => {
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div className="space-y-1.5">
                       <label className="text-[11px] font-bold text-slate-700 block">Valor a Pagar (US$)</label>
-                      <input
-                        type="text"
-                        value={focusedField === 'costUSD' ? tempValue : formatInputDisplay(formData.costUSD || 0)}
-                        onFocus={() => {
-                          setFocusedField('costUSD');
-                          setTempValue(formData.costUSD ? formData.costUSD.toString().replace('.', ',') : '');
-                        }}
-                        onBlur={() => setFocusedField(null)}
-                        onChange={(e) => {
-                          setTempValue(e.target.value);
-                          const usd = parseInputToNumber(e.target.value);
+                      <MoneyInput
+                        currency="USD"
+                        value={formData.costUSD}
+                        onChange={(val) => {
+                          const usd = val || 0;
                           const rate = settings.dollarRate || 5.75;
                           setFormData({
                             ...formData,
@@ -1341,22 +1336,15 @@ export const TransportationView: React.FC = () => {
                             costBRL: Math.round(usd * rate * 100) / 100,
                           });
                         }}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono font-bold text-[#1A2B4C] shadow-2xs focus:outline-none focus:ring-2 focus:ring-[#1A2B4C]/50"
                       />
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-[11px] font-bold text-slate-700 block">Valor a Pagar (R$)</label>
-                      <input
-                        type="text"
-                        value={focusedField === 'costBRL' ? tempValue : formatInputDisplay(formData.costBRL || 0)}
-                        onFocus={() => {
-                          setFocusedField('costBRL');
-                          setTempValue(formData.costBRL ? formData.costBRL.toString().replace('.', ',') : '');
-                        }}
-                        onBlur={() => setFocusedField(null)}
-                        onChange={(e) => {
-                          setTempValue(e.target.value);
-                          const brl = parseInputToNumber(e.target.value);
+                      <MoneyInput
+                        currency="BRL"
+                        value={formData.costBRL}
+                        onChange={(val) => {
+                          const brl = val || 0;
                           const rate = settings.dollarRate || 5.75;
                           setFormData({
                             ...formData,
@@ -1364,7 +1352,6 @@ export const TransportationView: React.FC = () => {
                             costUSD: rate > 0 ? Math.round((brl / rate) * 100) / 100 : 0,
                           });
                         }}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono font-bold text-[#1A2B4C] shadow-2xs focus:outline-none focus:ring-2 focus:ring-[#1A2B4C]/50"
                       />
                     </div>
                   </div>

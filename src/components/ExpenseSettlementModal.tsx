@@ -26,6 +26,7 @@ import { usePlanner } from '../context/PlannerContext';
 import { ExpenseItem, Traveler, SettlementPayment } from '../types';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { SupabaseService } from '../services/supabaseService';
+import { MoneyInput } from './MoneyInput';
 
 interface CustomAdjustment {
   id: string;
@@ -1044,14 +1045,10 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
                     <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
                       Valor (R$)
                     </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      placeholder="Ex: 50.00"
-                      value={newAdjAmount}
-                      onChange={(e) => setNewAdjAmount(e.target.value)}
-                      className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white font-mono"
-                      required
+                    <MoneyInput
+                      currency="BRL"
+                      value={parseFloat(newAdjAmount) || 0}
+                      onChange={(val) => setNewAdjAmount(val ? val.toString() : '')}
                     />
                   </div>
 

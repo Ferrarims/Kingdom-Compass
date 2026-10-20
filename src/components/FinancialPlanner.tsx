@@ -34,6 +34,7 @@ import { generateDeterministicUUID } from '../utils/uuid';
 import { TravelerSelector } from './TravelerSelector';
 import { ExpenseSettlementModal } from './ExpenseSettlementModal';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
+import { MoneyInput } from './MoneyInput';
 
 const CATEGORIES: ExpenseCategory[] = [
   'Passagens',
@@ -821,50 +822,22 @@ export const FinancialPlanner: React.FC = () => {
                       <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
                         Valor a Pagar (US$)
                       </label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">$</span>
-                        <input
-                          type="text"
-                          value={focusedField === 'estimatedValueUSD' ? tempValue : formatInputDisplay(estimatedValueUSD)}
-                          onFocus={() => {
-                            setFocusedField('estimatedValueUSD');
-                            setTempValue(estimatedValueUSD ? estimatedValueUSD.toString().replace('.', ',') : '');
-                          }}
-                          onBlur={() => setFocusedField(null)}
-                          onChange={(e) => {
-                            setTempValue(e.target.value);
-                            const parsed = parseInputToNumber(e.target.value);
-                            handleUSDChange(parsed);
-                          }}
-                          placeholder="0,00"
-                          className="w-full pl-8 pr-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-mono font-bold text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 shadow-2xs"
-                        />
-                      </div>
+                      <MoneyInput
+                        currency="USD"
+                        value={estimatedValueUSD}
+                        onChange={(val) => handleUSDChange(val || 0)}
+                      />
                     </div>
 
                     <div className="space-y-1.5">
                       <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
                         Valor a Pagar (R$)
                       </label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">R$</span>
-                        <input
-                          type="text"
-                          value={focusedField === 'estimatedValueBRL' ? tempValue : formatInputDisplay(estimatedValueBRL)}
-                          onFocus={() => {
-                            setFocusedField('estimatedValueBRL');
-                            setTempValue(estimatedValueBRL ? estimatedValueBRL.toString().replace('.', ',') : '');
-                          }}
-                          onBlur={() => setFocusedField(null)}
-                          onChange={(e) => {
-                            setTempValue(e.target.value);
-                            const parsed = parseInputToNumber(e.target.value);
-                            handleBRLChange(parsed);
-                          }}
-                          placeholder="0,00"
-                          className="w-full pl-8 pr-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-mono font-bold text-slate-800 bg-white focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 shadow-2xs"
-                        />
-                      </div>
+                      <MoneyInput
+                        currency="BRL"
+                        value={estimatedValueBRL}
+                        onChange={(val) => handleBRLChange(val || 0)}
+                      />
                     </div>
 
                     <div className="space-y-1.5">
@@ -889,25 +862,11 @@ export const FinancialPlanner: React.FC = () => {
                       <label className="block text-xs font-bold text-emerald-700 mb-1 uppercase tracking-wider">
                         Quanto já foi Pago? (R$)
                       </label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-2.5 text-xs text-emerald-600 font-bold">R$</span>
-                        <input
-                          type="text"
-                          value={focusedField === 'paidValueBRL' ? tempValue : formatInputDisplay(paidValueBRL)}
-                          onFocus={() => {
-                            setFocusedField('paidValueBRL');
-                            setTempValue(paidValueBRL ? paidValueBRL.toString().replace('.', ',') : '');
-                          }}
-                          onBlur={() => setFocusedField(null)}
-                          onChange={(e) => {
-                            setTempValue(e.target.value);
-                            const parsed = parseInputToNumber(e.target.value);
-                            setPaidValueBRL(parsed);
-                          }}
-                          placeholder="0,00"
-                          className="w-full pl-8 pr-3.5 py-2.5 rounded-xl border border-emerald-200 text-xs font-mono font-bold text-emerald-800 bg-emerald-50/30 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 shadow-2xs"
-                        />
-                      </div>
+                      <MoneyInput
+                        currency="BRL"
+                        value={paidValueBRL}
+                        onChange={(val) => setPaidValueBRL(val || 0)}
+                      />
                     </div>
                   )}
 

@@ -5,6 +5,7 @@ import { AccommodationBooking } from '../types';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
 import { TravelerSelector } from './TravelerSelector';
+import { MoneyInput } from './MoneyInput';
 import {
   Building2,
   Home,
@@ -1227,29 +1228,18 @@ export const AccommodationsView: React.FC = () => {
                         Valor a Pagar (US$)
                         <span className="text-[9px] font-mono text-slate-400 font-bold uppercase">USD</span>
                       </label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">$</span>
-                        <input
-                          type="text"
-                          value={focusedField === 'costUSD' ? tempValue : formatInputDisplay(formData.costUSD || 0)}
-                          onFocus={() => {
-                            setFocusedField('costUSD');
-                            setTempValue(formData.costUSD ? formData.costUSD.toString().replace('.', ',') : '');
-                          }}
-                          onBlur={() => {
-                            setFocusedField(null);
-                            const val = parseInputToNumber(tempValue);
-                            setFormData({
-                              ...formData,
-                              costUSD: val,
-                              costBRL: val * settings.dollarRate,
-                            });
-                          }}
-                          onChange={(e) => setTempValue(e.target.value)}
-                          className="w-full pl-7 pr-3.5 py-2 rounded-xl border border-slate-200 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] bg-white"
-                          placeholder="0,00"
-                        />
-                      </div>
+                      <MoneyInput
+                        currency="USD"
+                        value={formData.costUSD}
+                        onChange={(val) => {
+                          const v = val || 0;
+                          setFormData({
+                            ...formData,
+                            costUSD: v,
+                            costBRL: v * (settings.dollarRate || 5.75),
+                          });
+                        }}
+                      />
                     </div>
 
                     <div className="space-y-1">
@@ -1257,29 +1247,19 @@ export const AccommodationsView: React.FC = () => {
                         Valor a Pagar (R$)
                         <span className="text-[9px] font-mono text-slate-400 font-bold uppercase">BRL</span>
                       </label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">R$</span>
-                        <input
-                          type="text"
-                          value={focusedField === 'costBRL' ? tempValue : formatInputDisplay(formData.costBRL || 0)}
-                          onFocus={() => {
-                            setFocusedField('costBRL');
-                            setTempValue(formData.costBRL ? formData.costBRL.toString().replace('.', ',') : '');
-                          }}
-                          onBlur={() => {
-                            setFocusedField(null);
-                            const val = parseInputToNumber(tempValue);
-                            setFormData({
-                              ...formData,
-                              costBRL: val,
-                              costUSD: settings.dollarRate > 0 ? val / settings.dollarRate : 0,
-                            });
-                          }}
-                          onChange={(e) => setTempValue(e.target.value)}
-                          className="w-full pl-8 pr-3.5 py-2 rounded-xl border border-slate-200 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] bg-white"
-                          placeholder="0,00"
-                        />
-                      </div>
+                      <MoneyInput
+                        currency="BRL"
+                        value={formData.costBRL}
+                        onChange={(val) => {
+                          const v = val || 0;
+                          const rate = settings.dollarRate || 5.75;
+                          setFormData({
+                            ...formData,
+                            costBRL: v,
+                            costUSD: rate > 0 ? v / rate : 0,
+                          });
+                        }}
+                      />
                     </div>
 
                     <div className="space-y-1">

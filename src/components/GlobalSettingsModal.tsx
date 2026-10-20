@@ -22,6 +22,7 @@ import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
 import { parseInputToNumber, formatInputDisplay } from '../utils/currency';
 import { generateUUID } from '../utils/uuid';
+import { MoneyInput } from './MoneyInput';
 
 export const GlobalSettingsModal: React.FC = () => {
   const { isSettingsOpen, setIsSettingsOpen, settings, updateSettings, deleteTrip, trips, activeTripId } = usePlanner();
@@ -409,23 +410,11 @@ export const GlobalSettingsModal: React.FC = () => {
                 <DollarSign className="w-4 h-4 text-[#D4AF37]" />
                 Cotação Dólar (R$)
               </label>
-              <div className="relative">
-                <span className="absolute left-3 top-2 text-xs font-bold text-slate-400">R$</span>
-                <input
-                  id="input-dollar-rate"
-                  type="text"
-                  value={focusedField === 'dollarRate' ? tempValue : formatInputDisplay(dollarRate)}
-                  onFocus={() => {
-                    setFocusedField('dollarRate');
-                    setTempValue(dollarRate ? dollarRate.toString().replace('.', ',') : '');
-                  }}
-                  onBlur={() => setFocusedField(null)}
-                  onChange={(e) => {
-                    setTempValue(e.target.value);
-                    setDollarRate(parseInputToNumber(e.target.value) || 5.75);
-                  }}
-                  required
-                  className="w-full pl-8 pr-3 py-2 rounded-lg border border-slate-200 text-sm font-bold text-[#1A2B4C] focus:outline-none focus:ring-2 focus:ring-[#D4AF37] bg-white"
+              <div>
+                <MoneyInput
+                  currency="BRL"
+                  value={dollarRate}
+                  onChange={(val) => setDollarRate(val || 5.75)}
                 />
               </div>
               <p className="text-[11px] text-slate-500 mt-2">
