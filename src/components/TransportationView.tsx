@@ -229,15 +229,19 @@ export const TransportationView: React.FC = () => {
 
     setIsSaving(true);
     try {
-      await addCarRentalAttachment(attachmentModalRentalId, {
+      const res = await addCarRentalAttachment(attachmentModalRentalId, {
         name: newAttName.trim().endsWith('.pdf') ? newAttName.trim() : `${newAttName.trim()}.pdf`,
         type: newAttType,
         url: '#',
       });
-      setNewAttName('');
-      setAttachmentModalRentalId(null);
+      if (res.success) {
+        setNewAttName('');
+        setAttachmentModalRentalId(null);
+      } else {
+        alert(`Erro ao salvar anexo: ${res.error || 'Erro desconhecido'}`);
+      }
     } catch (error) {
-      console.error(error);
+      alert('Erro inesperado ao salvar anexo.');
     } finally {
       setIsSaving(false);
     }

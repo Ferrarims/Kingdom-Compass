@@ -757,16 +757,20 @@ export const ItineraryPlanner: React.FC = () => {
 
     setIsSaving(true);
     try {
-      await addAttachmentToDay(activeDay.id, {
+      const res = await addAttachmentToDay(activeDay.id, {
         name: newAttName.endsWith('.pdf') ? newAttName : `${newAttName}.pdf`,
         type: newAttType,
         url: '#',
         size: `${(Math.random() * 2 + 0.5).toFixed(1)} MB`,
       });
-      setNewAttName('');
-      setAttModalOpen(false);
+      if (res.success) {
+        setNewAttName('');
+        setAttModalOpen(false);
+      } else {
+        alert(`Erro ao salvar anexo: ${res.error || 'Erro desconhecido'}`);
+      }
     } catch (error) {
-      console.error(error);
+      alert('Erro inesperado ao salvar anexo.');
     } finally {
       setIsSaving(false);
     }

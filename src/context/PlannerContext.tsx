@@ -576,7 +576,7 @@ interface PlannerContextType {
   toggleDayCompleted: (id: string) => void;
   addItineraryDay: () => void;
   deleteItineraryDay: (id: string) => void;
-  addAttachmentToDay: (dayId: string, attachment: { name: string; type: 'pdf' | 'image' | 'ticket'; url: string; size?: string }) => void;
+  addAttachmentToDay: (dayId: string, attachment: { name: string; type: 'pdf' | 'image' | 'ticket'; url: string; size?: string }) => Promise<{ success: boolean; error?: string }>;
   removeAttachmentFromDay: (dayId: string, attachmentId: string) => void;
 
   // Flights
@@ -589,10 +589,10 @@ interface PlannerContextType {
 
   // Car Rentals & Transportation
   carRentals: CarRentalBooking[];
-  addCarRental: (rental: Omit<CarRentalBooking, 'id'>) => void;
-  updateCarRental: (id: string, updates: Partial<CarRentalBooking>) => void;
+  addCarRental: (rental: Omit<CarRentalBooking, 'id'>) => Promise<{ success: boolean; error?: string }>;
+  updateCarRental: (id: string, updates: Partial<CarRentalBooking>) => Promise<{ success: boolean; error?: string }>;
   deleteCarRental: (id: string) => void;
-  addCarRentalAttachment: (rentalId: string, attachment: Omit<CarRentalAttachment, 'id'>) => void;
+  addCarRentalAttachment: (rentalId: string, attachment: Omit<CarRentalAttachment, 'id'>) => Promise<{ success: boolean; error?: string }>;
   removeCarRentalAttachment: (rentalId: string, attachmentId: string) => void;
 
   // Accommodations & Hotels / Airbnb
@@ -3545,10 +3545,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     addNotification(`Removeu um dia do roteiro`);
   };
 
-  const addAttachmentToDay = (
+  const addAttachmentToDay = async (
     dayId: string,
     attachment: { name: string; type: 'pdf' | 'image' | 'ticket'; url: string; size?: string }
-  ) => {
+  ): Promise<{ success: boolean; error?: string }> => {
     const newAtt = {
       ...attachment,
       id: `att-${Date.now()}`,
@@ -3566,6 +3566,16 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       )
     );
     addNotification(`Anexou voucher "${attachment.name}"`);
+    
+    if (activeTripId) {
+      try {
+        await SupabaseService.saveItineraryAttachment(activeTripId, dayId, newAtt);
+        return { success: true };
+      } catch (e: any) {
+        return { success: false, error: e.message };
+      }
+    }
+    return { success: true };
   };
 
   const removeAttachmentFromDay = (dayId: string, attachmentId: string) => {
@@ -4775,7 +4785,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     });
   };
 
-  const addCarRental = (rental: Omit<CarRentalBooking, 'id'>) => {
+  const addCarRental = async (rental: Omit<CarRentalBooking, 'id'>): Promise<{ success: boolean; error?: string }> => {
     const newRental: CarRentalBooking = {
       ...rental,
       id: generateUUID(),
@@ -4786,10 +4796,17 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     syncCarRentalToItineraryDays(newRental);
     
     if (activeTripId) {
-      SupabaseService.saveCarRental(activeTripId, newRental, activeTrip || undefined);
+      try {
+        await SupabaseService.saveCarRental(activeTripId, newRental, activeTrip || undefined);
+        addNotification(`Cadastrou aluguel de veículo (${rental.company}) e sincronizou no orçamento e cronograma`);
+        return { success: true };
+      } catch (e: any) {
+        return { success: false, error: e.message };
+      }
     }
     
     addNotification(`Cadastrou aluguel de veículo (${rental.company}) e sincronizou no orçamento e cronograma`);
+    return { success: true };
   };
 
   const updateCarRental = (id: string, updates: Partial<CarRentalBooking>) => {
@@ -4839,10 +4856,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   };
 
-  const addCarRentalAttachment = (
+  const addCarRentalAttachment = async (
     rentalId: string,
     attachment: Omit<CarRentalAttachment, 'id'>
-  ) => {
+  ): Promise<{ success: boolean; error?: string }> => {
     const newAtt: CarRentalAttachment = {
       ...attachment,
       id: `att-car-${Date.now()}`,
@@ -4859,6 +4876,16 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       )
     );
     addNotification(`Anexou comprovante no veículo`);
+    
+    if (activeTripId) {
+      try {
+        await SupabaseService.saveCarRentalAttachment(activeTripId, rentalId, newAtt);
+        return { success: true };
+      } catch (e: any) {
+        return { success: false, error: e.message };
+      }
+    }
+    return { success: true };
   };
 
   const removeCarRentalAttachment = (rentalId: string, attachmentId: string) => {
