@@ -600,7 +600,7 @@ interface PlannerContextType {
   addAccommodation: (acc: Omit<AccommodationBooking, 'id'>) => Promise<{ success: boolean; error?: string }>;
   updateAccommodation: (id: string, updates: Partial<AccommodationBooking>) => Promise<{ success: boolean; error?: string }>;
   deleteAccommodation: (id: string) => Promise<{ success: boolean; error?: string }>;
-  addAccommodationAttachment: (accId: string, attachment: Omit<AccommodationAttachment, 'id'>) => void;
+  addAccommodationAttachment: (accId: string, attachment: Omit<AccommodationAttachment, 'id'>) => Promise<{ success: boolean; error?: string }>;
   removeAccommodationAttachment: (accId: string, attachmentId: string) => void;
   syncAccommodationToDays: (acc: AccommodationBooking, removeOnly?: boolean, previousAcc?: AccommodationBooking) => Promise<{ success: boolean; error?: string }>;
   syncAccommodationsToSupabase: () => Promise<boolean>;
@@ -2131,25 +2131,50 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           trip: newTrip,
         };
       } else {
+        // Safe compensation strictly scoped to the newly generated UUID (newId)
+        let cleanupSuccess = false;
+        try {
+          cleanupSuccess = await SupabaseService.deleteTrip(newId);
+        } catch (cleanupErr) {
+          console.warn('Erro ao executar compensação da viagem recém-criada:', cleanupErr);
+        }
+
+        const affectedTables = res.tableErrors && res.tableErrors.length > 0
+          ? res.tableErrors.map((t) => `${t.table} [${t.operation}]`).join(', ')
+          : 'trips / subcoleções';
+
+        const finalErrMsg = cleanupSuccess
+          ? `Falha ao persistir a viagem completa no Supabase: ${res.error}. A viagem parcial recém-gerada foi limpa com sucesso do banco de dados.`
+          : `Falha parcial na persistência da viagem no Supabase: ${res.error}. Atenção: a limpeza automática não pôde ser confirmada (tabelas afetadas: ${affectedTables}). Registros parciais podem ter permanecido no banco.`;
+
         setSupabaseStatus((prev) => ({
           ...prev,
           syncing: false,
-          error: res.error || 'Erro ao salvar viagem no banco de dados Supabase',
+          error: finalErrMsg,
         }));
         return {
           success: false,
-          error: res.error || 'Falha ao sincronizar viagem no Supabase',
+          error: finalErrMsg,
         };
       }
     } catch (err: any) {
+      let cleanupSuccess = false;
+      try {
+        cleanupSuccess = await SupabaseService.deleteTrip(newId);
+      } catch (cleanupErr) {
+        console.warn('Erro ao executar compensação no catch de addTrip:', cleanupErr);
+      }
+      const finalErrMsg = cleanupSuccess
+        ? `Erro inesperado na gravação da viagem: ${err?.message || 'Erro desconhecido'}. Os dados parciais foram limpos com sucesso do banco de dados.`
+        : `Erro inesperado na gravação da viagem: ${err?.message || 'Erro desconhecido'}. Atenção: a limpeza automática não pôde ser confirmada; registros parciais podem ter permanecido no banco de dados.`;
       setSupabaseStatus((prev) => ({
         ...prev,
         syncing: false,
-        error: err.message,
+        error: finalErrMsg,
       }));
       return {
         success: false,
-        error: err?.message || 'Erro inesperado na gravação da viagem',
+        error: finalErrMsg,
       };
     }
   };
@@ -2264,7 +2289,32 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           setRawDays(previousRawDays);
           setSettings(previousSettings);
         }
-        return { success: false, error: res.error || 'Falha ao salvar alterações da viagem no Supabase' };
+
+        // Evaluate partial writes in Supabase: attempt restoring previous state
+        const previousTrip = previousTrips.find((t) => t.id === id);
+        let databaseReverted = false;
+        let rollbackErrorDetails = '';
+        if (previousTrip) {
+          try {
+            const rollbackRes = await SupabaseService.syncTripToSupabase(previousTrip);
+            databaseReverted = rollbackRes.success;
+            if (!rollbackRes.success) {
+              rollbackErrorDetails = rollbackRes.error || '';
+            }
+          } catch (rErr: any) {
+            rollbackErrorDetails = rErr?.message || '';
+          }
+        }
+
+        const affectedTables = res.tableErrors && res.tableErrors.length > 0
+          ? res.tableErrors.map((t) => `${t.table} [${t.operation}]`).join(', ')
+          : 'subcoleções da viagem';
+
+        const errorMessage = databaseReverted
+          ? `Falha ao sincronizar alterações no Supabase: ${res.error}. O banco de dados foi restaurado ao estado anterior com sucesso.`
+          : `Falha parcial ao atualizar viagem: algumas alterações foram gravadas no Supabase mas houve erro em (${affectedTables}): ${res.error}. A reversão automática no banco não pôde ser confirmada (${rollbackErrorDetails || 'incompleta'}). Não assuma integridade prévia no servidor.`;
+
+        return { success: false, error: errorMessage };
       }
       return { success: true };
     }
@@ -3631,11 +3681,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       uploadedAt: new Date().toLocaleDateString('pt-BR'),
     };
     
-    if (activeTripId) {
+    if (activeTripId || supabaseStatus.connected) {
       try {
-        const res = await SupabaseService.saveItineraryAttachment(activeTripId, dayId, newAtt);
+        const res = await SupabaseService.saveItineraryAttachment(activeTripId || '', dayId, newAtt);
         if (!res || !res.success) {
-          return { success: false, error: res?.error || 'Não é possível salvar anexo: suporte de armazenamento indisponível no Supabase.' };
+          return { success: false, error: res?.error || 'Não é possível salvar anexo: suporte de armazenamento indisponível no Supabase para roteiro.' };
         }
         setRawDays((prev) =>
           prev.map((day) =>
@@ -3654,18 +3704,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
     }
 
-    setRawDays((prev) =>
-      prev.map((day) =>
-        day.id === dayId
-          ? {
-              ...day,
-              attachments: [...day.attachments, newAtt],
-            }
-          : day
-      )
-    );
-    addNotification(`Anexou voucher "${attachment.name}" (local)`);
-    return { success: true };
+    return {
+      success: false,
+      error: 'O esquema atual do Supabase não possui coluna nem tabela para armazenar anexos em itinerary_days. É necessária uma migração de esquema adicionando a coluna attachments (JSONB) para viabilizar a persistência.',
+    };
   };
 
   const removeAttachmentFromDay = (dayId: string, attachmentId: string) => {
@@ -4793,6 +4835,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     const pickupDayNum = rental.pickupDate ? Math.max(1, calculateDurationFromDates(settings.startDate, rental.pickupDate)) : 1;
     const dropoffDayNum = rental.dropoffDate ? Math.max(1, calculateDurationFromDates(settings.startDate, rental.dropoffDate)) : rawDays.length;
 
+    const initialDaysSnapshot = [...rawDays];
     let updatedDaysSnapshot: Omit<ItineraryDay, 'date'>[] = [];
     let pickupIndex = -1;
     let dropoffIndex = -1;
@@ -4879,17 +4922,68 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       };
 
       const daysToSaveIndices = Array.from(new Set([pickupIndex, dropoffIndex])).filter((idx) => idx !== -1);
-      for (const idx of daysToSaveIndices) {
-        const dayToSave = updatedDaysSnapshot[idx];
-        if (dayToSave) {
-          const saveRes = await SupabaseService.saveItineraryDay(activeTripId, dayToSave, fallbackTrip);
-          if (!saveRes.success) {
-            return {
-              success: false,
-              error: `Erro ao persistir horário de aluguel no Dia ${dayToSave.dayNumber}: ${saveRes.error || 'Falha no banco de dados'}`,
-            };
+      const savedIndices: number[] = [];
+
+      try {
+        for (const idx of daysToSaveIndices) {
+          const dayToSave = updatedDaysSnapshot[idx];
+          if (dayToSave) {
+            const saveRes = await SupabaseService.saveItineraryDay(activeTripId, dayToSave, fallbackTrip);
+            if (!saveRes.success) {
+              setRawDays(initialDaysSnapshot);
+              // Compensate previously saved days in this loop by rolling them back to initialDaysSnapshot
+              const compensationFailures: string[] = [];
+              for (const prevIdx of savedIndices) {
+                const originalDay = initialDaysSnapshot[prevIdx];
+                if (originalDay) {
+                  const compRes = await SupabaseService.saveItineraryDay(activeTripId, originalDay, fallbackTrip);
+                  if (!compRes.success) {
+                    compensationFailures.push(`Dia ${originalDay.dayNumber} (${compRes.error || 'falha na gravação'})`);
+                  }
+                }
+              }
+
+              if (compensationFailures.length > 0) {
+                return {
+                  success: false,
+                  error: `Falha parcial ao sincronizar aluguel no cronograma: erro no Dia ${dayToSave.dayNumber} (${saveRes.error}). A compensação no banco falhou no(s) ${compensationFailures.join(', ')} na tabela itinerary_days.`,
+                };
+              }
+
+              return {
+                success: false,
+                error: `Erro ao persistir horário de aluguel no Dia ${dayToSave.dayNumber}: ${saveRes.error || 'Falha no banco de dados'}. Os dias previamente alterados nesta sincronização foram compensados e revertidos com sucesso no Supabase.`,
+              };
+            }
+            savedIndices.push(idx);
           }
         }
+      } catch (loopErr: any) {
+        setRawDays(initialDaysSnapshot);
+        const compensationFailures: string[] = [];
+        for (const prevIdx of savedIndices) {
+          const originalDay = initialDaysSnapshot[prevIdx];
+          if (originalDay) {
+            try {
+              const compRes = await SupabaseService.saveItineraryDay(activeTripId, originalDay, fallbackTrip);
+              if (!compRes.success) {
+                compensationFailures.push(`Dia ${originalDay.dayNumber}`);
+              }
+            } catch (err) {
+              compensationFailures.push(`Dia ${originalDay.dayNumber}`);
+            }
+          }
+        }
+        if (compensationFailures.length > 0) {
+          return {
+            success: false,
+            error: `Falha parcial ao sincronizar aluguel no cronograma: ${loopErr?.message || 'erro inesperado'}. A compensação falhou no(s) ${compensationFailures.join(', ')} na tabela itinerary_days.`,
+          };
+        }
+        return {
+          success: false,
+          error: `Erro inesperado ao salvar cronograma de aluguel: ${loopErr?.message || 'erro desconhecido'}. Os dias gravados foram revertidos com sucesso no Supabase.`,
+        };
       }
     }
 
@@ -4924,10 +5018,16 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         if (!expRes.success) {
           setCarRentals(previousRentals);
           setExpenses(previousExpensesList);
-          await SupabaseService.deleteCarRental(newRental.id);
+          const delRentalOk = await SupabaseService.deleteCarRental(newRental.id);
           const expId = generateDeterministicUUID('car-expense', newRental.id);
-          await SupabaseService.deleteExpense(expId);
-          return { success: false, error: `Aluguel salvo, mas falhou ao registrar despesa: ${expRes.error}` };
+          const delExpOk = await SupabaseService.deleteExpense(expId);
+          const compFailures: string[] = [];
+          if (!delRentalOk) compFailures.push('car_rentals (remoção do aluguel falhou)');
+          if (!delExpOk) compFailures.push('expenses (remoção da despesa falhou)');
+          const compMsg = compFailures.length > 0
+            ? ` Atenção: limpeza compensatória incompleta no banco (${compFailures.join(', ')}).`
+            : ` O aluguel recém-criado foi limpo do banco de dados.`;
+          return { success: false, error: `Aluguel salvo, mas falhou ao registrar despesa: ${expRes.error}.${compMsg}` };
         }
 
         // 3. Secundária 2: cronograma do roteiro
@@ -4936,10 +5036,16 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           setCarRentals(previousRentals);
           setExpenses(previousExpensesList);
           setRawDays(previousDays);
-          await SupabaseService.deleteCarRental(newRental.id);
+          const delRentalOk = await SupabaseService.deleteCarRental(newRental.id);
           const expId = generateDeterministicUUID('car-expense', newRental.id);
-          await SupabaseService.deleteExpense(expId);
-          return { success: false, error: `Aluguel salvo, mas falhou ao sincronizar no cronograma: ${itinRes.error}` };
+          const delExpOk = await SupabaseService.deleteExpense(expId);
+          const compFailures: string[] = [];
+          if (!delRentalOk) compFailures.push('car_rentals (remoção do aluguel falhou)');
+          if (!delExpOk) compFailures.push('expenses (remoção da despesa falhou)');
+          const compMsg = compFailures.length > 0
+            ? ` Atenção: limpeza compensatória incompleta no banco (${compFailures.join(', ')}).`
+            : ` O aluguel e despesa recém-criados foram limpos com sucesso do banco de dados.`;
+          return { success: false, error: `Aluguel salvo, mas falhou ao sincronizar no cronograma: ${itinRes.error}.${compMsg}` };
         }
 
         addNotification(`Cadastrou aluguel de veículo (${rental.company}) e sincronizou no orçamento e cronograma`);
@@ -4985,9 +5091,15 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         if (!expRes.success) {
           setCarRentals(previousRentals);
           setExpenses(previousExpensesList);
-          await SupabaseService.saveCarRental(activeTripId, previous, activeTrip || undefined);
-          await syncCarRentalExpense(previous, settings.dollarRate || 5.75);
-          return { success: false, error: `Falha ao sincronizar despesa de locação: ${expRes.error}` };
+          const revRental = await SupabaseService.saveCarRental(activeTripId, previous, activeTrip || undefined);
+          const revExp = await syncCarRentalExpense(previous, settings.dollarRate || 5.75);
+          const compFailures: string[] = [];
+          if (!revRental.success) compFailures.push(`car_rentals (${revRental.error || 'falha na restauração'})`);
+          if (!revExp.success) compFailures.push(`expenses (${revExp.error || 'falha na restauração'})`);
+          const compMsg = compFailures.length > 0
+            ? ` Atenção: restauração do aluguel/despesa falhou em: ${compFailures.join(', ')}.`
+            : ` O aluguel e despesa anteriores foram restaurados no banco de dados.`;
+          return { success: false, error: `Falha ao sincronizar despesa de locação: ${expRes.error}.${compMsg}` };
         }
 
         // 3. Secundária 2: cronograma do roteiro
@@ -4996,10 +5108,15 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           setCarRentals(previousRentals);
           setExpenses(previousExpensesList);
           setRawDays(previousDays);
-          await SupabaseService.saveCarRental(activeTripId, previous, activeTrip || undefined);
-          await syncCarRentalExpense(previous, settings.dollarRate || 5.75);
-          await syncCarRentalToItineraryDays(previous);
-          return { success: false, error: `Falha ao sincronizar cronograma de locação: ${itinRes.error}` };
+          const revRental = await SupabaseService.saveCarRental(activeTripId, previous, activeTrip || undefined);
+          const revExp = await syncCarRentalExpense(previous, settings.dollarRate || 5.75);
+          const compFailures: string[] = [];
+          if (!revRental.success) compFailures.push(`car_rentals (${revRental.error || 'falha na restauração'})`);
+          if (!revExp.success) compFailures.push(`expenses (${revExp.error || 'falha na restauração'})`);
+          const compMsg = compFailures.length > 0
+            ? ` Atenção: restauração do aluguel/despesa falhou em: ${compFailures.join(', ')}.`
+            : ` O aluguel e despesa anteriores foram restaurados no banco de dados.`;
+          return { success: false, error: `Falha ao sincronizar cronograma de locação: ${itinRes.error}.${compMsg}` };
         }
 
         addNotification(`Atualizou informações de aluguel de carro, orçamento e cronograma`);
@@ -5054,11 +5171,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       uploadedAt: new Date().toLocaleDateString('pt-BR'),
     };
     
-    if (activeTripId) {
+    if (activeTripId || supabaseStatus.connected) {
       try {
-        const res = await SupabaseService.saveCarRentalAttachment(activeTripId, rentalId, newAtt);
+        const res = await SupabaseService.saveCarRentalAttachment(activeTripId || '', rentalId, newAtt);
         if (!res || !res.success) {
-          return { success: false, error: res?.error || 'Não é possível salvar anexo: suporte de armazenamento indisponível no Supabase.' };
+          return { success: false, error: res?.error || 'Não é possível salvar anexo: suporte de armazenamento indisponível no Supabase para aluguel de veículo.' };
         }
         setCarRentals((prev) =>
           prev.map((c) =>
@@ -5077,18 +5194,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
     }
 
-    setCarRentals((prev) =>
-      prev.map((c) =>
-        c.id === rentalId
-          ? {
-              ...c,
-              attachments: [...(c.attachments || []), newAtt],
-            }
-          : c
-      )
-    );
-    addNotification(`Anexou comprovante no veículo (local)`);
-    return { success: true };
+    return {
+      success: false,
+      error: 'O esquema atual do Supabase não possui coluna nem tabela para armazenar anexos em car_rentals. É necessária uma migração de esquema adicionando a coluna attachments (JSONB) para viabilizar a persistência.',
+    };
   };
 
   const removeCarRentalAttachment = (rentalId: string, attachmentId: string) => {
@@ -5323,26 +5432,46 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     return { success: true };
   };
 
-  const addAccommodationAttachment = (
+  const addAccommodationAttachment = async (
     accId: string,
     attachment: Omit<AccommodationAttachment, 'id'>
-  ) => {
+  ): Promise<{ success: boolean; error?: string }> => {
     const newAtt: AccommodationAttachment = {
       ...attachment,
       id: `att-acc-${Date.now()}`,
       uploadedAt: new Date().toLocaleDateString('pt-BR'),
     };
-    setAccommodations((prev) =>
-      prev.map((a) =>
-        a.id === accId
-          ? {
-              ...a,
-              attachments: [...(a.attachments || []), newAtt],
-            }
-          : a
-      )
-    );
-    addNotification(`Anexou comprovante na hospedagem`);
+
+    if (activeTripId || supabaseStatus.connected) {
+      try {
+        const res = await SupabaseService.saveAccommodationAttachment(activeTripId || '', accId, newAtt);
+        if (!res || !res.success) {
+          return {
+            success: false,
+            error: res?.error || 'Não é possível salvar anexo: suporte de armazenamento indisponível no Supabase para hospedagens.',
+          };
+        }
+        setAccommodations((prev) =>
+          prev.map((a) =>
+            a.id === accId
+              ? {
+                  ...a,
+                  attachments: [...(a.attachments || []), newAtt],
+                }
+              : a
+          )
+        );
+        addNotification(`Anexou comprovante na hospedagem`);
+        return { success: true };
+      } catch (e: any) {
+        return { success: false, error: e?.message || 'Erro inesperado ao salvar anexo de hospedagem' };
+      }
+    }
+
+    return {
+      success: false,
+      error: 'O esquema atual do Supabase não possui coluna nem tabela para armazenar anexos em accommodations. É necessária uma migração de esquema adicionando a coluna attachments (JSONB) para viabilizar a persistência.',
+    };
   };
 
   const removeAccommodationAttachment = (accId: string, attachmentId: string) => {

@@ -2572,6 +2572,30 @@ export const SupabaseService = {
   },
 
   /**
+   * Persists an attachment/voucher for an accommodation booking in Supabase.
+   * Note: The current database schema does not have an `attachments` JSONB column
+   * or a dedicated attachments table for `accommodations`. This operation returns
+   * an explicit uncompleted status until schema migration is provided.
+   */
+  async saveAccommodationAttachment(
+    tripId: string,
+    accId: string,
+    attachment: { id?: string; name: string; type: string; url: string; size?: string }
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!tripId || !accId || !attachment) {
+        return { success: false, error: 'Parâmetros inválidos para anexo de hospedagem' };
+      }
+      return {
+        success: false,
+        error: 'O esquema atual do Supabase não possui coluna nem tabela para armazenar anexos em accommodations. É necessária uma migração de esquema adicionando a coluna attachments (JSONB) para viabilizar a persistência.',
+      };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro ao persistir anexo de hospedagem' };
+    }
+  },
+
+  /**
    * Delete Park Photo Package and its records
    */
   async deleteParkPhotoPackage(id: string): Promise<boolean> {

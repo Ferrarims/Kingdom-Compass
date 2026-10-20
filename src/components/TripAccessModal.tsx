@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Key,
   Mail,
@@ -51,6 +51,7 @@ export const TripAccessModal: React.FC<TripAccessModalProps> = ({ isOpen, onClos
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [isCreatingTrip, setIsCreatingTrip] = useState<boolean>(false);
+  const createTripSubmitLockRef = useRef(false);
 
   // Create Trip state
   const [newTripName, setNewTripName] = useState('Férias Mágicas em Orlando');
@@ -89,7 +90,7 @@ export const TripAccessModal: React.FC<TripAccessModalProps> = ({ isOpen, onClos
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isCreatingTrip) return;
+    if (createTripSubmitLockRef.current || isCreatingTrip) return;
     setErrorMsg(null);
     setSuccessMsg(null);
 
@@ -103,6 +104,7 @@ export const TripAccessModal: React.FC<TripAccessModalProps> = ({ isOpen, onClos
       return;
     }
 
+    createTripSubmitLockRef.current = true;
     setIsCreatingTrip(true);
     try {
       const organizerTraveler: Traveler = {
@@ -145,6 +147,7 @@ export const TripAccessModal: React.FC<TripAccessModalProps> = ({ isOpen, onClos
     } catch (err: any) {
       setErrorMsg(err?.message || 'Erro inesperado ao criar viagem.');
     } finally {
+      createTripSubmitLockRef.current = false;
       setIsCreatingTrip(false);
     }
   };

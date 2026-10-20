@@ -298,15 +298,20 @@ export const AccommodationsView: React.FC = () => {
     accAttachmentLockRef.current = true;
     setIsSavingAttachment(true);
     try {
-      await addAccommodationAttachment(attachmentModalAccId, {
+      const res = await addAccommodationAttachment(attachmentModalAccId, {
         name: newAttName,
         type: newAttType,
         url: '#',
       });
+      if (res && !res.success) {
+        alert(`Erro ao salvar anexo de hospedagem: ${res.error || 'Erro desconhecido'}`);
+        return;
+      }
       setNewAttName('');
       setAttachmentModalAccId(null);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      alert(`Erro inesperado ao salvar anexo de hospedagem: ${err?.message || 'Erro desconhecido'}`);
     } finally {
       accAttachmentLockRef.current = false;
       setIsSavingAttachment(false);
