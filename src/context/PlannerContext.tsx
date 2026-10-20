@@ -4497,13 +4497,17 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         coverTheme: settings.coverTheme,
         travelers: settings.travelers || [],
       };
-      const result = await SupabaseService.saveFlight(activeTripId, newFlight, fallbackTrip);
-      if (!result.success) {
+      try {
+        const result = await SupabaseService.saveFlight(activeTripId, newFlight, fallbackTrip);
+        if (!result.success) {
+          throw new Error(result.error || 'Erro desconhecido');
+        }
+      } catch (e: any) {
         setFlights(prevFlights);
         setTrips(prevTrips);
         setRawDays(prevRawDays);
         setExpenses(prevExpenses);
-        return result;
+        return { success: false, error: e.message || 'Falha ao salvar voo' };
       }
     }
 
@@ -4557,7 +4561,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       return result.updatedDays;
     });
 
-    addNotification(`Adicionou ${flight.typeLabel || 'voo'} (${flight.flightNumber}) e sincronizou no roteiro`);
+    addNotification(`Adicionou ${newFlight.typeLabel || 'voo'} (${newFlight.flightNumber}) e sincronizou no roteiro`);
+    return { success: true };
   };
 
   const updateFlight = async (id: string, updates: Partial<FlightSegment>): Promise<{ success: boolean; error?: string }> => {
