@@ -61,9 +61,8 @@ export interface RestoreResult {
 }
 
 /**
- * Generate a JSON backup payload containing all 19 Supabase tables with rigorous validation.
- * Differentiates truly empty tables (data: []) from queries with errors, exceptions, or invalid responses.
- * Fails the backup generation if any table query fails.
+ * Generate a JSON backup payload containing all 19 Supabase tables using stable pagination (chunks of 1000 rows).
+ * Fails backup generation if any page query fails.
  */
 export async function generateFullBackupPayload(contextData?: any): Promise<BackupGenerationResult> {
   const tablesData: Record<string, any[]> = {};
@@ -71,21 +70,47 @@ export async function generateFullBackupPayload(contextData?: any): Promise<Back
   const tableErrors: Record<string, string> = {};
   const failedTables: string[] = [];
   let totalRecords = 0;
+  const PAGE_SIZE = 1000;
 
   for (const tableName of ALL_TABLE_NAMES) {
     try {
-      const { data, error } = await supabase.from(tableName).select('*');
-      
-      if (error) {
-        tableErrors[tableName] = error.message;
-        failedTables.push(tableName);
-      } else if (!Array.isArray(data)) {
-        tableErrors[tableName] = 'Resposta inválida do servidor (dados não retornados em formato de array)';
+      let from = 0;
+      let allRows: any[] = [];
+      let hasMore = true;
+      let tableFailed = false;
+      let errorMessage = '';
+
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from(tableName)
+          .select('*')
+          .range(from, from + PAGE_SIZE - 1);
+
+        if (error) {
+          tableFailed = true;
+          errorMessage = error.message;
+          break;
+        }
+
+        if (Array.isArray(data)) {
+          allRows = allRows.concat(data);
+          if (data.length < PAGE_SIZE) {
+            hasMore = false;
+          } else {
+            from += PAGE_SIZE;
+          }
+        } else {
+          hasMore = false;
+        }
+      }
+
+      if (tableFailed) {
+        tableErrors[tableName] = errorMessage;
         failedTables.push(tableName);
       } else {
-        tablesData[tableName] = data;
-        tableCounts[tableName] = data.length;
-        totalRecords += data.length;
+        tablesData[tableName] = allRows;
+        tableCounts[tableName] = allRows.length;
+        totalRecords += allRows.length;
       }
     } catch (err: any) {
       tableErrors[tableName] = err?.message || 'Exceção inesperada ao consultar tabela';
@@ -168,7 +193,20 @@ export function validateBackupPayload(jsonContent: string | object): {
       return { valid: false, error: 'O conteúdo do arquivo não é um JSON válido.' };
     }
 
-    const tables = parsed.tables || {};
+    // 1. Validate appName and backupVersion before accepting
+    if (parsed.appName && parsed.appName !== 'KingdomCompass') {
+      return { valid: false, error: `Aplicativo incompatível (${parsed.appName}). Esperado: KingdomCompass.` };
+    }
+
+    if (parsed.backupVersion && parsed.backupVersion !== '2.0') {
+      return { valid: false, error: `Versão de backup incompatível (${parsed.backupVersion}). Suportada: 2.0.` };
+    }
+
+    if (!parsed.tables || typeof parsed.tables !== 'object') {
+      return { valid: false, error: 'O arquivo não contém a estrutura de tabelas esperada.' };
+    }
+
+    const tables = parsed.tables;
     const tableDetails: Record<string, number> = {};
     let totalRecords = 0;
 
@@ -177,10 +215,6 @@ export function validateBackupPayload(jsonContent: string | object): {
         tableDetails[key] = tables[key].length;
         totalRecords += tables[key].length;
       }
-    }
-
-    if (totalRecords === 0 && (!parsed.localState || Object.keys(parsed.localState).length === 0)) {
-      return { valid: false, error: 'O arquivo de backup está vazio ou não contém tabelas reconhecidas.' };
     }
 
     return {
@@ -198,26 +232,65 @@ export function validateBackupPayload(jsonContent: string | object): {
 }
 
 /**
- * Restore database from a backup payload with rigorous validation:
- * - Requires all 19 expected tables for version 2.0 to be present (missing_in_file marked as error / partial).
- * - Validates IDs on all rows before upserting.
- * - Does NOT assume writtenCount = expectedCount without confirmed upsert and subsequent ID verification query in Supabase.
- * - Handles empty/no-op backups correctly.
+ * Restore database from a backup payload with strict pre-write validation and ID verification in safe chunks:
+ * - Rejects incompatible files before any write.
+ * - Uses batch chunking (200 IDs) for verification.
+ * - Strict isPartial: true ONLY when at least one table with records was successfully restored and verified, but another failed/missing.
+ * - If totalRestored === 0, does not report partial restoration.
  */
 export async function executeBackupRestore(
   payload: BackupPayload
 ): Promise<RestoreResult> {
+  // 1. Pre-write validation of structure, appName, and version
+  if (!payload || typeof payload !== 'object' || !payload.tables) {
+    return {
+      success: false,
+      isPartial: false,
+      tableMetrics: {},
+      totalExpected: 0,
+      totalRestored: 0,
+      totalVerified: 0,
+      failedTables: [],
+      error: 'Arquivo de backup inválido ou estrutura de tabelas ausente.',
+    };
+  }
+
+  if (payload.appName && payload.appName !== 'KingdomCompass') {
+    return {
+      success: false,
+      isPartial: false,
+      tableMetrics: {},
+      totalExpected: 0,
+      totalRestored: 0,
+      totalVerified: 0,
+      failedTables: [],
+      error: `Arquivo incompatível: appName '${payload.appName}' não suportado.`,
+    };
+  }
+
+  if (payload.backupVersion && payload.backupVersion !== '2.0') {
+    return {
+      success: false,
+      isPartial: false,
+      tableMetrics: {},
+      totalExpected: 0,
+      totalRestored: 0,
+      totalVerified: 0,
+      failedTables: [],
+      error: `Versão de backup incompatível (${payload.backupVersion}). Versão suportada: 2.0.`,
+    };
+  }
+
   const tableMetrics: Record<string, TableRestoreMetrics> = {};
   const failedTables: string[] = [];
   const missingTables: string[] = [];
   let totalExpected = 0;
   let totalRestored = 0;
   let totalVerified = 0;
-  let tablesAttemptedCount = 0;
   let tablesSuccessfulCount = 0;
   let tablesEmptyCount = 0;
 
-  const tables = payload.tables || {};
+  const tables = payload.tables;
 
   for (const tableName of ALL_TABLE_NAMES) {
     if (!(tableName in tables)) {
@@ -273,7 +346,6 @@ export async function executeBackupRestore(
 
     const expectedCount = rows.length;
     totalExpected += expectedCount;
-    tablesAttemptedCount++;
 
     try {
       // 1. Batch upsert rows and select ids
@@ -296,34 +368,35 @@ export async function executeBackupRestore(
 
       const writtenCount = upsertData.length;
 
-      // 2. Verify persistence by querying IDs back from Supabase
+      // 2. Verify persistence in safe chunks (200 IDs at a time)
       const ids = rows.map((r: any) => r.id);
-      const { data: verifyData, error: verifyError } = await supabase
-        .from(tableName)
-        .select('id')
-        .in('id', ids);
+      const CHUNK_SIZE = 200;
+      let verifiedCount = 0;
+      let verifyFailed = false;
+      let verifyErrorMsg = '';
 
-      if (verifyError || !Array.isArray(verifyData)) {
-        tableMetrics[tableName] = {
-          expectedCount,
-          writtenCount,
-          verifiedCount: 0,
-          status: 'failed',
-          error: `Erro ao confirmar persistência: ${verifyError?.message || 'Resposta inválida'}`,
-        };
-        failedTables.push(tableName);
-        continue;
+      for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+        const chunkIds = ids.slice(i, i + CHUNK_SIZE);
+        const { data: verifyData, error: verifyError } = await supabase
+          .from(tableName)
+          .select('id')
+          .in('id', chunkIds);
+
+        if (verifyError || !Array.isArray(verifyData)) {
+          verifyFailed = true;
+          verifyErrorMsg = verifyError?.message || 'Erro ao consultar chunk de IDs';
+          break;
+        }
+        verifiedCount += verifyData.length;
       }
 
-      const verifiedCount = verifyData.length;
-
-      if (verifiedCount < expectedCount) {
+      if (verifyFailed || verifiedCount < expectedCount) {
         tableMetrics[tableName] = {
           expectedCount,
           writtenCount,
           verifiedCount,
           status: 'failed',
-          error: `Verificação incompleta: esperados ${expectedCount}, confirmados no Supabase ${verifiedCount}`,
+          error: verifyErrorMsg || `Verificação incompleta: esperados ${expectedCount}, confirmados ${verifiedCount}`,
         };
         failedTables.push(tableName);
       } else {
@@ -349,11 +422,12 @@ export async function executeBackupRestore(
     }
   }
 
-  // Success is true ONLY if:
-  // 1. Zero failed tables and zero missing tables.
-  // 2. All 19 tables are represented (restored or empty).
+  // Success is true ONLY if zero failed tables and zero missing tables.
   const success = failedTables.length === 0 && missingTables.length === 0;
-  const isPartial = !success && (tablesSuccessfulCount > 0 || tablesEmptyCount > 0 || missingTables.length > 0);
+
+  // isPartial is true ONLY when at least one table with records was successfully restored (totalRestored > 0),
+  // but there are failed tables or missing tables. If totalRestored === 0, it's not partial (it's total failure or incompatible).
+  const isPartial = !success && totalRestored > 0 && (failedTables.length > 0 || missingTables.length > 0);
 
   return {
     success,

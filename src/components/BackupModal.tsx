@@ -126,7 +126,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
       setExportResult(res);
 
       if (!res.success || !res.payload) {
-        alert('Não foi possível gerar um backup completo devido a falhas em consultas de tabelas. Verifique os erros listados antes de exportar.');
+        alert('Não foi possível gerar um backup completo devido a falhas em paginação ou consultas. Verifique os erros listados antes de exportar.');
         return;
       }
 
@@ -180,7 +180,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
         addNotification('Aviso: Restauração parcial concluída com omissões ou falhas.', 'warning');
         await reloadFromSupabase();
       } else {
-        addNotification('Erro ao restaurar o backup. Nenhuma tabela foi totalmente validada.', 'error');
+        addNotification('Erro ao restaurar o backup. Nenhum dado válido foi gravado.', 'error');
       }
     } catch (err: any) {
       alert(`Erro inesperado na restauração: ${err?.message || err}`);
@@ -263,9 +263,9 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
                 <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
                 <div className="text-xs text-emerald-950 leading-relaxed">
                   <span className="font-bold block text-emerald-900 mb-0.5">
-                    Exportação Validada do Banco de Dados
+                    Exportação Validada com Paginação Estável
                   </span>
-                  O sistema consulta rigorosamente todas as <strong>19 tabelas</strong> do Supabase. O download só é liberado como backup completo quando todas as consultas retornam dados válidos sem erros.
+                  O sistema utiliza paginação estável (blocos de 1000 registros) para ler todas as linhas de cada tabela. O download só é liberado quando todas as páginas de todas as 19 tabelas são concluídas sem erros.
                 </div>
               </div>
 
@@ -286,8 +286,8 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
                   <div className="space-y-1 text-xs">
                     <span className="font-bold block">
                       {exportResult.success
-                        ? `Backup pronto! Todas as 19 tabelas foram consultadas com sucesso (${exportResult.totalRecords} registros totais).`
-                        : `Atenção: Falha ao consultar ${exportResult.failedTables.length} tabela(s). Este backup NÃO é considerado completo.`}
+                        ? `Backup pronto! Todas as 19 tabelas foram exportadas com sucesso (${exportResult.totalRecords} registros totais).`
+                        : `Atenção: Falha ao exportar ${exportResult.failedTables.length} tabela(s). Este backup NÃO é considerado completo.`}
                     </span>
                     {!exportResult.success && (
                       <div className="pt-1 space-y-1 text-[11px] text-rose-800">
@@ -313,7 +313,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
                   {isExporting ? (
                     <>
                       <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Verificando Tabelas...</span>
+                      <span>Lendo Tabelas (Paginação)...</span>
                     </>
                   ) : (
                     <>
@@ -393,9 +393,9 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
                 <Info className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
                 <div className="text-xs text-blue-950 leading-relaxed">
                   <span className="font-bold block text-blue-900 mb-0.5">
-                    Restauração com Verificação de Integridade por ID
+                    Validação Pré-Gravação &amp; Verificação em Blocos (Chunks)
                   </span>
-                  O sistema valida cada tabela enviada, exigindo todas as 19 tabelas obrigatórias, validando IDs em todos os registros, gravando via upsert e confirmando a persistência no Supabase por consulta ID.
+                  O arquivo é validado (appName, backupVersion v2.0 e tabelas) <strong>antes</strong> de qualquer gravação. A verificação de IDs no Supabase utiliza blocos seguros de 200 IDs para evitar limites de URL.
                 </div>
               </div>
 
@@ -481,7 +481,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
                       <>
                         <AlertCircle className="w-5 h-5 text-rose-600" />
                         <span className="font-bold text-rose-900 text-xs">
-                          {validationResult.error || 'Formato de arquivo inválido.'}
+                          {validationResult.error || 'Formato de arquivo incompatível.'}
                         </span>
                       </>
                     )}
@@ -516,33 +516,32 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
                       <>
                         <CheckCircle2 className="w-5 h-5 text-emerald-600" />
                         <span className="font-bold text-emerald-950 text-xs">
-                          Restauração Completa Realizada com Sucesso! ({restoreResult.totalVerified} registros verificados em todas as 19 tabelas).
+                          Restauração Concluída com Sucesso! ({restoreResult.totalVerified} registros verificados).
                         </span>
                       </>
                     ) : restoreResult.isPartial ? (
                       <>
                         <AlertTriangle className="w-5 h-5 text-amber-600" />
                         <span className="font-bold text-amber-950 text-xs">
-                          Restauração Parcial: Algumas tabelas foram restauradas, mas houve omissões ou falhas em {restoreResult.failedTables.length} tabela(s).
+                          Restauração Parcial: {restoreResult.totalRestored} registros restaurados, mas houve falhas ou omissões em {restoreResult.failedTables.length} tabela(s).
                         </span>
                       </>
                     ) : (
                       <>
                         <AlertCircle className="w-5 h-5 text-rose-600" />
                         <span className="font-bold text-rose-950 text-xs">
-                          Falha na Restauração: Tabelas ausentes ou com falha de validação. Veja os detalhes abaixo.
+                          Falha na Restauração: Nenhum registro foi restaurado ou arquivo incompatível. Veja os detalhes abaixo.
                         </span>
                       </>
                     )}
                   </div>
 
-                  {/* Complete 19-table report including restored, empty, missing, and failed */}
+                  {/* Complete 19-table report */}
                   <div className="pt-2 border-t border-slate-200 space-y-2 max-h-64 overflow-y-auto">
                     {(Object.entries(restoreResult.tableMetrics) as [string, TableRestoreMetrics][]).map(([tbl, metrics]) => {
                       const isRestored = metrics.status === 'restored';
                       const isEmpty = metrics.status === 'empty';
                       const isMissing = metrics.status === 'missing_in_file';
-                      const isFailed = metrics.status === 'failed';
 
                       return (
                         <div
@@ -577,6 +576,8 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
                                   ? 'bg-emerald-100 text-emerald-800'
                                   : isEmpty
                                   ? 'bg-slate-200 text-slate-700'
+                                  : isMissing
+                                  ? 'bg-rose-100 text-rose-800'
                                   : 'bg-rose-100 text-rose-800'
                               }`}
                             >
@@ -602,7 +603,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
                     {isRestoring ? (
                       <>
                         <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>Restaurando &amp; Verificando Integridade...</span>
+                        <span>Restaurando &amp; Verificando em Blocos...</span>
                       </>
                     ) : (
                       <>
@@ -620,7 +621,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
         {/* Modal Actions Footer */}
         <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
           <span className="text-[11px] text-slate-500 font-medium">
-            Segurança Rigorosa: exibe tabelas restauradas, vazias, ausentes e com falha no relatório final.
+            Segurança Rigorosa: validação pré-gravação, chunks de IDs e relatório completo por tabela.
           </span>
           <button
             type="button"
