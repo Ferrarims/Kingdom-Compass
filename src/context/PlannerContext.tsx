@@ -5889,12 +5889,25 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       const data = JSON.parse(jsonString);
       if (data.settings) setSettings(data.settings);
       if (data.expenses) setExpenses(data.expenses);
-      if (data.rawDays) setRawDays(data.rawDays);
+      if (data.rawDays) {
+        // Sanitize rawDays to omit any legacy attachments
+        const cleanedDays = (Array.isArray(data.rawDays) ? data.rawDays : []).map((d: any) => {
+          const { attachments, ...rest } = d;
+          return rest;
+        });
+        setRawDays(cleanedDays);
+      }
       if (data.prepDocuments) setPrepDocuments(data.prepDocuments);
       if (data.bookingMilestones) setBookingMilestones(data.bookingMilestones);
       if (data.baggageItems) setBaggageItems(data.baggageItems);
-      if (data.flights) setFlights(data.flights);
-      addNotification('Importou novo arquivo de dados de viagem');
+      if (data.flights) {
+        const cleanedFlights = (Array.isArray(data.flights) ? data.flights : []).map((f: any) => {
+          const { attachments, ...rest } = f;
+          return rest;
+        });
+        setFlights(cleanedFlights);
+      }
+      addNotification('Importou novo arquivo de dados de viagem (vouchers e anexos legados ignorados com segurança)');
       return true;
     } catch (e) {
       console.error('Import failed', e);
