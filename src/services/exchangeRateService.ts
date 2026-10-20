@@ -71,16 +71,16 @@ export const fetchLiveExchangeRate = async (): Promise<ExchangeRateData> => {
     }
   }
 
-  // Fallback 2: Open ER API
+  // Fallback 2: Open ER API (Validate result === 'success')
   const erJson = await safeFetch('https://open.er-api.com/v6/latest/USD', {
     cache: 'no-store',
   });
-  if (erJson && erJson.rates && erJson.rates.BRL) {
+  if (erJson && erJson.result === 'success' && erJson.rates && erJson.rates.BRL) {
     const rateVal = parseStrictRate(erJson.rates.BRL);
     if (rateVal !== null) {
       return {
         rate: rateVal,
-        lastUpdated: new Date().toLocaleTimeString('pt-BR'),
+        lastUpdated: erJson.time_last_update_utc || new Date().toLocaleTimeString('pt-BR'),
         source: 'ExchangeRate API Global',
         isEstimate: false,
       };

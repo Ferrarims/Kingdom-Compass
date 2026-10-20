@@ -38,17 +38,24 @@ export const LiveExchangeRateWidget: React.FC = () => {
     }
   }, [liveExchangeRate]);
 
+  const isUnavailable = !exchangeData && !isFetchingExchangeRate;
   const isEstimate = !!exchangeData?.isEstimate;
-  const effectiveLiveRate = exchangeData?.rate || liveExchangeRate?.rate || settings.dollarRate || 5.75;
+  const isRealFetched = exchangeData && !exchangeData.isEstimate;
+
+  const displayRate = isRealFetched
+    ? exchangeData.rate
+    : isEstimate
+    ? exchangeData.rate
+    : settings.dollarRate || 5.75;
 
   // Quick Converter / Simulator States
   const [simUsd, setSimUsd] = useState<number>(100);
-  const [simBrl, setSimBrl] = useState<number>(Math.round(100 * effectiveLiveRate * 100) / 100);
+  const [simBrl, setSimBrl] = useState<number>(Math.round(100 * displayRate * 100) / 100);
   const [includeCardTaxes, setIncludeCardTaxes] = useState<boolean>(false); // IOF 4.38% + ~2% spread
 
   const effectiveConverterRate = includeCardTaxes
-    ? effectiveLiveRate * 1.0638
-    : effectiveLiveRate;
+    ? displayRate * 1.0638
+    : displayRate;
 
   useEffect(() => {
     setSimBrl(Math.round(simUsd * effectiveConverterRate * 100) / 100);
@@ -65,6 +72,12 @@ export const LiveExchangeRateWidget: React.FC = () => {
       setSuccessMsg('Taxa estimada aplicada à viagem com confirmação explícita.');
       setTimeout(() => setSuccessMsg(null), 4000);
     }
+  };
+
+  const handleManualRefresh = async () => {
+    await refreshLiveExchangeRate(true);
+    setSuccessMsg('Atualização manual concluída.');
+    setTimeout(() => setSuccessMsg(null), 3000);
   };
 
   return (
@@ -88,12 +101,19 @@ export const LiveExchangeRateWidget: React.FC = () => {
                   Cotação Não Consultada (Estimativa Fixa)
                 </span>
               </>
-            ) : (
+            ) : isRealFetched ? (
               <>
                 <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
                 <span className="text-[10px] font-bold text-[#D4AF37] uppercase tracking-wider flex items-center gap-1">
                   <Zap className="w-3 h-3 text-[#D4AF37]" />
                   Cotação Oficial do Dia em Tempo Real
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="w-2.5 h-2.5 rounded-full bg-slate-400" />
+                <span className="text-[10px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1">
+                  Cotação Indisponível
                 </span>
               </>
             )}
@@ -102,15 +122,19 @@ export const LiveExchangeRateWidget: React.FC = () => {
             Cotação do Dólar
           </h3>
           <p className="text-xs text-slate-300">
-            {isEstimate
+            {isFetchingExchangeRate
+              ? 'Buscando cotação atualizada nas fontes oficiais...'
+              : isEstimate
               ? 'As fontes de cotação oficiais falharam. Esta é uma estimativa fixa e não foi aplicada automaticamente.'
-              : 'O orçamento da viagem é atualizado automaticamente com a cotação oficial consultada.'}
+              : isRealFetched
+              ? 'Cotação real consultada com sucesso e aplicada automaticamente ao orçamento da viagem.'
+              : 'Nenhuma cotação ao vivo foi consultada nesta sessão. O sistema utiliza a taxa configurada na viagem.'}
           </p>
         </div>
 
         <button
           type="button"
-          onClick={() => refreshLiveExchangeRate(false)}
+          onClick={handleManualRefresh}
           disabled={isFetchingExchangeRate}
           className="px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-all flex items-center gap-2 cursor-pointer self-start md:self-auto border border-white/10"
         >
@@ -138,7 +162,7 @@ export const LiveExchangeRateWidget: React.FC = () => {
                   Atenção: Cotação não consultada com sucesso (Valor Estimado)
                 </strong>
                 <p className="text-amber-900 leading-relaxed">
-                  Nenhuma fonte externa respondeu com dados válidos. O valor de <strong>R$ {effectiveLiveRate.toFixed(2)}</strong> é uma <strong>estimativa fixa</strong> e <strong>não foi aplicada</strong> automaticamente à viagem para preservar sua taxa configurada (R$ {settings.dollarRate.toFixed(2)}).
+                  Nenhuma fonte externa respondeu com dados válidos. O valor de <strong>R$ {displayRate.toFixed(2)}</strong> é uma <strong>estimativa fixa</strong> e <strong>não foi aplicada</strong> automaticamente à viagem para preservar sua taxa configurada (R$ {settings.dollarRate.toFixed(2)}).
                 </p>
               </div>
             </div>
@@ -151,6 +175,19 @@ export const LiveExchangeRateWidget: React.FC = () => {
                 Solicitar Confirmação e Aplicar Taxa Estimada
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Unavailable state banner */}
+        {isUnavailable && (
+          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 text-xs space-y-2">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-slate-500 shrink-0" />
+              <span className="font-bold">Cotação Real Ainda Não Consultada nesta Sessão</span>
+            </div>
+            <p className="text-slate-600">
+              Clique em <strong>Atualizar Cotação</strong> para consultar fontes externas em tempo real. O orçamento utiliza atualmente a sua taxa configurada na viagem (R$ {settings.dollarRate.toFixed(2)}).
+            </p>
           </div>
         )}
 
@@ -169,29 +206,39 @@ export const LiveExchangeRateWidget: React.FC = () => {
           {/* 1. Exchange Rate Metric Card */}
           <div className="space-y-4">
             <div className={`p-5 rounded-2xl border space-y-4 h-full flex flex-col justify-between ${
-              isEstimate ? 'bg-amber-50/40 border-amber-200' : 'bg-slate-50 border-slate-200'
+              isEstimate ? 'bg-amber-50/40 border-amber-200' : isUnavailable ? 'bg-slate-50 border-slate-200' : 'bg-slate-50 border-slate-200'
             }`}>
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                    {isEstimate ? 'Taxa Estimada (Não Consultada)' : 'Dólar Comercial do Dia'}
+                    {isEstimate
+                      ? 'Taxa Estimada (Não Consultada)'
+                      : isRealFetched
+                      ? 'Dólar Comercial do Dia'
+                      : 'Taxa Configurada na Viagem'}
                   </span>
                   <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border ${
-                    isEstimate ? 'bg-amber-100 text-amber-800 border-amber-200' : 'bg-white text-slate-500 border-slate-200'
+                    isEstimate
+                      ? 'bg-amber-100 text-amber-800 border-amber-200'
+                      : isRealFetched
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                      : 'bg-white text-slate-600 border-slate-200'
                   }`}>
-                    {exchangeData?.source || 'Cotação Comercial'}
+                    {exchangeData?.source || 'Taxa Manual da Viagem'}
                   </span>
                 </div>
 
                 <div className="flex items-baseline gap-2">
-                  <span className={`text-3xl font-black font-mono ${isEstimate ? 'text-amber-900' : 'text-[#1A2B4C]'}`}>
-                    R$ {effectiveLiveRate.toFixed(2)}
+                  <span className={`text-3xl font-black font-mono ${
+                    isEstimate ? 'text-amber-900' : isRealFetched ? 'text-[#1A2B4C]' : 'text-slate-700'
+                  }`}>
+                    R$ {displayRate.toFixed(2)}
                   </span>
                   <span className="text-xs font-bold text-slate-500">
                     / 1 US$
                   </span>
 
-                  {!isEstimate && exchangeData?.pctChange !== undefined && (
+                  {isRealFetched && exchangeData?.pctChange !== undefined && (
                     <span
                       className={`text-[11px] font-bold px-2 py-0.5 rounded-md flex items-center gap-0.5 ${
                         exchangeData.pctChange >= 0
@@ -217,7 +264,7 @@ export const LiveExchangeRateWidget: React.FC = () => {
                       Máxima do Dia
                     </span>
                     <strong className="text-slate-700 font-mono">
-                      {!isEstimate && exchangeData?.high ? `R$ ${exchangeData.high.toFixed(2)}` : 'N/D (Estimativa)'}
+                      {isRealFetched && exchangeData?.high ? `R$ ${exchangeData.high.toFixed(2)}` : 'N/D (Não consultada)'}
                     </strong>
                   </div>
 
@@ -226,7 +273,7 @@ export const LiveExchangeRateWidget: React.FC = () => {
                       Mínima do Dia
                     </span>
                     <strong className="text-slate-700 font-mono">
-                      {!isEstimate && exchangeData?.low ? `R$ ${exchangeData.low.toFixed(2)}` : 'N/D (Estimativa)'}
+                      {isRealFetched && exchangeData?.low ? `R$ ${exchangeData.low.toFixed(2)}` : 'N/D (Não consultada)'}
                     </strong>
                   </div>
                 </div>
@@ -239,16 +286,23 @@ export const LiveExchangeRateWidget: React.FC = () => {
                     <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                     <span>Taxa não consultada. Viagem preserva R$ {settings.dollarRate.toFixed(2)}</span>
                   </div>
-                ) : (
+                ) : isRealFetched ? (
                   <div className="flex items-center gap-2 text-emerald-700 font-semibold text-[11px]">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                    <span>Câmbio sincronizado automaticamente no orçamento</span>
+                    <span>Cotação consultada e sincronizada no orçamento</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-slate-600 font-semibold text-[11px]">
+                    <HelpCircle className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                    <span>Utilizando taxa configurada na viagem (R$ {settings.dollarRate.toFixed(2)})</span>
                   </div>
                 )}
                 <p className="text-[10px] text-slate-400">
                   {isEstimate
                     ? 'Nenhuma alteração automática foi aplicada ao seu planejamento.'
-                    : 'Todos os cálculos e gastos em dólar utilizam a cotação oficial.'}
+                    : isRealFetched
+                    ? 'Todos os cálculos e gastos em dólar utilizam esta cotação real.'
+                    : 'Clique em Atualizar Cotação para buscar valores de mercado em tempo real.'}
                 </p>
               </div>
             </div>
@@ -256,14 +310,12 @@ export const LiveExchangeRateWidget: React.FC = () => {
 
           {/* 2. Interactive Quick Currency Converter / Simulator */}
           <div className="space-y-4">
-            <div className={`p-5 rounded-2xl border space-y-4 h-full flex flex-col justify-between ${
-              isEstimate ? 'bg-amber-50/70 border-amber-200/90' : 'bg-amber-50/70 border-amber-200/90'
-            }`}>
+            <div className="p-5 rounded-2xl bg-amber-50/70 border border-amber-200/90 space-y-4 h-full flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-bold text-[#1A2B4C] uppercase tracking-wider flex items-center gap-1">
                     <ArrowRightLeft className="w-3.5 h-3.5 text-[#D4AF37]" />
-                    {isEstimate ? 'Simulador (Taxa Estimada)' : 'Conversor Rápido'}
+                    {isEstimate ? 'Simulador (Taxa Estimada)' : isRealFetched ? 'Conversor Rápido' : 'Simulador (Taxa da Viagem)'}
                   </span>
 
                   <button
@@ -280,11 +332,11 @@ export const LiveExchangeRateWidget: React.FC = () => {
                   </button>
                 </div>
 
-                {isEstimate && (
-                  <div className="text-[10px] text-amber-800 font-medium bg-amber-100/70 px-2.5 py-1 rounded-md mb-2">
-                    ℹ️ Este conversor está operando como simulação com base em estimativa.
-                  </div>
-                )}
+                <div className="text-[10px] text-slate-600 font-medium bg-amber-100/70 px-2.5 py-1 rounded-md mb-2">
+                  {isRealFetched
+                    ? '💡 Conversão baseada na cotação real consultada hoje.'
+                    : 'ℹ️ Simulador utilizando a taxa configurada na viagem (R$ ' + displayRate.toFixed(2) + ').'}
+                </div>
 
                 <div className="space-y-3">
                   {/* Input USD */}

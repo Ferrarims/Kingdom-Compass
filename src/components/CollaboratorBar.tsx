@@ -100,7 +100,7 @@ export const CollaboratorBar: React.FC<CollaboratorBarProps> = ({ onToggleMobile
               >
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] uppercase tracking-tighter text-slate-500 font-bold">
-                    Cotação do Dia
+                    {liveExchangeRate && !liveExchangeRate.isEstimate ? 'Cotação do Dia' : 'Taxa da Viagem'}
                   </span>
                   {isFetchingExchangeRate ? (
                     <span className="inline-flex items-center px-1.5 py-0.2 rounded-full text-[8px] sm:text-[9px] font-bold bg-amber-50 text-amber-700 border border-amber-200/60 leading-none">
@@ -118,7 +118,7 @@ export const CollaboratorBar: React.FC<CollaboratorBarProps> = ({ onToggleMobile
                       Ao Vivo
                     </span>
                   ) : (
-                    <span className="inline-flex items-center px-1.5 py-0.2 rounded-full text-[8px] sm:text-[9px] font-bold bg-slate-100 text-slate-600 border border-slate-200 leading-none">
+                    <span className="inline-flex items-center px-1.5 py-0.2 rounded-full text-[8px] sm:text-[9px] font-bold bg-slate-100 text-slate-600 border border-slate-200 leading-none" title="Cotação real ainda não consultada nesta sessão">
                       Indisponível
                     </span>
                   )}
@@ -158,13 +158,15 @@ export const CollaboratorBar: React.FC<CollaboratorBarProps> = ({ onToggleMobile
                       </span>
                     </div>
                     <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
-                      {liveExchangeRate?.source || (isFetchingExchangeRate ? 'Buscando...' : 'Indisponível')}
+                      {liveExchangeRate?.source || (isFetchingExchangeRate ? 'Buscando...' : 'Taxa da Viagem')}
                     </span>
                   </div>
 
                   <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 mb-3">
                     <div className="flex items-baseline justify-between mb-1">
-                      <span className="text-xs text-slate-500 font-medium">Dólar Comercial Hoje:</span>
+                      <span className="text-xs text-slate-500 font-medium">
+                        {liveExchangeRate && !liveExchangeRate.isEstimate ? 'Dólar Comercial Hoje:' : 'Taxa Configurada na Viagem:'}
+                      </span>
                       <span className="text-lg font-black text-[#1A2B4C] font-mono">
                         R$ {displayRate.toFixed(2).replace('.', ',')}
                       </span>
