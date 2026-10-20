@@ -555,7 +555,7 @@ interface PlannerContextType {
   liveExchangeRate: ExchangeRateData | null;
   isFetchingExchangeRate: boolean;
   refreshLiveExchangeRate: (autoApplyToTrip?: boolean) => Promise<void>;
-  applyLiveRateToTrip: () => void;
+  applyLiveRateToTrip: (confirmEstimated?: boolean) => void;
   financialSummary: {
     totalEstimatedBRL: number;
     totalEstimatedUSD: number;
@@ -929,7 +929,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     try {
       const data = await fetchLiveExchangeRate();
       setLiveExchangeRate(data);
-      if (autoApplyToTrip && data && data.rate > 0) {
+      if (autoApplyToTrip && data && Number.isFinite(data.rate) && data.rate > 0 && !data.isEstimated) {
         setSettings((prev) => ({
           ...prev,
           dollarRate: data.rate,
@@ -951,8 +951,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     return () => clearInterval(interval);
   }, [refreshLiveExchangeRate]);
 
-  const applyLiveRateToTrip = useCallback(() => {
-    if (liveExchangeRate && liveExchangeRate.rate > 0) {
+  const applyLiveRateToTrip = useCallback((confirmEstimated: boolean = false) => {
+    if (liveExchangeRate && Number.isFinite(liveExchangeRate.rate) && liveExchangeRate.rate > 0 && (!liveExchangeRate.isEstimated || confirmEstimated)) {
       const newRate = liveExchangeRate.rate;
       setSettings((prev) => ({
         ...prev,
@@ -962,7 +962,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         {
           id: `rate-${Date.now()}`,
           travelerName: currentUser.name || 'Viajante',
-          action: `💵 Atualizou o câmbio oficial da viagem para R$ ${newRate.toFixed(2).replace('.', ',')}`,
+          action: liveExchangeRate.isEstimated
+            ? `⚠️ Aplicou estimativa de câmbio à viagem para R$ ${newRate.toFixed(2).replace('.', ',')}`
+            : `💵 Atualizou a cotação consultada da viagem para R$ ${newRate.toFixed(2).replace('.', ',')}`, 
           timestamp: 'Agora',
         },
         ...prev,
