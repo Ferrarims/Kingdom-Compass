@@ -9,31 +9,25 @@
 export type CurrencyType = 'BRL' | 'USD';
 
 /**
- * Parses any input string (or number) into a numeric value.
+ * Parses any input string, number, or null/undefined into a numeric value.
+ * Handles BRL format (1.234,56) and USD format (1,234.56) strictly based on explicit currency parameter.
  */
-export const parseInputToNumber = (valStr: string | number | undefined | null): number => {
+export const parseInputToNumber = (valStr: string | number | undefined | null, currency: CurrencyType = 'BRL'): number => {
   if (valStr === undefined || valStr === null || valStr === '') return 0;
   if (typeof valStr === 'number') return isNaN(valStr) ? 0 : valStr;
 
-  let clean = valStr.trim();
-  if (clean.includes(',') && clean.includes('.')) {
-    if (clean.indexOf(',') > clean.indexOf('.')) {
-      // e.g. 1.234,56 -> dot is thousands, comma is decimal
-      clean = clean.replace(/\./g, '').replace(',', '.');
-    } else {
-      // e.g. 1,234.56 -> comma is thousands, dot is decimal
-      clean = clean.replace(/,/g, '');
-    }
-  } else if (clean.includes(',')) {
-    // only comma -> could be BRL decimal (123,45) or thousands (1,234)
-    // In banking inputs, if there's no dot, comma is decimal if 1 or 2 digits follow, or thousands.
-    // Let's support both comma as decimal
-    clean = clean.replace(',', '.');
-  }
+  let clean = String(valStr).trim();
+  if (!clean) return 0;
 
-  const parts = clean.split('.');
-  if (parts.length > 2) {
-    clean = parts[0] + '.' + parts.slice(1).join('');
+  // Remove currency symbols if present
+  clean = clean.replace(/[R$US$\s]/g, '');
+
+  if (currency === 'BRL') {
+    // BRL: 1.234,56 -> remove dots, replace comma with dot
+    clean = clean.replace(/\./g, '').replace(',', '.');
+  } else {
+    // USD: 1,234.56 -> remove commas
+    clean = clean.replace(/,/g, '');
   }
 
   const parsed = parseFloat(clean);
@@ -46,7 +40,9 @@ export const parseInputToNumber = (valStr: string | number | undefined | null): 
  * USD: 1,234.56
  */
 export const formatInputDisplay = (val: number | undefined | null, currency: CurrencyType = 'BRL'): string => {
-  if (val === undefined || val === null || isNaN(val)) return '0,00';
+  if (val === undefined || val === null || isNaN(val)) {
+    return currency === 'BRL' ? '0,00' : '0.00';
+  }
   const locale = currency === 'BRL' ? 'pt-BR' : 'en-US';
   return val.toLocaleString(locale, {
     minimumFractionDigits: 2,
