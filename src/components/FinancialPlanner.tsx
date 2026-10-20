@@ -820,7 +820,7 @@ export const FinancialPlanner: React.FC = () => {
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div className="space-y-1.5">
                       <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
-                        Valor a Pagar (US$) <span className="text-[9px] font-normal text-slate-400 lowercase">(vazio=0)</span>
+                        Valor a Pagar (US$) <span className="text-[9px] font-normal text-slate-400 lowercase">(vazio = US$ 0,00)</span>
                       </label>
                       <MoneyInput
                         currency="USD"
@@ -831,7 +831,7 @@ export const FinancialPlanner: React.FC = () => {
 
                     <div className="space-y-1.5">
                       <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
-                        Valor a Pagar (R$) <span className="text-[9px] font-normal text-slate-400 lowercase">(vazio=0)</span>
+                        Valor a Pagar (R$) <span className="text-[9px] font-normal text-slate-400 lowercase">(vazio = R$ 0,00)</span>
                       </label>
                       <MoneyInput
                         currency="BRL"
@@ -860,7 +860,7 @@ export const FinancialPlanner: React.FC = () => {
                   {status === 'Parcial' && (
                     <div className="space-y-1.5 animate-in slide-in-from-top-2 duration-200 pt-2 border-t border-slate-100">
                       <label className="block text-xs font-bold text-emerald-700 mb-1 uppercase tracking-wider">
-                        Quanto já foi Pago? (R$)
+                        Quanto já foi Pago? (R$) <span className="text-[9px] font-normal text-slate-500 lowercase">(vazio = R$ 0,00)</span>
                       </label>
                       <MoneyInput
                         currency="BRL"
