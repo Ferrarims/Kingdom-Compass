@@ -114,12 +114,12 @@ export const TransportationView: React.FC = () => {
     dropoffTime: defaultDropoffTime,
     costUSD: 0,
     costBRL: 0,
-    status: 'Planejado',
+    status: 'Reservado / Confirmado',
     payerId: settings.currentUserId || 'all',
     travelerIds: ['all'],
     driverName: '',
     includedInsurances: [],
-    tollOption: '',
+    tollOption: 'Visitor Toll Pass (Gratuito MCO)',
     notes: '',
     attachments: [],
   });
@@ -146,12 +146,12 @@ export const TransportationView: React.FC = () => {
       dropoffTime: defaultDropoffTime,
       costUSD: 0,
       costBRL: 0,
-      status: 'Planejado',
+      status: 'Reservado / Confirmado',
       payerId: settings.currentUserId || 'all',
       travelerIds: ['all'],
       driverName: '',
       includedInsurances: [],
-      tollOption: '',
+      tollOption: 'Visitor Toll Pass (Gratuito MCO)',
       notes: '',
       attachments: [],
     });
@@ -1464,6 +1464,40 @@ export const TransportationView: React.FC = () => {
                       ))}
                     </select>
                   </div>
+                </div>
+              </div>
+
+              {/* COBERTURAS DE SEGURO */}
+              <div className="space-y-4">
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
+                  Coberturas de Seguro Incluídas
+                </label>
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
+                  {[
+                    'CDW / LDW (Proteção contra Colisão e Roubo)',
+                    'SLI / ALI (Proteção contra Terceiros)',
+                    'PAI / PEC (Proteção contra Acidentes Pessoais)',
+                    'Assistência Rodoviária 24h',
+                  ].map((ins) => {
+                    const isChecked = formData.includedInsurances?.includes(ins);
+                    return (
+                      <label key={ins} className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            const current = formData.includedInsurances || [];
+                            const updated = e.target.checked
+                              ? [...current, ins]
+                              : current.filter((i) => i !== ins);
+                            setFormData({ ...formData, includedInsurances: updated });
+                          }}
+                          className="w-4 h-4 rounded text-[#1A2B4C] focus:ring-[#1A2B4C]"
+                        />
+                        <span>{ins}</span>
+                      </label>
+                    );
+                  })}
                 </div>
               </div>
 

@@ -1305,23 +1305,40 @@ export const MapView: React.FC = () => {
             lLower.includes('modern retreat'));
 
         let matchedLoc: LocationPoint | null = null;
-        if (isAccItem && primaryHotelLocation) {
+
+        // 1. Priority 1: Check item.location (stored in hourly_schedules table)
+        if (item.location && item.location.trim()) {
+          matchedLoc = findBestLocationMatch(item.location, catPref);
+        }
+
+        // 2. Priority 2: If item.location is empty/missing, check if item.sourceId links to an accommodation
+        if (!matchedLoc && item.sourceId && accommodations) {
+          const linkedAcc = accommodations.find((a) => a.id === item.sourceId);
+          if (linkedAcc) {
+            const coords = resolveAccommodationCoords(linkedAcc);
+            matchedLoc = {
+              id: `loc-acc-${linkedAcc.id}`,
+              name: linkedAcc.name,
+              category: 'hotel',
+              lat: coords.lat,
+              lng: coords.lng,
+              address: linkedAcc.address || 'Orlando, FL',
+              description: linkedAcc.name,
+            };
+          }
+        }
+
+        // 3. Priority 3: Check item.title or notes
+        if (!matchedLoc && item.title && item.title.trim()) {
+          matchedLoc = findBestLocationMatch(item.title, catPref);
+        }
+        if (!matchedLoc && item.notes && item.notes.trim()) {
+          matchedLoc = findBestLocationMatch(item.notes, catPref);
+        }
+
+        // 4. Fallback ONLY if it is a general hotel event and NO specific location or sourceId is set.
+        if (!matchedLoc && isAccItem && primaryHotelLocation && !item.location && !item.sourceId) {
           matchedLoc = primaryHotelLocation;
-        } else {
-          // Priority 1: Check item.location (stored in hourly_schedules table)
-          if (item.location && item.location.trim()) {
-            matchedLoc = findBestLocationMatch(item.location, catPref);
-          }
-
-          // Priority 2: Check item.title
-          if (!matchedLoc && item.title && item.title.trim()) {
-            matchedLoc = findBestLocationMatch(item.title, catPref);
-          }
-
-          // Priority 3: Check item.notes
-          if (!matchedLoc && item.notes && item.notes.trim()) {
-            matchedLoc = findBestLocationMatch(item.notes, catPref);
-          }
         }
 
         // Fallback coordinates spread along Orlando tourism axis if unmapped
