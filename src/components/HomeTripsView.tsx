@@ -88,6 +88,8 @@ export const HomeTripsView: React.FC = () => {
   const [loginCode, setLoginCode] = useState('');
   const [portalError, setPortalError] = useState<string | null>(null);
   const [portalSuccess, setPortalSuccess] = useState<string | null>(null);
+  const [isCreatingPortalTrip, setIsCreatingPortalTrip] = useState(false);
+  const [isSavingTrip, setIsSavingTrip] = useState(false);
 
   // Quick Create inline fields
   const [newTripNameInput, setNewTripNameInput] = useState('Férias Mágicas em Orlando');
@@ -147,8 +149,9 @@ export const HomeTripsView: React.FC = () => {
     }
   };
 
-  const handlePortalQuickCreate = (e: React.FormEvent) => {
+  const handlePortalQuickCreate = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isCreatingPortalTrip) return;
     setPortalError(null);
     setPortalSuccess(null);
 
@@ -161,64 +164,73 @@ export const HomeTripsView: React.FC = () => {
       return;
     }
 
-    const organizer: Traveler = {
-      id: generateUUID(),
-      name: newOrganizerName.trim(),
-      email: newOrganizerEmail.trim().toLowerCase(),
-      avatarColor: '#E5A93C',
-      role: 'admin',
-    };
+    setIsCreatingPortalTrip(true);
+    try {
+      const organizer: Traveler = {
+        id: generateUUID(),
+        name: newOrganizerName.trim(),
+        email: newOrganizerEmail.trim().toLowerCase(),
+        avatarColor: '#E5A93C',
+        role: 'admin',
+      };
 
-    const sDate = normalizeDateToYMD(newStartDateInput) || '2026-12-30';
-    const eDate = normalizeDateToYMD(newEndDateInput) || calculateDateOffset(sDate, 11);
+      const sDate = normalizeDateToYMD(newStartDateInput) || '2026-12-30';
+      const eDate = normalizeDateToYMD(newEndDateInput) || calculateDateOffset(sDate, 11);
 
-    let days: number;
-    let finalOutStart: string;
-    let finalOutEnd: string;
-    let finalInStart: string;
-    let finalInEnd: string;
-    let outFlexText: string;
-    let inFlexText: string;
+      let days: number;
+      let finalOutStart: string;
+      let finalOutEnd: string;
+      let finalInStart: string;
+      let finalInEnd: string;
+      let outFlexText: string;
+      let inFlexText: string;
 
-    if (newIsFlexible) {
-      days = Math.max(1, Number(newDurationDaysInput) || 10);
-      finalOutStart = sDate;
-      finalOutEnd = calculateDateOffset(finalOutStart, 7);
-      finalInStart = calculateDateOffset(finalOutStart, days);
-      finalInEnd = calculateDateOffset(finalOutStart, days + 7);
-      outFlexText = 'Data Não Definida';
-      inFlexText = 'Data Não Definida';
-    } else {
-      days = calculateDurationFromDates(sDate, eDate);
-      finalOutStart = sDate;
-      finalOutEnd = calculateDateOffset(sDate, 7);
-      finalInStart = eDate;
-      finalInEnd = calculateDateOffset(eDate, 7);
-      outFlexText = 'Datas Fixas';
-      inFlexText = 'Datas Fixas';
-    }
+      if (newIsFlexible) {
+        days = Math.max(1, Number(newDurationDaysInput) || 10);
+        finalOutStart = sDate;
+        finalOutEnd = calculateDateOffset(finalOutStart, 7);
+        finalInStart = calculateDateOffset(finalOutStart, days);
+        finalInEnd = calculateDateOffset(finalOutStart, days + 7);
+        outFlexText = 'Data Não Definida';
+        inFlexText = 'Data Não Definida';
+      } else {
+        days = calculateDurationFromDates(sDate, eDate);
+        finalOutStart = sDate;
+        finalOutEnd = calculateDateOffset(sDate, 7);
+        finalInStart = eDate;
+        finalInEnd = calculateDateOffset(eDate, 7);
+        outFlexText = 'Datas Fixas';
+        inFlexText = 'Datas Fixas';
+      }
 
-    const created = addTrip({
-      tripName: newTripNameInput.trim(),
-      destination: newDestInput.trim(),
-      startDate: finalOutStart,
-      durationDays: days,
-      isFlexibleDates: newIsFlexible,
-      flexibleOutboundStart: finalOutStart,
-      flexibleOutboundEnd: finalOutEnd,
-      flexibleInboundStart: finalInStart,
-      flexibleInboundEnd: finalInEnd,
-      outboundFlexibility: outFlexText,
-      inboundFlexibility: inFlexText,
-      flexibilityNotes: newIsFlexible ? 'Viagem criada com data não definida' : 'Viagem criada com datas fixas',
-      totalBudgetGoalBRL: 75000,
-      dollarRate: 5.75,
-      travelers: [organizer],
-    });
+      const res = await addTrip({
+        tripName: newTripNameInput.trim(),
+        destination: newDestInput.trim(),
+        startDate: finalOutStart,
+        durationDays: days,
+        isFlexibleDates: newIsFlexible,
+        flexibleOutboundStart: finalOutStart,
+        flexibleOutboundEnd: finalOutEnd,
+        flexibleInboundStart: finalInStart,
+        flexibleInboundEnd: finalInEnd,
+        outboundFlexibility: outFlexText,
+        inboundFlexibility: inFlexText,
+        flexibilityNotes: newIsFlexible ? 'Viagem criada com data não definida' : 'Viagem criada com datas fixas',
+        totalBudgetGoalBRL: 75000,
+        dollarRate: 5.75,
+        travelers: [organizer],
+      });
 
-    if (created) {
-      loginWithCode(newOrganizerEmail, created.tripCode || created.id);
-      setPortalSuccess(`✨ Viagem criada com sucesso! Código gerado: ${created.tripCode || created.id}`);
+      if (res.success && res.trip) {
+        loginWithCode(newOrganizerEmail, res.trip.tripCode || res.trip.id);
+        setPortalSuccess(`✨ Viagem criada com sucesso! Código gerado: ${res.trip.tripCode || res.trip.id}`);
+      } else {
+        setPortalError(res.error || 'Erro ao persistir a viagem no Supabase.');
+      }
+    } catch (err: any) {
+      setPortalError(err?.message || 'Erro inesperado ao cadastrar viagem.');
+    } finally {
+      setIsCreatingPortalTrip(false);
     }
   };
 
@@ -321,83 +333,99 @@ export const HomeTripsView: React.FC = () => {
     setTravelers((prev) => prev.filter((t) => t.id !== id));
   };
 
-  const handleSaveTrip = (e?: React.FormEvent) => {
+  const handleSaveTrip = async (e?: React.FormEvent) => {
     if (e && e.preventDefault) {
       e.preventDefault();
     }
-    const finalTripName = tripName.trim() || editingTrip?.tripName || (destination ? `Viagem a ${destination}` : 'Viagem Orlando 2026/2027');
+    if (isSavingTrip) return;
+    setIsSavingTrip(true);
+    try {
+      const finalTripName = tripName.trim() || editingTrip?.tripName || (destination ? `Viagem a ${destination}` : 'Viagem Orlando 2026/2027');
 
-    let currentTravelers = [...travelers];
-    if (newTravelerName.trim()) {
-      const colors = ['#E5A93C', '#3B82F6', '#EC4899', '#10B981', '#8B5CF6', '#F59E0B', '#EF4444', '#06B6D4'];
-      const randomColor = colors[Math.floor(Math.random() * colors.length)];
-      const sanitizedEmail = newTravelerEmail.trim() || `${newTravelerName.toLowerCase().replace(/\s+/g, '')}@exemplo.com`;
-      const newT: Traveler = {
-        id: generateUUID(),
-        name: newTravelerName.trim(),
-        email: sanitizedEmail,
-        avatarColor: randomColor,
-        role: 'traveler',
-      };
-      currentTravelers.push(newT);
-      setTravelers(currentTravelers);
-      setNewTravelerName('');
-      setNewTravelerEmail('');
+      let currentTravelers = [...travelers];
+      if (newTravelerName.trim()) {
+        const colors = ['#E5A93C', '#3B82F6', '#EC4899', '#10B981', '#8B5CF6', '#F59E0B', '#EF4444', '#06B6D4'];
+        const randomColor = colors[Math.floor(Math.random() * colors.length)];
+        const sanitizedEmail = newTravelerEmail.trim() || `${newTravelerName.toLowerCase().replace(/\s+/g, '')}@exemplo.com`;
+        const newT: Traveler = {
+          id: generateUUID(),
+          name: newTravelerName.trim(),
+          email: sanitizedEmail,
+          avatarColor: randomColor,
+          role: 'traveler',
+        };
+        currentTravelers.push(newT);
+        setTravelers(currentTravelers);
+        setNewTravelerName('');
+        setNewTravelerEmail('');
+      }
+
+      const finalStartDate = normalizeDateToYMD(startDate || flexibleOutboundStart || '2026-12-30');
+      const finalOutboundStart = normalizeDateToYMD(isFlexibleDates ? (flexibleOutboundStart || finalStartDate) : finalStartDate);
+      const finalOutboundEnd = normalizeDateToYMD(isFlexibleDates ? (flexibleOutboundEnd || calculateDateOffset(finalOutboundStart, 7)) : calculateDateOffset(finalStartDate, 7));
+      const finalInboundStart = normalizeDateToYMD(isFlexibleDates ? (flexibleInboundStart || calculateDateOffset(finalOutboundStart, durationDays)) : calculateDateOffset(finalStartDate, durationDays));
+      const finalInboundEnd = normalizeDateToYMD(isFlexibleDates ? (flexibleInboundEnd || calculateDateOffset(finalOutboundEnd, durationDays)) : calculateDateOffset(finalStartDate, durationDays + 7));
+
+      const effectiveOutFlex = isFlexibleDates
+        ? 'Data Não Definida'
+        : 'Datas Fixas';
+      const effectiveInFlex = isFlexibleDates
+        ? 'Data Não Definida'
+        : 'Datas Fixas';
+
+      if (editingTrip) {
+        const res = await updateTrip(editingTrip.id, {
+          tripName: finalTripName,
+          destination: destination || editingTrip.destination,
+          startDate: finalStartDate,
+          durationDays,
+          isFlexibleDates,
+          flexibleOutboundStart: finalOutboundStart,
+          flexibleOutboundEnd: finalOutboundEnd,
+          flexibleInboundStart: finalInboundStart,
+          flexibleInboundEnd: finalInboundEnd,
+          outboundFlexibility: effectiveOutFlex,
+          inboundFlexibility: effectiveInFlex,
+          flexibilityNotes,
+          totalBudgetGoalBRL,
+          dollarRate,
+          travelers: currentTravelers,
+          travelersCount: currentTravelers.length,
+        });
+        if (res && !res.success) {
+          alert(`Erro ao salvar viagem: ${res.error || 'Erro desconhecido'}`);
+          return;
+        }
+      } else {
+        const res = await addTrip({
+          tripName: finalTripName,
+          destination: destination || 'Orlando, Flórida',
+          startDate: finalStartDate,
+          durationDays,
+          isFlexibleDates,
+          flexibleOutboundStart: finalOutboundStart,
+          flexibleOutboundEnd: finalOutboundEnd,
+          flexibleInboundStart: finalInboundStart,
+          flexibleInboundEnd: finalInboundEnd,
+          outboundFlexibility: effectiveOutFlex,
+          inboundFlexibility: effectiveInFlex,
+          flexibilityNotes,
+          totalBudgetGoalBRL,
+          dollarRate,
+          travelers: currentTravelers,
+        });
+        if (res && !res.success) {
+          alert(`Erro ao criar viagem: ${res.error || 'Erro desconhecido'}`);
+          return;
+        }
+      }
+
+      setIsModalOpen(false);
+    } catch (err: any) {
+      alert(`Erro inesperado ao salvar viagem: ${err?.message || 'Erro desconhecido'}`);
+    } finally {
+      setIsSavingTrip(false);
     }
-
-    const finalStartDate = normalizeDateToYMD(startDate || flexibleOutboundStart || '2026-12-30');
-    const finalOutboundStart = normalizeDateToYMD(isFlexibleDates ? (flexibleOutboundStart || finalStartDate) : finalStartDate);
-    const finalOutboundEnd = normalizeDateToYMD(isFlexibleDates ? (flexibleOutboundEnd || calculateDateOffset(finalOutboundStart, 7)) : calculateDateOffset(finalStartDate, 7));
-    const finalInboundStart = normalizeDateToYMD(isFlexibleDates ? (flexibleInboundStart || calculateDateOffset(finalOutboundStart, durationDays)) : calculateDateOffset(finalStartDate, durationDays));
-    const finalInboundEnd = normalizeDateToYMD(isFlexibleDates ? (flexibleInboundEnd || calculateDateOffset(finalOutboundEnd, durationDays)) : calculateDateOffset(finalStartDate, durationDays + 7));
-
-    const effectiveOutFlex = isFlexibleDates
-      ? 'Data Não Definida'
-      : 'Datas Fixas';
-    const effectiveInFlex = isFlexibleDates
-      ? 'Data Não Definida'
-      : 'Datas Fixas';
-
-    if (editingTrip) {
-      updateTrip(editingTrip.id, {
-        tripName: finalTripName,
-        destination: destination || editingTrip.destination,
-        startDate: finalStartDate,
-        durationDays,
-        isFlexibleDates,
-        flexibleOutboundStart: finalOutboundStart,
-        flexibleOutboundEnd: finalOutboundEnd,
-        flexibleInboundStart: finalInboundStart,
-        flexibleInboundEnd: finalInboundEnd,
-        outboundFlexibility: effectiveOutFlex,
-        inboundFlexibility: effectiveInFlex,
-        flexibilityNotes,
-        totalBudgetGoalBRL,
-        dollarRate,
-        travelers: currentTravelers,
-        travelersCount: currentTravelers.length,
-      });
-    } else {
-      addTrip({
-        tripName: finalTripName,
-        destination: destination || 'Orlando, Flórida',
-        startDate: finalStartDate,
-        durationDays,
-        isFlexibleDates,
-        flexibleOutboundStart: finalOutboundStart,
-        flexibleOutboundEnd: finalOutboundEnd,
-        flexibleInboundStart: finalInboundStart,
-        flexibleInboundEnd: finalInboundEnd,
-        outboundFlexibility: effectiveOutFlex,
-        inboundFlexibility: effectiveInFlex,
-        flexibilityNotes,
-        totalBudgetGoalBRL,
-        dollarRate,
-        travelers: currentTravelers,
-      });
-    }
-
-    setIsModalOpen(false);
   };
 
   const { handleBackdropClick: handleTripModalBackdrop } = useModalKeyEvents({
@@ -747,11 +775,18 @@ export const HomeTripsView: React.FC = () => {
 
                 <button
                   type="submit"
-                  className="w-full py-3.5 rounded-xl bg-[#1A2B4C] hover:bg-[#2A437E] text-white font-bold text-xs sm:text-sm shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer mt-3"
+                  disabled={isCreatingPortalTrip}
+                  className="w-full py-3.5 rounded-xl bg-[#1A2B4C] hover:bg-[#2A437E] text-white font-bold text-xs sm:text-sm shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer mt-3 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Plus className="w-4 h-4 text-[#D4AF37]" />
-                  <span>Cadastrar Viagem e Gerar Código</span>
-                  <ArrowRight className="w-4 h-4" />
+                  {isCreatingPortalTrip ? (
+                    <span>Salvando viagem no Supabase...</span>
+                  ) : (
+                    <>
+                      <Plus className="w-4 h-4 text-[#D4AF37]" />
+                      <span>Cadastrar Viagem e Gerar Código</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
                 </button>
               </form>
             )}
@@ -1447,10 +1482,17 @@ export const HomeTripsView: React.FC = () => {
                   </button>
                   <button
                     type="submit"
-                    className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md"
+                    disabled={isSavingTrip}
+                    className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
-                    <span>Salvar</span>
+                    {isSavingTrip ? (
+                      <span>Salvando...</span>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
+                        <span>Salvar</span>
+                      </>
+                    )}
                   </button>
                 </div>
               </div>

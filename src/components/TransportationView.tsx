@@ -210,14 +210,19 @@ export const TransportationView: React.FC = () => {
         pickupLocation: cleanAddressString(formData.pickupLocation),
         dropoffLocation: cleanAddressString(formData.dropoffLocation),
       };
+      let res: { success: boolean; error?: string } | undefined;
       if (editingRental) {
-        await updateCarRental(editingRental.id, cleanedData);
+        res = await updateCarRental(editingRental.id, cleanedData);
       } else {
-        await addCarRental(cleanedData);
+        res = await addCarRental(cleanedData);
+      }
+      if (res && !res.success) {
+        alert(`Erro ao salvar aluguel de veículo: ${res.error || 'Erro desconhecido'}`);
+        return;
       }
       setIsModalOpen(false);
-    } catch (err) {
-      // handle error
+    } catch (err: any) {
+      alert(`Erro inesperado ao salvar aluguel de veículo: ${err?.message || 'Erro desconhecido'}`);
     } finally {
       setIsSaving(false);
     }

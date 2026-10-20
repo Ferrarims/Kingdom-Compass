@@ -529,7 +529,7 @@ interface PlannerContextType {
     totalBudgetGoalBRL?: number;
     dollarRate?: number;
     travelers: Traveler[];
-  }) => Trip;
+  }) => Promise<{ success: boolean; error?: string; tripId?: string; tripCode?: string; trip?: Trip }>;
   updateTrip: (id: string, updates: Partial<Trip>) => Promise<{ success: boolean; error?: string }>;
   deleteTrip: (id: string) => void;
   removeAllTrips: () => Promise<void>;
@@ -544,8 +544,8 @@ interface PlannerContextType {
   
   // Financial
   expenses: ExpenseItem[];
-  addExpense: (expense: Omit<ExpenseItem, 'id'>) => void;
-  updateExpense: (id: string, updates: Partial<ExpenseItem>) => void;
+  addExpense: (expense: Omit<ExpenseItem, 'id'>) => Promise<{ success: boolean; error?: string; id?: string }>;
+  updateExpense: (id: string, updates: Partial<ExpenseItem>) => Promise<{ success: boolean; error?: string }>;
   deleteExpense: (id: string) => void;
   toggleExpenseExclusion: (id: string) => void;
   syncExpensesToSupabase: () => Promise<boolean>;
@@ -1988,7 +1988,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   };
 
-  const addTrip = (tripData: {
+  const addTrip = async (tripData: {
     tripName: string;
     destination: string;
     startDate: string;
@@ -2006,7 +2006,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     totalBudgetGoalBRL?: number;
     dollarRate?: number;
     travelers: Traveler[];
-  }) => {
+  }): Promise<{ success: boolean; error?: string; tripId?: string; tripCode?: string; trip?: Trip }> => {
     const newId = generateUUID();
     const tripCode = `ORL-${Math.floor(1000 + Math.random() * 9000)}`;
     const normalizedStart = normalizeDateToYMD(tripData.startDate) || '2026-12-30';
@@ -2079,37 +2079,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       parkTickets: [],
     };
 
-    setTrips((prev) => [newTrip, ...(prev || [])]);
-    const mainTraveler = tripData.travelers?.[0] || { id: '1', name: 'Organizador', email: 'organizador@exemplo.com' };
-    const newSession: AuthSession = {
-      email: mainTraveler.email,
-      tripCode: tripCode,
-      tripId: newId,
-      travelerName: mainTraveler.name,
-      authenticatedAt: new Date().toISOString(),
-    };
-
-    setAuthSession(newSession);
-    try {
-      localStorage.setItem('planner_auth_session_v1', JSON.stringify(newSession));
-    } catch (e) {}
-
-    setActiveTripId(newId);
-    setSettings(newSettings);
-    setExpenses([]);
-    setRawDays(generatedDays);
-    setPrepDocuments(newTrip.prepDocuments); // FIX: Usar documentos criados para os viajantes
-    setBookingMilestones(INITIAL_BOOKING_MILESTONES);
-    setBaggageItems(INITIAL_BAGGAGE_ITEMS);
-    setFlights([]);
-    setCarRentals([]);
-    setAccommodations([]);
-    setParkTickets([]);
-    setActiveTabState('journey');
-
-    // Persist immediately to Supabase Cloud Database
+    // Persist immediately to Supabase Cloud Database and await actual response
     setSupabaseStatus((prev) => ({ ...prev, syncing: true }));
-    SupabaseService.syncTripToSupabase(newTrip).then((res) => {
+    try {
+      const res = await SupabaseService.syncTripToSupabase(newTrip);
       if (res.success) {
         const now = new Date();
         const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
@@ -2122,23 +2095,63 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           error: null,
         }));
         addNotification(`Viagem "${newTrip.tripName}" salva no Supabase com sucesso!`);
-      } else if (res.tablesExist === false) {
-        setSupabaseStatus((prev) => ({
-          ...prev,
-          tablesExist: false,
-          syncing: false,
-          error: null,
-        }));
+
+        setTrips((prev) => [newTrip, ...(prev || [])]);
+        const mainTraveler = tripData.travelers?.[0] || { id: '1', name: 'Organizador', email: 'organizador@exemplo.com' };
+        const newSession: AuthSession = {
+          email: mainTraveler.email,
+          tripCode: tripCode,
+          tripId: newId,
+          travelerName: mainTraveler.name,
+          authenticatedAt: new Date().toISOString(),
+        };
+
+        setAuthSession(newSession);
+        try {
+          localStorage.setItem('planner_auth_session_v1', JSON.stringify(newSession));
+        } catch (e) {}
+
+        setActiveTripId(newId);
+        setSettings(newSettings);
+        setExpenses([]);
+        setRawDays(generatedDays);
+        setPrepDocuments(newTrip.prepDocuments);
+        setBookingMilestones(INITIAL_BOOKING_MILESTONES);
+        setBaggageItems(INITIAL_BAGGAGE_ITEMS);
+        setFlights([]);
+        setCarRentals([]);
+        setAccommodations([]);
+        setParkTickets([]);
+        setActiveTabState('journey');
+
+        return {
+          success: true,
+          tripId: newId,
+          tripCode: newTrip.tripCode,
+          trip: newTrip,
+        };
       } else {
         setSupabaseStatus((prev) => ({
           ...prev,
           syncing: false,
           error: res.error || 'Erro ao salvar viagem no banco de dados Supabase',
         }));
+        return {
+          success: false,
+          error: res.error || 'Falha ao sincronizar viagem no Supabase',
+        };
       }
-    });
-
-    return newTrip;
+    } catch (err: any) {
+      setSupabaseStatus((prev) => ({
+        ...prev,
+        syncing: false,
+        error: err.message,
+      }));
+      return {
+        success: false,
+        error: err?.message || 'Erro inesperado na gravação da viagem',
+      };
+    }
   };
 
   const updateTrip = async (id: string, updates: Partial<Trip>): Promise<{ success: boolean; error?: string }> => {
@@ -2740,7 +2753,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   };
 
-  const addExpense = async (expense: Omit<ExpenseItem, 'id'>): Promise<void> => {
+  const addExpense = async (expense: Omit<ExpenseItem, 'id'>): Promise<{ success: boolean; error?: string; id?: string }> => {
     const id = `exp-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     const newExp: ExpenseItem = {
       ...expense,
@@ -2761,41 +2774,58 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         durationDays: settings.durationDays,
         travelers: settings.travelers,
       };
-      const res = await SupabaseService.saveExpense(activeTripId, newExp, fallbackTrip);
-      if (res && !res.success && res.error) {
-        throw new Error(res.error);
+      try {
+        const res = await SupabaseService.saveExpense(activeTripId, newExp, fallbackTrip);
+        if (res && !res.success) {
+          // Rollback optimistic state
+          setExpenses((prev) => prev.filter((e) => e.id !== id));
+          setTrips((prevTrips) =>
+            prevTrips.map((t) =>
+              t.id === activeTripId ? { ...t, expenses: (t.expenses || []).filter((e) => e.id !== id) } : t
+            )
+          );
+          return { success: false, error: res.error || 'Falha ao salvar despesa no Supabase' };
+        }
+      } catch (err: any) {
+        // Rollback optimistic state
+        setExpenses((prev) => prev.filter((e) => e.id !== id));
+        setTrips((prevTrips) =>
+          prevTrips.map((t) =>
+            t.id === activeTripId ? { ...t, expenses: (t.expenses || []).filter((e) => e.id !== id) } : t
+          )
+        );
+        return { success: false, error: err?.message || 'Erro inesperado ao salvar despesa' };
       }
     }
     addNotification(`Adicionou gasto "${expense.title}"`);
+    return { success: true, id };
   };
 
-  const updateExpense = (id: string, updates: Partial<ExpenseItem>) => {
-    let updatedItem: ExpenseItem | null = null;
-    setExpenses((prev) =>
-      prev.map((item) => {
-        if (item.id === id) {
-          updatedItem = {
-            ...item,
-            ...updates,
-            updatedAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-            updatedBy: currentUser.name,
-          };
-          return updatedItem;
-        }
-        return item;
-      })
-    );
+  const updateExpense = async (id: string, updates: Partial<ExpenseItem>): Promise<{ success: boolean; error?: string }> => {
+    const prevItem = expenses.find((e) => e.id === id);
+    if (!prevItem) {
+      return { success: false, error: 'Despesa não encontrada' };
+    }
+    const updatedItem: ExpenseItem = {
+      ...prevItem,
+      ...updates,
+      updatedAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      updatedBy: currentUser.name,
+    };
+
+    setExpenses((prev) => prev.map((item) => (item.id === id ? updatedItem : item)));
     setTrips((prevTrips) =>
       prevTrips.map((t) =>
         t.id === activeTripId
           ? {
               ...t,
-              expenses: (t.expenses || []).map((e) => (e.id === id ? { ...e, ...updates } : e)),
+              expenses: (t.expenses || []).map((e) => (e.id === id ? updatedItem : e)),
             }
           : t
       )
     );
-    if (activeTripId && updatedItem) {
+
+    if (activeTripId) {
       const fallbackTrip = activeTrip || {
         id: activeTripId,
         tripName: settings.tripName,
@@ -2804,7 +2834,38 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         durationDays: settings.durationDays,
         travelers: settings.travelers,
       };
-      SupabaseService.saveExpense(activeTripId, updatedItem, fallbackTrip);
+      try {
+        const res = await SupabaseService.saveExpense(activeTripId, updatedItem, fallbackTrip);
+        if (res && !res.success) {
+          // Rollback optimistic update
+          setExpenses((prev) => prev.map((item) => (item.id === id ? prevItem : item)));
+          setTrips((prevTrips) =>
+            prevTrips.map((t) =>
+              t.id === activeTripId
+                ? {
+                    ...t,
+                    expenses: (t.expenses || []).map((e) => (e.id === id ? prevItem : e)),
+                  }
+                : t
+            )
+          );
+          return { success: false, error: res.error || 'Falha ao atualizar despesa no Supabase' };
+        }
+      } catch (err: any) {
+        // Rollback optimistic update
+        setExpenses((prev) => prev.map((item) => (item.id === id ? prevItem : item)));
+        setTrips((prevTrips) =>
+          prevTrips.map((t) =>
+            t.id === activeTripId
+              ? {
+                  ...t,
+                  expenses: (t.expenses || []).map((e) => (e.id === id ? prevItem : e)),
+                }
+              : t
+          )
+        );
+        return { success: false, error: err?.message || 'Erro inesperado ao atualizar despesa' };
+      }
 
       // Sincronizar de volta para a acomodação se o gasto for derivado de hospedagem
       const isAcc = (updatedItem as ExpenseItem).sourceType === 'accommodation' || id.startsWith('exp-acc-');
@@ -2837,6 +2898,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
     }
     addNotification(`Editou o item financeiro`);
+    return { success: true };
   };
 
   const deleteExpense = (id: string) => {
@@ -3569,10 +3631,35 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     
     if (activeTripId) {
       try {
-        await SupabaseService.saveItineraryAttachment(activeTripId, dayId, newAtt);
+        const res = await SupabaseService.saveItineraryAttachment(activeTripId, dayId, newAtt);
+        if (res && !res.success) {
+          // Rollback optimistic state
+          setRawDays((prev) =>
+            prev.map((day) =>
+              day.id === dayId
+                ? {
+                    ...day,
+                    attachments: (day.attachments || []).filter((a) => a.id !== newAtt.id),
+                  }
+                : day
+            )
+          );
+          return { success: false, error: res.error || 'Falha ao salvar anexo no Supabase' };
+        }
         return { success: true };
       } catch (e: any) {
-        return { success: false, error: e.message };
+        // Rollback optimistic state
+        setRawDays((prev) =>
+          prev.map((day) =>
+            day.id === dayId
+              ? {
+                  ...day,
+                  attachments: (day.attachments || []).filter((a) => a.id !== newAtt.id),
+                }
+              : day
+          )
+        );
+        return { success: false, error: e.message || 'Erro inesperado ao salvar anexo' };
       }
     }
     return { success: true };
@@ -4797,11 +4884,38 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     
     if (activeTripId) {
       try {
-        await SupabaseService.saveCarRental(activeTripId, newRental, activeTrip || undefined);
+        const res = await SupabaseService.saveCarRental(activeTripId, newRental, activeTrip || undefined);
+        if (res && !res.success) {
+          // Rollback optimistic state
+          setCarRentals((prev) => prev.filter((c) => c.id !== newRental.id));
+          const expId = generateDeterministicUUID('car-expense', newRental.id);
+          setExpenses((prev) => prev.filter((e) => e.id !== expId && e.id !== `exp-car-${newRental.id}`));
+          setRawDays((prevDays) =>
+            prevDays.map((d) => ({
+              ...d,
+              hourlySchedule: (d.hourlySchedule || []).filter(
+                (item) => !(item.sourceType === 'car_rental' && (item.sourceId === newRental.id || item.id.includes(newRental.id)))
+              ),
+            }))
+          );
+          return { success: false, error: res.error || 'Falha ao salvar aluguel de veículo no Supabase' };
+        }
         addNotification(`Cadastrou aluguel de veículo (${rental.company}) e sincronizou no orçamento e cronograma`);
         return { success: true };
       } catch (e: any) {
-        return { success: false, error: e.message };
+        // Rollback optimistic state
+        setCarRentals((prev) => prev.filter((c) => c.id !== newRental.id));
+        const expId = generateDeterministicUUID('car-expense', newRental.id);
+        setExpenses((prev) => prev.filter((e) => e.id !== expId && e.id !== `exp-car-${newRental.id}`));
+        setRawDays((prevDays) =>
+          prevDays.map((d) => ({
+            ...d,
+            hourlySchedule: (d.hourlySchedule || []).filter(
+              (item) => !(item.sourceType === 'car_rental' && (item.sourceId === newRental.id || item.id.includes(newRental.id)))
+            ),
+          }))
+        );
+        return { success: false, error: e.message || 'Erro inesperado ao cadastrar aluguel' };
       }
     }
     
@@ -4809,25 +4923,38 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     return { success: true };
   };
 
-  const updateCarRental = (id: string, updates: Partial<CarRentalBooking>) => {
-    setCarRentals((prev) => {
-      const updatedList = prev.map((c) => {
-        if (c.id === id) {
-          const updated = { ...c, ...updates };
-          syncCarRentalExpense(updated, settings.dollarRate || 5.75);
-          syncCarRentalToItineraryDays(updated);
-          
-          if (activeTripId) {
-            SupabaseService.saveCarRental(activeTripId, updated, activeTrip || undefined);
-          }
-          
-          return updated;
+  const updateCarRental = async (id: string, updates: Partial<CarRentalBooking>): Promise<{ success: boolean; error?: string }> => {
+    const previous = carRentals.find((c) => c.id === id);
+    if (!previous) {
+      return { success: false, error: 'Aluguel de veículo não encontrado' };
+    }
+    const updated: CarRentalBooking = { ...previous, ...updates };
+
+    setCarRentals((prev) => prev.map((c) => (c.id === id ? updated : c)));
+    syncCarRentalExpense(updated, settings.dollarRate || 5.75);
+    syncCarRentalToItineraryDays(updated);
+
+    if (activeTripId) {
+      try {
+        const res = await SupabaseService.saveCarRental(activeTripId, updated, activeTrip || undefined);
+        if (res && !res.success) {
+          // Rollback optimistic update
+          setCarRentals((prev) => prev.map((c) => (c.id === id ? previous : c)));
+          syncCarRentalExpense(previous, settings.dollarRate || 5.75);
+          syncCarRentalToItineraryDays(previous);
+          return { success: false, error: res.error || 'Falha ao atualizar aluguel no Supabase' };
         }
-        return c;
-      });
-      return updatedList;
-    });
+      } catch (e: any) {
+        // Rollback optimistic update
+        setCarRentals((prev) => prev.map((c) => (c.id === id ? previous : c)));
+        syncCarRentalExpense(previous, settings.dollarRate || 5.75);
+        syncCarRentalToItineraryDays(previous);
+        return { success: false, error: e.message || 'Erro inesperado ao atualizar aluguel' };
+      }
+    }
+
     addNotification(`Atualizou informações de aluguel de carro, orçamento e cronograma`);
+    return { success: true };
   };
 
   const deleteCarRental = (id: string) => {
@@ -4879,10 +5006,35 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     
     if (activeTripId) {
       try {
-        await SupabaseService.saveCarRentalAttachment(activeTripId, rentalId, newAtt);
+        const res = await SupabaseService.saveCarRentalAttachment(activeTripId, rentalId, newAtt);
+        if (res && !res.success) {
+          // Rollback optimistic state
+          setCarRentals((prev) =>
+            prev.map((c) =>
+              c.id === rentalId
+                ? {
+                    ...c,
+                    attachments: (c.attachments || []).filter((a) => a.id !== newAtt.id),
+                  }
+                : c
+            )
+          );
+          return { success: false, error: res.error || 'Falha ao salvar anexo de locação no Supabase' };
+        }
         return { success: true };
       } catch (e: any) {
-        return { success: false, error: e.message };
+        // Rollback optimistic state
+        setCarRentals((prev) =>
+          prev.map((c) =>
+            c.id === rentalId
+              ? {
+                  ...c,
+                  attachments: (c.attachments || []).filter((a) => a.id !== newAtt.id),
+                }
+              : c
+          )
+        );
+        return { success: false, error: e.message || 'Erro inesperado ao salvar anexo de locação' };
       }
     }
     return { success: true };

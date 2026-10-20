@@ -39,6 +39,7 @@ import {
   AlertCircle,
   Terminal,
   Camera,
+  RefreshCw,
 } from 'lucide-react';
 import {
   usePlanner,

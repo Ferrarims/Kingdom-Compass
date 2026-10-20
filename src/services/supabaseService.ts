@@ -2472,6 +2472,51 @@ export const SupabaseService = {
   },
 
   /**
+   * Persists an attachment/voucher for a car rental booking in Supabase
+   */
+  async saveCarRentalAttachment(
+    tripId: string,
+    rentalId: string,
+    attachment: { id?: string; name: string; type: string; url: string; size?: string }
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!tripId || !rentalId || !attachment) {
+        return { success: false, error: 'Parâmetros inválidos para anexo de locação' };
+      }
+      const resolvedRentalId = ensureValidUUID(rentalId, 'car', `${tripId}-${rentalId}`);
+      
+      const { data, error } = await supabase
+        .from('car_rentals')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', resolvedRentalId)
+        .eq('trip_id', tripId)
+        .select('id');
+
+      if (error) {
+        if (isSupabaseMissingTableError(error)) {
+          return { success: false, error: 'Tabela car_rentals não encontrada no Supabase.' };
+        }
+        return { success: false, error: error.message };
+      }
+
+      if (!data || data.length === 0) {
+        const { data: existingCheck, error: checkErr } = await supabase
+          .from('car_rentals')
+          .select('id')
+          .eq('trip_id', tripId)
+          .limit(1);
+        if (checkErr) {
+          return { success: false, error: checkErr.message };
+        }
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro ao persistir anexo de locação' };
+    }
+  },
+
+  /**
    * Delete Park Photo Package and its records
    */
   async deleteParkPhotoPackage(id: string): Promise<boolean> {
@@ -3041,6 +3086,51 @@ export const SupabaseService = {
       };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Erro desconhecido ao salvar dia', debugLogs };
+    }
+  },
+
+  /**
+   * Persists an attachment/voucher for an itinerary day in Supabase
+   */
+  async saveItineraryAttachment(
+    tripId: string,
+    dayId: string,
+    attachment: { id?: string; name: string; type: string; url: string; size?: string }
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!tripId || !dayId || !attachment) {
+        return { success: false, error: 'Parâmetros inválidos para anexo de roteiro' };
+      }
+      const resolvedDayId = ensureValidUUID(dayId, 'day', `${tripId}-${dayId}`);
+
+      const { data, error } = await supabase
+        .from('itinerary_days')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', resolvedDayId)
+        .eq('trip_id', tripId)
+        .select('id');
+
+      if (error) {
+        if (isSupabaseMissingTableError(error)) {
+          return { success: false, error: 'Tabela itinerary_days não encontrada no Supabase.' };
+        }
+        return { success: false, error: error.message };
+      }
+
+      if (!data || data.length === 0) {
+        const { data: existingCheck, error: checkErr } = await supabase
+          .from('itinerary_days')
+          .select('id')
+          .eq('trip_id', tripId)
+          .limit(1);
+        if (checkErr) {
+          return { success: false, error: checkErr.message };
+        }
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro ao persistir anexo de roteiro' };
     }
   },
 

@@ -185,10 +185,15 @@ export const FinancialPlanner: React.FC = () => {
         sourceId: finalSourceId,
       };
 
+      let res: { success: boolean; error?: string } | undefined;
       if (editingExpenseId) {
-        await updateExpense(editingExpenseId, expenseData);
+        res = await updateExpense(editingExpenseId, expenseData);
       } else {
-        await addExpense(expenseData as ExpenseItem);
+        res = await addExpense(expenseData as ExpenseItem);
+      }
+      if (res && !res.success) {
+        alert(`Erro ao salvar despesa: ${res.error || 'Erro desconhecido'}`);
+        return;
       }
       setModalOpen(false);
     } catch (error) {

@@ -50,6 +50,7 @@ export const TripAccessModal: React.FC<TripAccessModalProps> = ({ isOpen, onClos
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
+  const [isCreatingTrip, setIsCreatingTrip] = useState<boolean>(false);
 
   // Create Trip state
   const [newTripName, setNewTripName] = useState('Férias Mágicas em Orlando');
@@ -86,8 +87,9 @@ export const TripAccessModal: React.FC<TripAccessModalProps> = ({ isOpen, onClos
     }
   };
 
-  const handleCreateSubmit = (e: React.FormEvent) => {
+  const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isCreatingTrip) return;
     setErrorMsg(null);
     setSuccessMsg(null);
 
@@ -101,40 +103,49 @@ export const TripAccessModal: React.FC<TripAccessModalProps> = ({ isOpen, onClos
       return;
     }
 
-    const organizerTraveler: Traveler = {
-      id: generateUUID(),
-      name: organizerName.trim(),
-      email: organizerEmail.trim().toLowerCase(),
-      role: 'admin',
-      avatarColor: '#E5A93C'
-    };
+    setIsCreatingTrip(true);
+    try {
+      const organizerTraveler: Traveler = {
+        id: generateUUID(),
+        name: organizerName.trim(),
+        email: organizerEmail.trim().toLowerCase(),
+        role: 'admin',
+        avatarColor: '#E5A93C'
+      };
 
-    const createdTrip = addTrip({
-      tripName: newTripName.trim(),
-      destination: newDestination.trim(),
-      startDate: newStartDate,
-      durationDays: Number(newDurationDays) || 10,
-      isFlexibleDates,
-      outboundFlexibility: isFlexibleDates ? 'Data Não Definida' : 'Datas Fixas',
-      inboundFlexibility: isFlexibleDates ? 'Data Não Definida' : 'Datas Fixas',
-      flexibilityNotes: isFlexibleDates ? 'Viagem com data não definida' : 'Viagem criada via Portal de Entrada',
-      totalBudgetGoalBRL: 75000,
-      dollarRate: 5.75,
-      travelers: [organizerTraveler]
-    });
+      const res = await addTrip({
+        tripName: newTripName.trim(),
+        destination: newDestination.trim(),
+        startDate: newStartDate,
+        durationDays: Number(newDurationDays) || 10,
+        isFlexibleDates,
+        outboundFlexibility: isFlexibleDates ? 'Data Não Definida' : 'Datas Fixas',
+        inboundFlexibility: isFlexibleDates ? 'Data Não Definida' : 'Datas Fixas',
+        flexibilityNotes: isFlexibleDates ? 'Viagem com data não definida' : 'Viagem criada via Portal de Entrada',
+        totalBudgetGoalBRL: 75000,
+        dollarRate: 5.75,
+        travelers: [organizerTraveler]
+      });
 
-    if (createdTrip) {
-      // Authenticate as the new trip organizer automatically
-      const res = loginWithCode(organizerEmail, createdTrip.tripCode || createdTrip.id);
-      if (res.success) {
-        setSuccessMsg(`✨ Viagem criada com sucesso! Seu código de acesso é: ${createdTrip.tripCode}`);
-        setTimeout(() => {
+      if (res.success && res.trip) {
+        // Authenticate as the new trip organizer automatically
+        const loginRes = loginWithCode(organizerEmail, res.trip.tripCode || res.trip.id);
+        if (loginRes.success) {
+          setSuccessMsg(`✨ Viagem criada com sucesso! Seu código de acesso é: ${res.trip.tripCode}`);
+          setTimeout(() => {
+            onClose();
+          }, 1500);
+        } else {
+          selectTrip(res.trip.id);
           onClose();
-        }, 1500);
+        }
       } else {
-        selectTrip(createdTrip.id);
-        onClose();
+        setErrorMsg(res.error || 'Erro ao persistir a viagem no Supabase.');
       }
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Erro inesperado ao criar viagem.');
+    } finally {
+      setIsCreatingTrip(false);
     }
   };
 
@@ -547,11 +558,18 @@ export const TripAccessModal: React.FC<TripAccessModalProps> = ({ isOpen, onClos
 
               <button
                 type="submit"
-                className="w-full py-3 rounded-xl bg-[#1A2B4C] hover:bg-[#2C4475] text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer mt-2"
+                disabled={isCreatingTrip}
+                className="w-full py-3 rounded-xl bg-[#1A2B4C] hover:bg-[#2C4475] text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer mt-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <Plus className="w-4 h-4 text-[#D4AF37]" />
-                <span>Salvar</span>
-                <ArrowRight className="w-4 h-4" />
+                {isCreatingTrip ? (
+                  <span>Salvando viagem no Supabase...</span>
+                ) : (
+                  <>
+                    <Plus className="w-4 h-4 text-[#D4AF37]" />
+                    <span>Salvar</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </>
+                )}
               </button>
             </form>
           )}
