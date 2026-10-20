@@ -14,6 +14,7 @@ import {
   Sparkles,
   ShieldCheck,
   Info,
+  AlertTriangle,
 } from 'lucide-react';
 import { usePlanner } from '../context/PlannerContext';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
@@ -24,6 +25,9 @@ import {
   validateBackupPayload,
   executeBackupRestore,
   BackupPayload,
+  BackupGenerationResult,
+  RestoreResult,
+  TableRestoreMetrics,
 } from '../services/backupService';
 
 interface BackupModalProps {
@@ -51,7 +55,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
 
   // Export State
   const [isExporting, setIsExporting] = useState(false);
-  const [generatedPayload, setGeneratedPayload] = useState<BackupPayload | null>(null);
+  const [exportResult, setExportResult] = useState<BackupGenerationResult | null>(null);
   const [copiedJson, setCopiedJson] = useState(false);
 
   // Import State
@@ -65,7 +69,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
     summary?: { tableCount: number; recordCount: number; tableDetails: Record<string, number> };
   } | null>(null);
   const [isRestoring, setIsRestoring] = useState(false);
-  const [restoreSuccessMsg, setRestoreSuccessMsg] = useState<string | null>(null);
+  const [restoreResult, setRestoreResult] = useState<RestoreResult | null>(null);
 
   // Generate payload preview when opening export tab
   useEffect(() => {
@@ -83,8 +87,8 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
         parkTickets,
         prepDocuments,
       })
-        .then((payload) => {
-          setGeneratedPayload(payload);
+        .then((res) => {
+          setExportResult(res);
         })
         .finally(() => setIsExporting(false));
     }
@@ -96,15 +100,17 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
     if (raw && raw.trim().length > 0) {
       const res = validateBackupPayload(raw);
       setValidationResult(res);
+      setRestoreResult(null);
     } else {
       setValidationResult(null);
+      setRestoreResult(null);
     }
   }, [fileContent, pastedJson, importMode]);
 
   const handleDownloadBackup = async () => {
     setIsExporting(true);
     try {
-      const payload = generatedPayload || (await generateFullBackupPayload({
+      const res = exportResult || (await generateFullBackupPayload({
         trips,
         activeTripId,
         settings,
@@ -116,18 +122,30 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
         parkTickets,
         prepDocuments,
       }));
-      downloadBackupFile(payload);
-      addNotification('Download do backup realizado com sucesso!');
+
+      setExportResult(res);
+
+      if (!res.success || !res.payload) {
+        alert('Não foi possível gerar um backup completo devido a falhas em consultas de tabelas. Verifique os erros listados antes de exportar.');
+        return;
+      }
+
+      downloadBackupFile(res.payload);
+      addNotification('Download do backup completo realizado com sucesso!');
     } catch (err) {
       console.error('Erro ao baixar backup:', err);
+      alert('Erro inesperado ao gerar backup.');
     } finally {
       setIsExporting(false);
     }
   };
 
   const handleCopyJson = () => {
-    if (!generatedPayload) return;
-    const str = JSON.stringify(generatedPayload, null, 2);
+    if (!exportResult || !exportResult.success || !exportResult.payload) {
+      alert('O backup possui falhas e não pode ser copiado como completo.');
+      return;
+    }
+    const str = JSON.stringify(exportResult.payload, null, 2);
     navigator.clipboard.writeText(str);
     setCopiedJson(true);
     addNotification('Backup JSON copiado para a área de transferência!');
@@ -149,18 +167,20 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
     if (!validationResult || !validationResult.valid || !validationResult.payload) return;
 
     setIsRestoring(true);
-    setRestoreSuccessMsg(null);
+    setRestoreResult(null);
 
     try {
       const res = await executeBackupRestore(validationResult.payload);
+      setRestoreResult(res);
+
       if (res.success) {
-        setRestoreSuccessMsg(
-          `Restauração concluída! ${res.totalRestored} registro(s) sincronizado(s) em ${Object.keys(res.restoredTables).length} tabela(s).`
-        );
-        addNotification('Backup restaurado com sucesso!');
+        addNotification('Backup restaurado integralmente com sucesso!');
+        await reloadFromSupabase();
+      } else if (res.isPartial) {
+        addNotification('Aviso: Restauração parcial concluída com falhas em algumas tabelas.', 'warning');
         await reloadFromSupabase();
       } else {
-        alert(`Erro ao restaurar: ${res.error || 'Falha ao gravar registros'}`);
+        addNotification('Erro ao restaurar o backup. Nenhuma tabela foi totalmente validada.', 'error');
       }
     } catch (err: any) {
       alert(`Erro inesperado na restauração: ${err?.message || err}`);
@@ -190,10 +210,10 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
             </div>
             <div>
               <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-[#D4AF37] block">
-                Gerenciamento &amp; Segurança de Dados • 19 Tabelas
+                Gerenciamento &amp; Segurança Rigorosa • 19 Tabelas Supabase
               </span>
               <h2 className="text-base sm:text-xl font-bold font-serif text-white tracking-tight">
-                Backup &amp; Restauração Completa
+                Backup &amp; Restauração com Verificação de Integridade
               </h2>
             </div>
           </div>
@@ -243,13 +263,44 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
                 <ShieldCheck className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
                 <div className="text-xs text-emerald-950 leading-relaxed">
                   <span className="font-bold block text-emerald-900 mb-0.5">
-                    Exportação Completa do Banco de Dados
+                    Exportação Validada do Banco de Dados
                   </span>
-                  O backup em JSON inclui todas as <strong>19 tabelas</strong> do Supabase: viagens, integrantes,
-                  roteiros dia a dia, horários, hospedagens, aluguel de carros, voos, ingressos, despesas,
-                  checklists, pacotes de fotos e preferências.
+                  O sistema consulta rigorosamente todas as <strong>19 tabelas</strong> do Supabase. O download só é liberado como backup completo quando todas as consultas retornam dados válidos sem erros.
                 </div>
               </div>
+
+              {/* Export Status Banner */}
+              {exportResult && (
+                <div
+                  className={`p-4 rounded-2xl border flex items-start gap-3 ${
+                    exportResult.success
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                      : 'bg-rose-50 border-rose-300 text-rose-950'
+                  }`}
+                >
+                  {exportResult.success ? (
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                  ) : (
+                    <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                  )}
+                  <div className="space-y-1 text-xs">
+                    <span className="font-bold block">
+                      {exportResult.success
+                        ? `Backup pronto! Todas as 19 tabelas foram consultadas com sucesso (${exportResult.totalRecords} registros totais).`
+                        : `Atenção: Falha ao consultar ${exportResult.failedTables.length} tabela(s). Este backup NÃO é considerado completo.`}
+                    </span>
+                    {!exportResult.success && (
+                      <div className="pt-1 space-y-1 text-[11px] text-rose-800">
+                        {Object.entries(exportResult.tableErrors).map(([tbl, err]) => (
+                          <div key={tbl} className="font-mono">
+                            • <strong>{tbl}</strong>: {err}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Action Buttons */}
               <div className="flex flex-col sm:flex-row items-center gap-3">
@@ -262,7 +313,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
                   {isExporting ? (
                     <>
                       <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Gerando Backup...</span>
+                      <span>Verificando Tabelas...</span>
                     </>
                   ) : (
                     <>
@@ -275,7 +326,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
                 <button
                   type="button"
                   onClick={handleCopyJson}
-                  disabled={!generatedPayload}
+                  disabled={!exportResult?.success}
                   className="w-full sm:w-auto px-5 py-3.5 rounded-xl border border-slate-300 hover:bg-slate-100 text-slate-700 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
                 >
                   {copiedJson ? (
@@ -295,23 +346,37 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
               {/* Live Tables Summary Table */}
               <div className="space-y-3 pt-2">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
-                  <span>Tabelas Incluídas no Arquivo de Backup</span>
+                  <span>Status &amp; Contagem por Tabela</span>
                   <span className="text-[11px] font-bold text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full">
                     {ALL_TABLE_NAMES.length} Tabelas Totais
                   </span>
                 </h4>
 
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 max-h-60 overflow-y-auto p-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 max-h-64 overflow-y-auto p-1">
                   {ALL_TABLE_NAMES.map((name) => {
-                    const count = generatedPayload?.tables?.[name]?.length ?? 0;
+                    const count = exportResult?.tableCounts?.[name] ?? 0;
+                    const hasError = exportResult?.tableErrors?.[name];
                     return (
                       <div
                         key={name}
-                        className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs flex items-center justify-between shadow-2xs"
+                        className={`p-2.5 rounded-xl text-xs flex items-center justify-between border shadow-2xs ${
+                          hasError
+                            ? 'bg-rose-50 border-rose-200'
+                            : 'bg-slate-50 border-slate-200'
+                        }`}
                       >
-                        <span className="font-mono text-[11px] text-slate-700 truncate">{name}</span>
-                        <span className="font-bold text-[11px] px-2 py-0.5 rounded-md bg-white border border-slate-200 text-[#1A2B4C]">
-                          {count}
+                        <div className="truncate pr-2">
+                          <span className="font-mono text-[11px] text-slate-800 block truncate">{name}</span>
+                          {hasError && <span className="text-[9px] text-rose-600 block">Falha na consulta</span>}
+                        </div>
+                        <span
+                          className={`font-bold text-[11px] px-2 py-0.5 rounded-md border shrink-0 ${
+                            hasError
+                              ? 'bg-rose-100 text-rose-800 border-rose-300'
+                              : 'bg-white text-[#1A2B4C] border-slate-200'
+                          }`}
+                        >
+                          {hasError ? 'Erro' : count}
                         </span>
                       </div>
                     );
@@ -328,9 +393,9 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
                 <Info className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
                 <div className="text-xs text-blue-950 leading-relaxed">
                   <span className="font-bold block text-blue-900 mb-0.5">
-                    Leitura e Restauração de Dados
+                    Restauração com Verificação de Integridade por ID
                   </span>
-                  Selecione um arquivo de backup <code>.json</code> anteriormente baixado ou cole o conteúdo JSON no campo abaixo. Os dados serão restaurados no Supabase e na aplicação imediatamente.
+                  O sistema valida cada tabela enviada, registrando a <strong>quantidade esperada</strong>, a <strong>quantidade gravada</strong> e a <strong>quantidade confirmada</strong> após checar a persistência no Supabase.
                 </div>
               </div>
 
@@ -435,11 +500,74 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
                 </div>
               )}
 
-              {/* Success Message Alert */}
-              {restoreSuccessMsg && (
-                <div className="p-4 rounded-2xl bg-emerald-100 border border-emerald-300 text-emerald-950 font-bold text-xs flex items-center gap-2 animate-in zoom-in-95">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-700 shrink-0" />
-                  <span>{restoreSuccessMsg}</span>
+              {/* Restoration Result Metrics & Status */}
+              {restoreResult && (
+                <div
+                  className={`p-4 rounded-2xl border space-y-3 animate-in zoom-in-95 ${
+                    restoreResult.success
+                      ? 'bg-emerald-50 border-emerald-300'
+                      : restoreResult.isPartial
+                      ? 'bg-amber-50 border-amber-300'
+                      : 'bg-rose-50 border-rose-300'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {restoreResult.success ? (
+                      <>
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                        <span className="font-bold text-emerald-950 text-xs">
+                          Restauração Completa Realizada com Sucesso! ({restoreResult.totalVerified} registros verificados em todas as tabelas).
+                        </span>
+                      </>
+                    ) : restoreResult.isPartial ? (
+                      <>
+                        <AlertTriangle className="w-5 h-5 text-amber-600" />
+                        <span className="font-bold text-amber-950 text-xs">
+                          Restauração Parcial: Algumas tabelas foram restauradas com sucesso, mas houve falha em {restoreResult.failedTables.length} tabela(s).
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <AlertCircle className="w-5 h-5 text-rose-600" />
+                        <span className="font-bold text-rose-950 text-xs">
+                          Falha na Restauração: Nenhuma tabela foi totalmente validada. Veja os detalhes abaixo.
+                        </span>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-200 space-y-2 max-h-56 overflow-y-auto">
+                    {(Object.entries(restoreResult.tableMetrics) as [string, TableRestoreMetrics][]).map(([tbl, metrics]) => {
+                      if (metrics.status === 'missing_in_file' || metrics.status === 'empty') return null;
+                      return (
+                        <div
+                          key={tbl}
+                          className={`p-2 rounded-lg text-xs flex items-center justify-between border ${
+                            metrics.status === 'restored'
+                              ? 'bg-white/90 border-emerald-200 text-emerald-950'
+                              : 'bg-rose-50 border-rose-200 text-rose-950'
+                          }`}
+                        >
+                          <div className="font-mono truncate pr-2">
+                            <span className="font-bold">{tbl}</span>
+                            {metrics.error && <span className="block text-[10px] text-rose-600">{metrics.error}</span>}
+                          </div>
+                          <div className="flex items-center gap-3 shrink-0 text-[11px]">
+                            <span title="Quantidade Esperada">Esperado: <strong>{metrics.expectedCount}</strong></span>
+                            <span title="Quantidade Gravada">Gravado: <strong>{metrics.writtenCount}</strong></span>
+                            <span title="Quantidade Confirmada no Supabase">Verificado: <strong className="text-emerald-700">{metrics.verifiedCount}</strong></span>
+                            <span
+                              className={`px-2 py-0.5 rounded font-bold text-[10px] uppercase ${
+                                metrics.status === 'restored' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                              }`}
+                            >
+                              {metrics.status === 'restored' ? 'Sucesso' : 'Falha'}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
 
@@ -455,7 +583,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
                     {isRestoring ? (
                       <>
                         <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>Restaurando Registros nas 19 Tabelas...</span>
+                        <span>Restaurando &amp; Verificando Integridade...</span>
                       </>
                     ) : (
                       <>
@@ -473,7 +601,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
         {/* Modal Actions Footer */}
         <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
           <span className="text-[11px] text-slate-500 font-medium">
-            Sua privacidade é mantida: backups são processados diretamente na sua máquina e no Supabase.
+            Segurança Rigorosa: validação de contagem esperada, gravada e verificada por ID no Supabase.
           </span>
           <button
             type="button"
