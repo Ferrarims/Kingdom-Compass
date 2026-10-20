@@ -2740,7 +2740,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   };
 
-  const addExpense = (expense: Omit<ExpenseItem, 'id'>) => {
+  const addExpense = async (expense: Omit<ExpenseItem, 'id'>): Promise<void> => {
     const id = `exp-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     const newExp: ExpenseItem = {
       ...expense,
@@ -2761,11 +2761,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         durationDays: settings.durationDays,
         travelers: settings.travelers,
       };
-      SupabaseService.saveExpense(activeTripId, newExp, fallbackTrip).then((res) => {
-        if (res && !res.success && res.error) {
-          console.warn('saveExpense error in addExpense:', res.error);
-        }
-      });
+      const res = await SupabaseService.saveExpense(activeTripId, newExp, fallbackTrip);
+      if (res && !res.success && res.error) {
+        throw new Error(res.error);
+      }
     }
     addNotification(`Adicionou gasto "${expense.title}"`);
   };

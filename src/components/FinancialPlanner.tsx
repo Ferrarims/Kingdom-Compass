@@ -94,6 +94,7 @@ export const FinancialPlanner: React.FC = () => {
 
   // Confirmation states
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   useConfirmationKeyboard({
     isOpen: !!confirmDelete,
@@ -157,36 +158,45 @@ export const FinancialPlanner: React.FC = () => {
     setEstimatedValueUSD(Math.round((val / settings.dollarRate) * 100) / 100);
   };
 
-  const handleSaveExpense = (e: React.FormEvent) => {
+  const handleSaveExpense = async (e: React.FormEvent) => {
     e.preventDefault();
-    const expenseTitle = title.trim() || 'Novo Gasto';
-    const existingExp = editingExpenseId ? expenses.find((e) => e.id === editingExpenseId) : null;
-    const finalSourceType = existingExp?.sourceType || 'general';
-    const finalSourceId = existingExp?.sourceId;
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      const expenseTitle = title.trim() || 'Novo Gasto';
+      const existingExp = editingExpenseId ? expenses.find((e) => e.id === editingExpenseId) : null;
+      const finalSourceType = existingExp?.sourceType || 'general';
+      const finalSourceId = existingExp?.sourceId;
 
-    const expenseData: Omit<ExpenseItem, 'id'> = {
-      title: expenseTitle,
-      category,
-      estimatedValueUSD,
-      estimatedValueBRL,
-      paidValueBRL: status === 'Pago' ? (estimatedValueBRL || paidValueBRL) : (status === 'Parcial' ? paidValueBRL : 0),
-      paidValueUSD: status === 'Pago' ? (estimatedValueUSD || (estimatedValueBRL / settings.dollarRate)) : (status === 'Parcial' ? (paidValueBRL / settings.dollarRate) : 0),
-      status,
-      notes,
-      payerId: responsibleTravelerId,
-      responsibleTravelerId,
-      travelerIds,
-      excluded: existingExp?.excluded ?? false,
-      sourceType: finalSourceType,
-      sourceId: finalSourceId,
-    };
+      const expenseData: Omit<ExpenseItem, 'id'> = {
+        title: expenseTitle,
+        category,
+        estimatedValueUSD,
+        estimatedValueBRL,
+        paidValueBRL: status === 'Pago' ? (estimatedValueBRL || paidValueBRL) : (status === 'Parcial' ? paidValueBRL : 0),
+        paidValueUSD: status === 'Pago' ? (estimatedValueUSD || (estimatedValueBRL / settings.dollarRate)) : (status === 'Parcial' ? (paidValueBRL / settings.dollarRate) : 0),
+        status,
+        notes,
+        payerId: responsibleTravelerId,
+        responsibleTravelerId,
+        travelerIds,
+        excluded: existingExp?.excluded ?? false,
+        sourceType: finalSourceType,
+        sourceId: finalSourceId,
+      };
 
-    if (editingExpenseId) {
-      updateExpense(editingExpenseId, expenseData);
-    } else {
-      addExpense(expenseData as ExpenseItem);
+      if (editingExpenseId) {
+        await updateExpense(editingExpenseId, expenseData);
+      } else {
+        await addExpense(expenseData as ExpenseItem);
+      }
+      setModalOpen(false);
+    } catch (error) {
+      console.error('Erro ao salvar despesa:', error);
+      alert('Erro ao salvar despesa. Tente novamente.');
+    } finally {
+      setIsSaving(false);
     }
-    setModalOpen(false);
   };
 
   const { handleBackdropClick } = useModalKeyEvents({
@@ -199,27 +209,17 @@ export const FinancialPlanner: React.FC = () => {
     'Passagens': 1,
     'Hospedagem': 2,
     'Ingressos': 3,
-    'Alimentação': 4,
-    'Compras': 5,
-    'Transporte': 6,
-    'Seguro': 7,
-    'Documentos': 8,
+    'Pacotes de Fotos': 4,
+    'Alimentação': 5,
+    'Compras': 6,
+    'Transporte': 7,
+    'Seguro': 8,
+    'Documentos': 9,
   };
 
   const filteredExpenses = expenses
-    .filter((exp) => {
-      if (selectedCategory === 'all') return true;
-      return exp.category === selectedCategory;
-    })
-    .sort((a, b) => {
-      // Ordenar por data de criação (createdAt), do mais antigo ao mais recente (ordem de compra)
-      if (a.createdAt && b.createdAt) {
-        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
-      }
-      if (a.createdAt) return -1;
-      if (b.createdAt) return 1;
-      return a.title.localeCompare(b.title);
-    });
+    .filter((e) => selectedCategory === 'all' || e.category === selectedCategory)
+    .sort((a, b) => (categoryOrder[a.category] || 99) - (categoryOrder[b.category] || 99));
 
   const chartData = financialSummary.categoryTotals.filter((c) => c.estimatedBRL > 0);
 
@@ -950,10 +950,17 @@ export const FinancialPlanner: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md"
+                  disabled={isSaving}
+                  className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
-                  <span>Salvar</span>
+                  {isSaving ? (
+                    'Salvando...'
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
+                      <span>Salvar</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>
