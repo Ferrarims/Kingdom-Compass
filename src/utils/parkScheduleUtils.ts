@@ -3319,7 +3319,9 @@ export function syncAllEventsToHourlySchedule(
           const fromCoords = estimateAccommodationCoordinates(fromName, fromAddr);
           const toCoords = estimateAccommodationCoordinates(toName, toAddr);
           const internalApproxMins = isIdenticalAddr ? 0 : calculateDriveTimeMinutes(fromCoords, toCoords);
-          const isMiamiToKissimmee = fromName.toLowerCase().includes('brickell') || fromName.toLowerCase().includes('miami');
+          const isMiamiToKissimmee = 
+            (fromName.toLowerCase().includes('brickell') || fromName.toLowerCase().includes('miami') || fromAddr.toLowerCase().includes('brickell') || fromAddr.toLowerCase().includes('miami')) &&
+            (toName.toLowerCase().includes('modern retreat') || toName.toLowerCase().includes('venetian bay') || toName.toLowerCase().includes('kissimmee') || toAddr.toLowerCase().includes('kissimmee') || toAddr.toLowerCase().includes('venetian bay'));
           
           // Registered / manual reference estimate for Miami-Kissimmee: 287 minutes (approx 4h47m) without live traffic
           const registeredEstimateMins = isMiamiToKissimmee ? 287 : internalApproxMins;
@@ -3364,7 +3366,7 @@ export function syncAllEventsToHourlySchedule(
 
           const existingSplitIdx = items.findIndex((i) => 
             i.id === `auto-acc-split-drive-${day.date}` || 
-            (i.sourceId && i.sourceId.includes('split-drive-')) ||
+            (i.sourceId && (i.sourceId.includes('split-drive-') || i.sourceId.includes('acc-split-drive'))) ||
             (i.title || '').includes('Deslocamento entre Acomodações') ||
             (i.title || '').includes('Deslocamento de Carro')
           );

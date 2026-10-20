@@ -54,6 +54,19 @@ export const TransportationView: React.FC = () => {
   // Active Modality selected by user (only set if explicitly chosen in settings or if car rentals exist)
   const selectedModality = settings.transportModality || (carRentals && carRentals.length > 0 ? 'rental' : undefined);
 
+  // Helper to clean duplicate comma-separated address parts
+  const cleanAddressString = (addr?: string): string => {
+    if (!addr) return '';
+    const parts = addr.split(',').map((s) => s.trim()).filter(Boolean);
+    const unique: string[] = [];
+    for (const p of parts) {
+      if (!unique.some((u) => u.toLowerCase() === p.toLowerCase())) {
+        unique.push(p);
+      }
+    }
+    return unique.join(', ');
+  };
+
   // Sub-tabs navigation
   const [activeTab, setActiveTab] = useState<'rentals' | 'uber' | 'public' | 'tolls' | 'traffic_rules'>('rentals');
 
@@ -677,7 +690,7 @@ export const TransportationView: React.FC = () => {
                             <span>Retirada (Pick-up)</span>
                           </div>
                           <p className="text-xs font-bold text-[#1A2B4C] leading-snug">
-                            {rental.pickupLocation}
+                            {cleanAddressString(rental.pickupLocation)}
                           </p>
                           <p className="text-xs text-slate-700 font-semibold pt-1">
                             📅 {formatDateBR(rental.pickupDate)} • A partir de {rental.pickupTime || '14:30'}
@@ -691,7 +704,7 @@ export const TransportationView: React.FC = () => {
                             <span>Devolução (Drop-off)</span>
                           </div>
                           <p className="text-xs font-bold text-[#1A2B4C] leading-snug">
-                            {rental.dropoffLocation}
+                            {cleanAddressString(rental.dropoffLocation)}
                           </p>
                           <p className="text-xs text-slate-700 font-semibold pt-1">
                             📅 {formatDateBR(rental.dropoffDate)} • Até {rental.dropoffTime || '12:00'}
