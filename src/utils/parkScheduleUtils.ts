@@ -3768,7 +3768,6 @@ export function syncFlightsWithItineraryDays(params: FlightSyncContext): {
           afternoon: { where: '', dining: '', notes: '' },
           night: { where: '', dining: '', notes: '' },
           generalNotes: '',
-          attachments: [],
           hourlySchedule: [],
         }));
         currentDays = [...prependedDays, ...currentDays].map((d, idx) => ({ ...d, dayNumber: idx + 1 }));
@@ -3803,7 +3802,6 @@ export function syncFlightsWithItineraryDays(params: FlightSyncContext): {
         afternoon: { where: '', dining: '', notes: '' },
         night: { where: '', dining: '', notes: '' },
         generalNotes: '',
-        attachments: [],
         hourlySchedule: [],
       };
     });
@@ -4376,7 +4374,6 @@ export function auditAndCorrectTrip(trip: any): any {
         night: { where: '', dining: '', notes: '' },
         generalNotes: '',
         hourlySchedule: [],
-        attachments: [],
       };
     });
   }

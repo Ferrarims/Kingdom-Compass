@@ -429,7 +429,6 @@ export function mapDbToItineraryDay(row: any): ItineraryDay {
     night: row.night || { notes: '', where: '', dining: '' },
     generalNotes: row.general_notes || '',
     hourlySchedule: deduplicateHourlySchedule(parsedHourly),
-    attachments: [],
   };
 }
 
@@ -666,7 +665,6 @@ export function mapDbToFlight(row: any): FlightSegment {
     travelerIds: (row.traveler_ids || ['all']).map((tid: string) =>
       tid && tid !== 'all' ? ensureValidUUID(tid, 'traveler', tid) : 'all'
     ),
-    attachments: [],
   };
 }
 
@@ -724,7 +722,6 @@ export function mapDbToCarRental(row: any): CarRentalBooking {
       tid && tid !== 'all' ? ensureValidUUID(tid, 'traveler', tid) : 'all'
     ),
     notes: row.notes,
-    attachments: [],
   };
 }
 
@@ -793,7 +790,6 @@ export function mapDbToAccommodation(row: any): AccommodationBooking {
     ),
     contactPhone: row.contact_phone || undefined,
     notes: row.notes || undefined,
-    attachments: [],
   };
 }
 
@@ -817,7 +813,6 @@ export function mapParkTicketToDb(t: ParkTicketPurchase, tripId: string): Record
     confirmation_code: t.confirmationCode || null,
     seller: t.seller || null,
     notes: t.notes || null,
-    voucher_attachment: t.voucherAttachment || null,
     updated_at: new Date().toISOString(),
   };
   if (t.id) {
@@ -846,7 +841,6 @@ export function mapDbToParkTicket(row: any): ParkTicketPurchase {
     confirmationCode: row.confirmation_code,
     seller: row.seller,
     notes: row.notes,
-    voucherAttachment: row.voucher_attachment,
     createdAt: row.created_at,
   };
 }
@@ -1431,7 +1425,6 @@ export const SupabaseService = {
               hourlySchedule: dedicatedHourly.sort((a, b) =>
                 (a.time || '00:00').localeCompare(b.time || '00:00')
               ),
-              attachments: [],
               parkBooking: pb,
             });
           }

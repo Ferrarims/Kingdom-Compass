@@ -128,7 +128,6 @@ export const TransportationView: React.FC = () => {
     includedInsurances: [],
     tollOption: 'Visitor Toll Pass (Gratuito MCO)',
     notes: '',
-    attachments: [],
   });
 
   const handleSelectModality = (modality: 'rental' | 'public' | 'uber') => {
@@ -160,7 +159,6 @@ export const TransportationView: React.FC = () => {
       includedInsurances: [],
       tollOption: 'Visitor Toll Pass (Gratuito MCO)',
       notes: '',
-      attachments: [],
     });
     setIsModalOpen(true);
   };
@@ -186,7 +184,6 @@ export const TransportationView: React.FC = () => {
       includedInsurances: rental.includedInsurances || [],
       tollOption: rental.tollOption || 'Visitor Toll Pass (Gratuito MCO)',
       notes: rental.notes || '',
-      attachments: rental.attachments || [],
     });
     setIsModalOpen(true);
   };

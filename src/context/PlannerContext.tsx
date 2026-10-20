@@ -458,7 +458,6 @@ export function generateDaysForNewTrip(durationDays: number, startDate?: string)
       night: { where: '', dining: '', notes: '' },
       generalNotes: '',
       hourlySchedule: [],
-      attachments: [],
     };
   });
 }
@@ -1575,7 +1574,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
               afternoon: { where: '', dining: '', notes: '' },
               night: { where: '', dining: '', notes: '' },
               generalNotes: '',
-              attachments: [],
             };
           });
           return normalizeTripDays([...currentDays, ...addedDays], requiredLength);
@@ -2228,7 +2226,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
                   night: { where: '', dining: '', notes: '' },
                   generalNotes: '',
                   hourlySchedule: [],
-                  attachments: [],
                 };
               });
               currentDays = [...currentDays, ...addedDays];
@@ -2720,7 +2717,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
               afternoon: { where: '', dining: '', notes: '' },
               night: { where: '', dining: '', notes: '' },
               generalNotes: '',
-              attachments: [],
             };
           });
           updatedDays = [...currentDays, ...addedDays];
@@ -4442,7 +4438,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     const newFlight: FlightSegment = {
       ...flight,
       id: generateUUID(),
-      attachments: flight.attachments || [],
     };
     const nextFlights = [...flights, newFlight];
     setFlights(nextFlights);
@@ -4843,7 +4838,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     const newRental: CarRentalBooking = {
       ...rental,
       id: generateUUID(),
-      attachments: rental.attachments || [],
     };
 
     const previousRentals = carRentals;
@@ -5109,7 +5103,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     const newAcc: AccommodationBooking = {
       ...acc,
       id: generateUUID(),
-      attachments: acc.attachments || [],
     };
 
     if (activeTripId) {
@@ -5813,7 +5806,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
             night: { where: dayData.nightPlan || '', dining: '', notes: '' },
             generalNotes: dayData.generalNotes || '',
             hourlySchedule: newHourlyItems,
-            attachments: [],
           };
 
           setRawDays((prev) => {
@@ -5856,7 +5848,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           payerId: (settings.travelers?.[0]?.id) || '1',
           travelerIds: (settings.travelers || []).map((t) => t.id),
           notes: car.notes || 'Importado via IA Gemini',
-          attachments: [],
         });
       });
     }

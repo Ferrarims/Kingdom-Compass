@@ -421,7 +421,6 @@ export const ItineraryPlanner: React.FC = () => {
       night: { where: '', dining: '', notes: '' },
       generalNotes: '',
       hourlySchedule: [],
-      attachments: [],
     } as ItineraryDay);
 
   const currentDayIndex = itineraryDays.findIndex((d) => d.id === activeDay.id || d.dayNumber === activeDay.dayNumber);

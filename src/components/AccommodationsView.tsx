@@ -123,7 +123,6 @@ export const AccommodationsView: React.FC = () => {
     amenities: [],
     contactPhone: '',
     notes: '',
-    attachments: [],
   });
 
   const availableAmenities = [
@@ -164,7 +163,6 @@ export const AccommodationsView: React.FC = () => {
       amenities: [],
       contactPhone: '',
       notes: '',
-      attachments: [],
     });
     setIsModalOpen(true);
   };
@@ -203,7 +201,6 @@ export const AccommodationsView: React.FC = () => {
       amenities: acc.amenities || [],
       contactPhone: acc.contactPhone || '',
       notes: acc.notes || '',
-      attachments: acc.attachments || [],
     });
     setIsModalOpen(true);
   };

@@ -149,7 +149,6 @@ export const FlightsView: React.FC = () => {
     notes: '',
     travelerIds: ['all'],
     passengers: (settings.travelers || []).map((t) => t?.name || 'Viajante'),
-    attachments: [],
   });
 
   const handleCopyPnr = (pnr: string) => {
@@ -197,7 +196,6 @@ export const FlightsView: React.FC = () => {
       notes: '',
       travelerIds: ['all'],
       passengers: (settings.travelers || []).map((t) => t?.name || 'Viajante'),
-      attachments: [],
     });
     setUnitCostUSD('');
     setUnitCostBRL('');
@@ -237,7 +235,6 @@ export const FlightsView: React.FC = () => {
       notes: flight.notes || '',
       travelerIds: flight.travelerIds || ['all'],
       passengers: flight.passengers || (settings.travelers || []).map((t) => t?.name || 'Viajante'),
-      attachments: flight.attachments || [],
     });
 
     const travelers = settings.travelers || [];

@@ -259,11 +259,6 @@ export interface ParkTicketPurchase {
   confirmationCode?: string;
   seller?: string; // e.g. "Site Oficial Disney", "Civitatis", "Decolar", "Agência"
   notes?: string;
-  voucherAttachment?: {
-    name: string;
-    url: string;
-    type: 'pdf' | 'image' | 'ticket';
-  };
   createdAt?: string;
 }
 
