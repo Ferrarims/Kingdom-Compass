@@ -1166,7 +1166,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
               if (trip.id === targetTripId && trip.rawDays) {
                 const day1 = trip.rawDays.find(d => d.dayNumber === 1);
                 if (day1) {
-                  await reconcileItineraryDay(trip, day1);
+                  const success = await reconcileItineraryDay(trip, day1);
+                  if (!success) {
+                    throw new Error(`Falha ao persistir alterações automáticas no Dia 1 da viagem ${targetTripId}.`);
+                  }
                   // Update local object to reflect the change
                   day1.hourlySchedule = deduplicateHourlySchedule(syncAllEventsToHourlySchedule(day1, trip));
                 }
@@ -6073,8 +6076,32 @@ export const usePlanner = () => {
 
 export async function reconcileItineraryDay(trip: Trip, day: ItineraryDay): Promise<boolean> {
   const originalSchedule = JSON.stringify(day.hourlySchedule || []);
-  const reconciledSchedule = syncAllEventsToHourlySchedule(day, trip);
+  let reconciledSchedule = syncAllEventsToHourlySchedule(day, trip);
+  
   const newSchedule = deduplicateHourlySchedule(reconciledSchedule);
+  
+  // Garantir evento de fim de dia no Dia 1 após deduplicação
+  if (day.dayNumber === 1) {
+      const acc = trip.accommodations?.find(a => a.checkInDate === day.date) || trip.accommodations?.[0];
+      if (acc) {
+          const nightEventId = `auto-retorno-${day.dayNumber || '1'}`;
+          const hasNightEvent = newSchedule.some(i => i.id === nightEventId || i.title.includes('Fim do dia na acomodação'));
+          if (!hasNightEvent) {
+              const nightTime = (acc.checkInTime || '16:00').localeCompare('21:00') > 0 ? addMinutesToTimeString(acc.checkInTime || '16:00', 90) : '22:30';
+              newSchedule.push({
+                  id: nightEventId,
+                  time: nightTime,
+                  title: `🌙 Fim do dia na acomodação (${acc.name})`,
+                  location: acc.address || acc.name,
+                  category: 'hotel',
+                  notes: 'Retorno para a hospedagem e descanso.',
+                  sourceType: 'accommodation',
+                  sourceId: acc.id,
+                  completed: false,
+              });
+          }
+      }
+  }
   
   if (JSON.stringify(newSchedule) !== originalSchedule) {
     const dayToPersist = { ...day, hourlySchedule: newSchedule };
@@ -6082,6 +6109,14 @@ export async function reconcileItineraryDay(trip: Trip, day: ItineraryDay): Prom
     if (!res.success) {
       console.error(`Falha ao persistir Dia ${day.dayNumber}:`, res.error);
       return false;
+    }
+    
+    // Verificação de persistência
+    const updatedDay = await SupabaseService.fetchItineraryDayById(res.resolvedDayId || day.id);
+    const persistedNightEvent = updatedDay?.hourlySchedule?.find(i => i.title.includes('Fim do dia na acomodação'));
+    if (!persistedNightEvent) {
+        console.error(`Falha na verificação: Evento de fim de dia não encontrado após persistência no Dia ${day.dayNumber}. Dados persistidos:`, updatedDay?.hourlySchedule);
+        return false;
     }
     return true;
   }

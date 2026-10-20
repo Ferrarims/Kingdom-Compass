@@ -3215,12 +3215,12 @@ export function syncAllEventsToHourlySchedule(
         const nightEndItem: HourlyScheduleItem = {
           id: `auto-retorno-${day.dayNumber || '1'}`,
           time: nightEndTime,
-          title: `🌙 Fim do dia na acomodação (${accName})`,
+          title: `🌙 Fim do dia na acomodação (${nightAcc.name || 'Acomodação'})`,
           location: accAddress,
           category: accCat,
           notes: `Chegada e descanso na acomodação após os procedimentos de chegada e check-in.`,
           sourceType: 'accommodation',
-          sourceId: day1Timeline.firstAccId,
+          sourceId: nightAcc.id,
           completed: false,
         };
 

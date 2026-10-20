@@ -395,7 +395,7 @@ export function mapItineraryDayToDb(day: Omit<ItineraryDay, 'date'> & { date?: s
     afternoon: day.afternoon || { notes: '', where: '', dining: '' },
     night: day.night || { notes: '', where: '', dining: '' },
     general_notes: day.generalNotes || '',
-    hourly_schedule: [],
+    hourly_schedule: (day as any).hourlySchedule || [],
     updated_at: new Date().toISOString(),
   };
   if (day.id) {
@@ -1606,7 +1606,11 @@ export const SupabaseService = {
         }
 
         if (dbHourlyRows.length > 0) {
-          const { error: hUpErr } = await supabase.from('hourly_schedules').upsert(dbHourlyRows, { onConflict: 'id' });
+          // Prevent duplicates in upsert
+          const uniqueHourlyRows = Array.from(
+            new Map(dbHourlyRows.map(row => [row.id, row])).values()
+          );
+          const { error: hUpErr } = await supabase.from('hourly_schedules').upsert(uniqueHourlyRows, { onConflict: 'id' });
           if (hUpErr && !isSupabaseMissingTableError(hUpErr)) {
             tableErrors.push({ table: 'hourly_schedules', operation: 'UPSERT', error: hUpErr.message });
           }
@@ -2126,6 +2130,31 @@ export const SupabaseService = {
       return !error;
     } catch {
       return false;
+    }
+  },
+
+  async fetchItineraryDayById(id: string): Promise<ItineraryDay | null> {
+    try {
+      const { data: dayData, error: dayErr } = await supabase
+        .from('itinerary_days')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      if (dayErr || !dayData) return null;
+
+      const { data: hourlyData, error: hourlyErr } = await supabase
+        .from('hourly_schedules')
+        .select('*')
+        .eq('itinerary_day_id', id)
+        .order('time', { ascending: true });
+
+      const day = mapDbToItineraryDay(dayData);
+      if (hourlyData) {
+        day.hourlySchedule = hourlyData.map(mapDbToHourlySchedule);
+      }
+      return day;
+    } catch {
+      return null;
     }
   },
 
@@ -2914,15 +2943,14 @@ export const SupabaseService = {
 
       // 4. Synchronize the dedicated `hourly_schedules` table for this day
       try {
-        const seenIds = new Set<string>();
-        const dbHourlyRows: any[] = [];
+        const dbHourlyRowsMap = new Map<string, any>();
         fullHourlyItems.forEach((item, index) => {
           const row = mapHourlyScheduleToDb(item, resolvedDayId, tripId, index);
-          if (row.id && !seenIds.has(row.id)) {
-            seenIds.add(row.id);
-            dbHourlyRows.push(row);
+          if (row.id) {
+            dbHourlyRowsMap.set(row.id, row);
           }
         });
+        const dbHourlyRows = Array.from(dbHourlyRowsMap.values());
 
         // Excluir horários obsoletos ou duplicados do banco que não estão na lista ativa atual
         try {

@@ -5,7 +5,6 @@ import { AccommodationBooking } from '../types';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
 import { TravelerSelector } from './TravelerSelector';
-import { MoneyInput } from './MoneyInput';
 import {
   Building2,
   Home,
@@ -843,83 +842,80 @@ export const AccommodationsView: React.FC = () => {
                         </div>
                       )}
 
-                      {/* Notes / Instructions */}
-                      {acc.notes && (
-                        <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200/90 text-xs text-amber-900 flex items-start gap-2.5">
-                          <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                          <div className="space-y-0.5">
-                            <span className="font-bold block text-amber-950">Observações & Instruções de Check-in:</span>
-                            <p className="leading-relaxed">{acc.notes}</p>
-                          </div>
+                  </div>
+                  {/* Right 4 Cols: Guests & Financials */}
+                  <div className="lg:col-span-4 space-y-4 lg:border-l lg:border-slate-200 lg:pl-6">
+                    {/* Financial Box */}
+                    <div className="p-4 rounded-2xl bg-[#1A2B4C] text-white space-y-2">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#D4AF37] block">
+                        Investimento da Reserva
+                      </span>
+                      <div className="space-y-1">
+                        <div className="flex items-baseline justify-between">
+                          <span className="text-xs text-slate-300">Valor USD:</span>
+                          <span className="text-lg font-black font-mono text-emerald-300">
+                            US$ {(acc.costUSD || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+
+                        <div className="flex items-baseline justify-between pt-1 border-t border-white/10">
+                          <span className="text-xs text-slate-300">Valor em BRL:</span>
+                          <span className="text-sm font-bold font-mono text-white">
+                            R${' '}
+                            {(
+                              acc.costBRL || (acc.costUSD ? acc.costUSD * settings.dollarRate : 0)
+                            ).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between pt-1 border-t border-white/10 text-xs">
+                          <span className="text-slate-300">Responsável:</span>
+                          <span className="font-bold text-amber-300">
+                            {acc.payerId && acc.payerId !== 'all'
+                              ? settings.travelers.find((t) => t.id === acc.payerId)?.name || 'Viajante'
+                              : 'Dividido pelo grupo'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Guests & Contact */}
+                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
+                      <div className="flex items-center justify-between">
+                        <span className="text-slate-500 font-semibold flex items-center gap-1">
+                          <Users className="w-3.5 h-3.5 text-slate-400" />
+                          Total de Hóspedes:
+                        </span>
+                        <strong className="text-slate-800 font-bold">
+                          {acc.totalGuests || 1} { (acc.totalGuests || 1) === 1 ? 'pessoa' : 'pessoas' }
+                        </strong>
+                      </div>
+
+                      {acc.contactPhone && (
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-200">
+                          <span className="text-slate-500 font-semibold">Contato / Recepção:</span>
+                          <a
+                            href={`tel:${acc.contactPhone}`}
+                            className="text-indigo-600 font-bold hover:underline font-mono"
+                          >
+                            {acc.contactPhone}
+                          </a>
                         </div>
                       )}
                     </div>
-
-                    {/* Right 4 Cols: Guests & Financials */}
-                    <div className="lg:col-span-4 space-y-4 lg:border-l lg:border-slate-200 lg:pl-6">
-                      {/* Financial Box */}
-                      <div className="p-4 rounded-2xl bg-[#1A2B4C] text-white space-y-2">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-[#D4AF37] block">
-                          Investimento da Reserva
-                        </span>
-                        <div className="space-y-1">
-                          <div className="flex items-baseline justify-between">
-                            <span className="text-xs text-slate-300">Valor USD:</span>
-                            <span className="text-lg font-black font-mono text-emerald-300">
-                              US$ {(acc.costUSD || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                            </span>
-                          </div>
-
-                          <div className="flex items-baseline justify-between pt-1 border-t border-white/10">
-                            <span className="text-xs text-slate-300">Valor em BRL:</span>
-                            <span className="text-sm font-bold font-mono text-white">
-                              R${' '}
-                              {(
-                                acc.costBRL || (acc.costUSD ? acc.costUSD * settings.dollarRate : 0)
-                              ).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                            </span>
-                          </div>
-
-                          <div className="flex items-center justify-between pt-1 border-t border-white/10 text-xs">
-                            <span className="text-slate-300">Responsável:</span>
-                            <span className="font-bold text-amber-300">
-                              {acc.payerId && acc.payerId !== 'all'
-                                ? settings.travelers.find((t) => t.id === acc.payerId)?.name || 'Viajante'
-                                : 'Dividido pelo grupo'}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Guests & Contact */}
-                      <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
-                        <div className="flex items-center justify-between">
-                          <span className="text-slate-500 font-semibold flex items-center gap-1">
-                            <Users className="w-3.5 h-3.5 text-slate-400" />
-                            Total de Hóspedes:
-                          </span>
-                          <strong className="text-slate-800 font-bold">
-                            {acc.totalGuests || 1} { (acc.totalGuests || 1) === 1 ? 'pessoa' : 'pessoas' }
-                          </strong>
-                        </div>
-
-                        {acc.contactPhone && (
-                          <div className="flex items-center justify-between pt-2 border-t border-slate-200">
-                            <span className="text-slate-500 font-semibold">Contato / Recepção:</span>
-                            <a
-                              href={`tel:${acc.contactPhone}`}
-                              className="text-indigo-600 font-bold hover:underline font-mono"
-                            >
-                              {acc.contactPhone}
-                            </a>
-                          </div>
-                        )}
-                      </div>
-
-
-                    </div>
                   </div>
                 </div>
+                {/* Notes / Instructions - Now Full Width */}
+                {acc.notes && (
+                  <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200/90 text-xs text-amber-900 flex items-start gap-2.5">
+                    <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <span className="font-bold block text-amber-950">Observações & Instruções de Check-in:</span>
+                      <p className="leading-relaxed">{acc.notes}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
               </div>
             );
           })}
@@ -1228,18 +1224,29 @@ export const AccommodationsView: React.FC = () => {
                         Valor a Pagar (US$)
                         <span className="text-[9px] font-mono text-slate-400 font-bold uppercase">USD</span>
                       </label>
-                      <MoneyInput
-                        currency="USD"
-                        value={formData.costUSD}
-                        onChange={(val) => {
-                          const rate = settings.dollarRate || 5.75;
-                          setFormData({
-                            ...formData,
-                            costUSD: val,
-                            costBRL: val !== null ? Math.round(val * rate * 100) / 100 : null,
-                          });
-                        }}
-                      />
+                      <div className="relative">
+                        <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">$</span>
+                        <input
+                          type="text"
+                          value={focusedField === 'costUSD' ? tempValue : formatInputDisplay(formData.costUSD || 0)}
+                          onFocus={() => {
+                            setFocusedField('costUSD');
+                            setTempValue(formData.costUSD ? formData.costUSD.toString().replace('.', ',') : '');
+                          }}
+                          onBlur={() => {
+                            setFocusedField(null);
+                            const val = parseInputToNumber(tempValue);
+                            setFormData({
+                              ...formData,
+                              costUSD: val,
+                              costBRL: val * settings.dollarRate,
+                            });
+                          }}
+                          onChange={(e) => setTempValue(e.target.value)}
+                          className="w-full pl-7 pr-3.5 py-2 rounded-xl border border-slate-200 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] bg-white"
+                          placeholder="0,00"
+                        />
+                      </div>
                     </div>
 
                     <div className="space-y-1">
@@ -1247,18 +1254,29 @@ export const AccommodationsView: React.FC = () => {
                         Valor a Pagar (R$)
                         <span className="text-[9px] font-mono text-slate-400 font-bold uppercase">BRL</span>
                       </label>
-                      <MoneyInput
-                        currency="BRL"
-                        value={formData.costBRL}
-                        onChange={(val) => {
-                          const rate = settings.dollarRate || 5.75;
-                          setFormData({
-                            ...formData,
-                            costBRL: val,
-                            costUSD: val !== null && rate > 0 ? Math.round((val / rate) * 100) / 100 : null,
-                          });
-                        }}
-                      />
+                      <div className="relative">
+                        <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">R$</span>
+                        <input
+                          type="text"
+                          value={focusedField === 'costBRL' ? tempValue : formatInputDisplay(formData.costBRL || 0)}
+                          onFocus={() => {
+                            setFocusedField('costBRL');
+                            setTempValue(formData.costBRL ? formData.costBRL.toString().replace('.', ',') : '');
+                          }}
+                          onBlur={() => {
+                            setFocusedField(null);
+                            const val = parseInputToNumber(tempValue);
+                            setFormData({
+                              ...formData,
+                              costBRL: val,
+                              costUSD: settings.dollarRate > 0 ? val / settings.dollarRate : 0,
+                            });
+                          }}
+                          onChange={(e) => setTempValue(e.target.value)}
+                          className="w-full pl-8 pr-3.5 py-2 rounded-xl border border-slate-200 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] bg-white"
+                          placeholder="0,00"
+                        />
+                      </div>
                     </div>
 
                     <div className="space-y-1">
