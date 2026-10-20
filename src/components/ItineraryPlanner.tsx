@@ -683,56 +683,65 @@ export const ItineraryPlanner: React.FC = () => {
     setParkModalOpen(true);
   };
 
-  const handleSaveParkModal = () => {
-    const targetDay =
-      itineraryDays.find((d) => d.id === parkModalTargetDayId) ||
-      itineraryDays.find((d) => d.id === selectedDayId) ||
-      activeDay;
-    if (!targetDay) return;
+  const [isSaving, setIsSaving] = useState(false);
+  const handleSaveParkModal = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      const targetDay =
+        itineraryDays.find((d) => d.id === parkModalTargetDayId) ||
+        itineraryDays.find((d) => d.id === selectedDayId) ||
+        activeDay;
+      if (!targetDay) return;
 
-    const trimmedTitle = tempDayTitle.trim();
-    const trimmedPark = tempDayPark.trim() || 'Sem Parque';
-    const trimmedNotes = tempDayGeneralNotes.trim();
-    const isParkChanged = trimmedPark.toLowerCase() !== (targetDay.park || '').trim().toLowerCase();
-    const isNonPark = isNonParkEvent(trimmedPark);
+      const trimmedTitle = tempDayTitle.trim();
+      const trimmedPark = tempDayPark.trim() || 'Sem Parque';
+      const trimmedNotes = tempDayGeneralNotes.trim();
+      const isParkChanged = trimmedPark.toLowerCase() !== (targetDay.park || '').trim().toLowerCase();
+      const isNonPark = isNonParkEvent(trimmedPark);
 
-    // Prioritize title and general notes explicitly entered by the user
-    const updates: any = {
-      title: trimmedTitle || targetDay.title || 'Sem Parque',
-      park: trimmedPark,
-      generalNotes: trimmedNotes,
-    };
+      // Prioritize title and general notes explicitly entered by the user
+      const updates: any = {
+        title: trimmedTitle || targetDay.title || 'Sem Parque',
+        park: trimmedPark,
+        generalNotes: trimmedNotes,
+      };
 
-    if (isNonPark) {
-      updates.parkBooking = undefined;
-    }
-
-    if (isParkChanged) {
-      const autofill = getAutofillForDay(
-        targetDay.dayNumber,
-        trimmedPark,
-        flights,
-        itineraryDays.length,
-        PARKS_GUIDE_DATA
-      );
-      // ONLY override title with autofill if the user did not explicitly enter a title
-      if (!trimmedTitle) {
-        updates.title = autofill.title || targetDay.title || 'Sem Parque';
+      if (isNonPark) {
+        updates.parkBooking = undefined;
       }
-      updates.morning = autofill.morning;
-      updates.afternoon = autofill.afternoon;
-      updates.night = autofill.night;
-      // Use autofill general notes only if user didn't write custom notes
-      if (!trimmedNotes) {
-        updates.generalNotes = autofill.generalNotes;
-      }
-      // Reset hourly schedule to let dynamic generate based on new park
-      updates.hourlySchedule = [];
-    }
 
-    updateItineraryDay(targetDay.id, updates);
-    setParkModalOpen(false);
-    setParkModalTargetDayId('');
+      if (isParkChanged) {
+        const autofill = getAutofillForDay(
+          targetDay.dayNumber,
+          trimmedPark,
+          flights,
+          itineraryDays.length,
+          PARKS_GUIDE_DATA
+        );
+        // ONLY override title with autofill if the user did not explicitly enter a title
+        if (!trimmedTitle) {
+          updates.title = autofill.title || targetDay.title || 'Sem Parque';
+        }
+        updates.morning = autofill.morning;
+        updates.afternoon = autofill.afternoon;
+        updates.night = autofill.night;
+        // Use autofill general notes only if user didn't write custom notes
+        if (!trimmedNotes) {
+          updates.generalNotes = autofill.generalNotes;
+        }
+        // Reset hourly schedule to let dynamic generate based on new park
+        updates.hourlySchedule = [];
+      }
+
+      updateItineraryDay(targetDay.id, updates);
+      setParkModalOpen(false);
+      setParkModalTargetDayId('');
+    } catch (err) {
+      console.error("Erro ao salvar dia:", err);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Attachment upload handler
@@ -3301,10 +3310,20 @@ export const ItineraryPlanner: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleSaveParkModal}
-                  className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md text-center"
+                  disabled={isSaving}
+                  className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md text-center disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
-                  <span>Salvar</span>
+                  {isSaving ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 text-[#D4AF37] animate-spin" />
+                      <span>Salvando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
+                      <span>Salvar</span>
+                    </>
+                  )}
                 </button>
               </div>
             </div>

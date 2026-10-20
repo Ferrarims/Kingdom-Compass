@@ -2489,7 +2489,7 @@ export const MapView: React.FC = () => {
               </span>
             </div>
             <div className="bg-white/80 rounded-xl p-2.5 border border-slate-200 text-center">
-              <span className="text-[10px] uppercase font-bold text-slate-400 block" title="Estimativa obtida pelo serviço de rotas OSRM (sem trânsito ao vivo)">Tempo em Trânsito (OSRM)</span>
+              <span className="text-[10px] uppercase font-bold text-slate-400 block" title="Estimativa aproximada baseada em distância e fator de via (sem trânsito ao vivo)">Tempo em Trânsito Estimado</span>
               <span className="text-base font-extrabold text-blue-600">
                 {activeDayStops.length >= 2 ? `~${realRouteMetrics ? realRouteMetrics.driveTimeMinutes : routeMetrics.totalDriveTimeMinutes} min` : '0 min'}
               </span>
