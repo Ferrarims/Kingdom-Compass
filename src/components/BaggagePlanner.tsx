@@ -304,19 +304,26 @@ export const BaggagePlanner: React.FC = () => {
     return groups;
   }, [activeTravelerItems, categories]);
 
-  const handleAddItem = (e: React.FormEvent) => {
+  const handleAddItem = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newItemName.trim()) return;
+    if (!newItemName.trim() || isSaving) return;
 
-    addBaggageItem({
-      travelerId: selectedTravelerId,
-      name: newItemName.trim(),
-      category: newItemCategory,
-      packed: false,
-      quantity: newItemQty || 1,
-    });
-    setNewItemName('');
-    setNewItemQty(1);
+    setIsSaving(true);
+    try {
+      await addBaggageItem({
+        travelerId: selectedTravelerId,
+        name: newItemName.trim(),
+        category: newItemCategory,
+        packed: false,
+        quantity: newItemQty || 1,
+      });
+      setNewItemName('');
+      setNewItemQty(1);
+    } catch (err) {
+      console.error('Erro ao adicionar item:', err);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const filteredItems = activeTravelerItems.filter((item) => {
@@ -626,10 +633,11 @@ export const BaggagePlanner: React.FC = () => {
 
         <button
           type="submit"
-          className="w-full sm:w-auto px-5 py-2 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#253D6B] flex items-center justify-center gap-1.5 shrink-0 transition-all cursor-pointer shadow-xs"
+          disabled={isSaving}
+          className="w-full sm:w-auto px-5 py-2 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#253D6B] flex items-center justify-center gap-1.5 shrink-0 transition-all cursor-pointer shadow-xs disabled:opacity-50"
         >
-          <Plus className="w-4 h-4 text-[#D4AF37]" />
-          <span>Adicionar</span>
+          <Plus className={`w-4 h-4 ${isSaving ? 'text-white' : 'text-[#D4AF37]'}`} />
+          <span>{isSaving ? 'Salvando...' : 'Adicionar'}</span>
         </button>
       </form>
 

@@ -2489,9 +2489,9 @@ export const MapView: React.FC = () => {
               </span>
             </div>
             <div className="bg-white/80 rounded-xl p-2.5 border border-slate-200 text-center">
-              <span className="text-[10px] uppercase font-bold text-slate-400 block" title="Tempo via OSRM (Real) / Estimativa por Distância (Aproximado)">Tempo em Trânsito (OSRM/Calc)</span>
+              <span className="text-[10px] uppercase font-bold text-slate-400 block" title="Tempo estimado de condução (sem trânsito)">Tempo em Trânsito (Estimativa)</span>
               <span className="text-base font-extrabold text-blue-600">
-                {activeDayStops.length >= 2 ? `~${realRouteMetrics ? `${realRouteMetrics.driveTimeMinutes} (OSRM)` : `${routeMetrics.totalDriveTimeMinutes} (Calc)`} min` : '0 min'}
+                {activeDayStops.length >= 2 ? `~${realRouteMetrics ? `${realRouteMetrics.driveTimeMinutes} min (Sem trânsito)` : `${routeMetrics.totalDriveTimeMinutes} min (Aproximado)`}` : '0 min'}
               </span>
             </div>
             <div className="bg-white/80 rounded-xl p-2.5 border border-slate-200 text-center">
