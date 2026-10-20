@@ -1067,12 +1067,29 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
       const remoteTrips = result.trips;
       if (remoteTrips && remoteTrips.length > 0) {
+        const reconciledTrips = await Promise.all(remoteTrips.map(async (trip) => {
+          const originalRawDays = JSON.parse(JSON.stringify(trip.rawDays || []));
+          const reconciledTrip = auditAndCorrectTrip(trip);
+          
+          if (reconciledTrip.rawDays) {
+            for (let i = 0; i < reconciledTrip.rawDays.length; i++) {
+              const day = reconciledTrip.rawDays[i];
+              const originalDay = originalRawDays[i];
+              
+              if (JSON.stringify(day.hourlySchedule || []) !== JSON.stringify(originalDay?.hourlySchedule || [])) {
+                await SupabaseService.saveItineraryDay(reconciledTrip.id, day, reconciledTrip);
+              }
+            }
+          }
+          return reconciledTrip;
+        }));
+
         setTrips((prevTrips) => {
-          const merged = mergeLocalAndRemoteTrips(prevTrips, remoteTrips);
+          const merged = mergeLocalAndRemoteTrips(prevTrips, reconciledTrips);
           saveTripEmergencyBackup(merged);
           return merged;
         });
-        const currentActive = remoteTrips.find((t) => t.id === activeTripId) || remoteTrips[0];
+        const currentActive = reconciledTrips.find((t) => t.id === activeTripId) || reconciledTrips[0];
         if (currentActive) {
           selectTrip(currentActive.id, currentActive);
         }
