@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { usePlanner, calculateDateOffset, formatDisplayDate, getTripEndDate } from '../context/PlannerContext';
 import { parseInputToNumber, formatInputDisplay } from '../utils/currency';
-import { AccommodationBooking, AccommodationAttachment } from '../types';
+import { AccommodationBooking } from '../types';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
 import { TravelerSelector } from './TravelerSelector';
@@ -18,13 +18,11 @@ import {
   Trash2,
   Edit3,
   FileText,
-  Paperclip,
   ExternalLink,
   ShieldCheck,
   AlertTriangle,
   Info,
   X,
-  Upload,
   Copy,
   Check,
   Sparkles,
@@ -48,8 +46,6 @@ export const AccommodationsView: React.FC = () => {
     addAccommodation,
     updateAccommodation,
     deleteAccommodation,
-    addAccommodationAttachment,
-    removeAccommodationAttachment,
     syncAccommodationsToSupabase,
     reloadAccommodationsFromSupabase,
     applySmartAccommodationRules,
@@ -100,10 +96,6 @@ export const AccommodationsView: React.FC = () => {
     onCancel: () => setAccToDelete(null),
   });
 
-  // Attachment Modal State
-  const [attachmentModalAccId, setAttachmentModalAccId] = useState<string | null>(null);
-  const [newAttName, setNewAttName] = useState('');
-  const [newAttType, setNewAttType] = useState<'pdf' | 'image' | 'ticket'>('pdf');
   const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
 
   // Input formatting temporary states
@@ -289,45 +281,10 @@ export const AccommodationsView: React.FC = () => {
     setTimeout(() => setCopiedCodeId(null), 2500);
   };
 
-  const [isSavingAttachment, setIsSavingAttachment] = useState(false);
-  const accAttachmentLockRef = useRef(false);
-
-  const handleAddAttachmentSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!attachmentModalAccId || !newAttName || accAttachmentLockRef.current || isSavingAttachment) return;
-    accAttachmentLockRef.current = true;
-    setIsSavingAttachment(true);
-    try {
-      const res = await addAccommodationAttachment(attachmentModalAccId, {
-        name: newAttName,
-        type: newAttType,
-        url: '#',
-      });
-      if (res && !res.success) {
-        alert(`Erro ao salvar anexo de hospedagem: ${res.error || 'Erro desconhecido'}`);
-        return;
-      }
-      setNewAttName('');
-      setAttachmentModalAccId(null);
-    } catch (err: any) {
-      console.error(err);
-      alert(`Erro inesperado ao salvar anexo de hospedagem: ${err?.message || 'Erro desconhecido'}`);
-    } finally {
-      accAttachmentLockRef.current = false;
-      setIsSavingAttachment(false);
-    }
-  };
-
   const { handleBackdropClick: handleAccModalBackdrop } = useModalKeyEvents({
-    isOpen: isModalOpen && !attachmentModalAccId && !accToDelete,
+    isOpen: isModalOpen && !accToDelete,
     onCancel: () => setIsModalOpen(false),
     onSave: () => handleSaveForm({ preventDefault: () => {} } as React.FormEvent),
-  });
-
-  const { handleBackdropClick: handleAttModalBackdrop } = useModalKeyEvents({
-    isOpen: !!attachmentModalAccId,
-    onCancel: () => setAttachmentModalAccId(null),
-    onSave: () => handleAddAttachmentSubmit({ preventDefault: () => {} } as React.FormEvent),
   });
 
   const { handleBackdropClick: handleDeleteAccBackdrop } = useModalKeyEvents({
@@ -900,7 +857,7 @@ export const AccommodationsView: React.FC = () => {
                       )}
                     </div>
 
-                    {/* Right 4 Cols: Guests, Financials & Attachments */}
+                    {/* Right 4 Cols: Guests & Financials */}
                     <div className="lg:col-span-4 space-y-4 lg:border-l lg:border-slate-200 lg:pl-6">
                       {/* Financial Box */}
                       <div className="p-4 rounded-2xl bg-[#1A2B4C] text-white space-y-2">
@@ -961,64 +918,7 @@ export const AccommodationsView: React.FC = () => {
                         )}
                       </div>
 
-                      {/* Vouchers & Attachments */}
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs font-bold text-slate-700 flex items-center gap-1">
-                            <Paperclip className="w-3.5 h-3.5 text-slate-400" />
-                            Comprovantes & Vouchers ({acc.attachments?.length || 0})
-                          </span>
 
-                          <button
-                            type="button"
-                            onClick={() => setAttachmentModalAccId(acc.id)}
-                            className="text-[11px] text-indigo-600 font-bold hover:underline cursor-pointer flex items-center gap-1"
-                          >
-                            <Plus className="w-3 h-3" />
-                            Anexar
-                          </button>
-                        </div>
-
-                        {acc.attachments && acc.attachments.length > 0 ? (
-                          <div className="space-y-1.5">
-                            {acc.attachments.map((att) => (
-                              <div
-                                key={att.id}
-                                className="p-2.5 rounded-xl bg-white border border-slate-200 flex items-center justify-between gap-2 text-xs hover:border-slate-300 transition-all"
-                              >
-                                <div className="flex items-center gap-2 overflow-hidden">
-                                  <FileText className="w-4 h-4 text-indigo-600 shrink-0" />
-                                  <span className="truncate font-semibold text-slate-700">{att.name}</span>
-                                </div>
-
-                                <div className="flex items-center gap-1 shrink-0">
-                                  <a
-                                    href={att.url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="p-1 rounded text-slate-400 hover:text-indigo-600 hover:bg-slate-100 cursor-pointer"
-                                    title="Visualizar"
-                                  >
-                                    <ExternalLink className="w-3.5 h-3.5" />
-                                  </a>
-                                  <button
-                                    type="button"
-                                    onClick={() => removeAccommodationAttachment(acc.id, att.id)}
-                                    className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
-                                    title="Excluir"
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="text-[11px] text-slate-400 italic bg-slate-50 p-3 rounded-xl border border-dashed border-slate-200 text-center">
-                            Nenhum voucher em PDF anexado ainda.
-                          </p>
-                        )}
-                      </div>
                     </div>
                   </div>
                 </div>
@@ -1578,100 +1478,7 @@ export const AccommodationsView: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL: ATTACHMENT UPLOAD */}
-      {attachmentModalAccId && (
-        <div
-          onClick={handleAttModalBackdrop}
-          className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200"
-        >
-          <div className="bg-white rounded-2xl max-w-3xl w-full shadow-2xl border border-slate-100 overflow-hidden">
-            <div className="bg-[#1A2B4C] text-white p-5 sm:p-6 flex items-center justify-between border-b border-[#D4AF37]/30 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-[#D4AF37]/20 border border-[#D4AF37]/40 flex items-center justify-center text-[#D4AF37] shrink-0">
-                  <Paperclip className="w-6 h-6" />
-                </div>
-                <div>
-                  <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-[#D4AF37] block">
-                    Documentos & Comprovantes de Hospedagem
-                  </span>
-                  <h2 className="text-base sm:text-xl font-bold font-serif text-white tracking-tight">
-                    Anexar Voucher de Hospedagem
-                  </h2>
-                </div>
-              </div>
 
-              <button
-                type="button"
-                onClick={() => setAttachmentModalAccId(null)}
-                className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
-                aria-label="Fechar"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleAddAttachmentSubmit} className="p-5 space-y-4">
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-700 block">Nome do Comprovante *</label>
-                <input
-                  type="text"
-                  required
-                  value={newAttName}
-                  onChange={(e) => setNewAttName(e.target.value)}
-                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-[#1A2B4C]"
-                  placeholder="Ex: Voucher_Reserva_Pop_Century.pdf"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-bold text-slate-700 block">Tipo do Documento</label>
-                <select
-                  value={newAttType}
-                  onChange={(e) => setNewAttType(e.target.value as any)}
-                  className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 bg-white"
-                >
-                  <option value="pdf">Documento PDF (Voucher Oficial)</option>
-                  <option value="image">Imagem / Screenshot</option>
-                  <option value="ticket">Comprovante de Pagamento</option>
-                </select>
-              </div>
-
-              <div className="p-4 rounded-xl bg-slate-50 border border-dashed border-slate-300 text-center space-y-2">
-                <Upload className="w-6 h-6 text-slate-400 mx-auto" />
-                <p className="text-xs text-slate-600 font-semibold">Simulação de Upload de Arquivo Local</p>
-                <p className="text-[10px] text-slate-400">PDF, PNG ou JPG até 10MB</p>
-              </div>
-
-              <div className="pt-2 flex items-center justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setAttachmentModalAccId(null)}
-                  className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-xs font-bold cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSavingAttachment}
-                  className="px-4 py-1.5 rounded-lg bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
-                >
-                  {isSavingAttachment ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                      <span>Salvando...</span>
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      <span>Salvar</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

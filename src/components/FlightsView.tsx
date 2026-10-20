@@ -11,7 +11,6 @@ import {
   ExternalLink,
   Edit3,
   Trash2,
-  Paperclip,
   CheckCircle2,
   AlertCircle,
   Copy,
@@ -21,7 +20,6 @@ import {
   Users,
   Compass,
   Download,
-  Upload,
   Ticket,
   DollarSign,
   CreditCard,
@@ -75,8 +73,6 @@ export const FlightsView: React.FC = () => {
     addFlight,
     updateFlight,
     deleteFlight,
-    addFlightAttachment,
-    removeFlightAttachment,
     currencyView,
     settings,
     openOverviewModal,
@@ -115,11 +111,6 @@ export const FlightsView: React.FC = () => {
   const [tempValue, setTempValue] = useState('');
   const [unitCostUSD, setUnitCostUSD] = useState<string>('');
   const [unitCostBRL, setUnitCostBRL] = useState<string>('');
-
-  // Attachment upload modal state
-  const [attModalFlightId, setAttModalFlightId] = useState<string | null>(null);
-  const [newAttName, setNewAttName] = useState('');
-  const [newAttType, setNewAttType] = useState<'pdf' | 'ticket' | 'image'>('pdf');
 
   // Form State
   const [formData, setFormData] = useState<Omit<FlightSegment, 'id'>>({
@@ -168,7 +159,6 @@ export const FlightsView: React.FC = () => {
   };
 
   const [isSaving, setIsSaving] = useState(false);
-  const [isSavingAtt, setIsSavingAtt] = useState(false);
   const handleOpenAddModal = () => {
     setEditingFlight(null);
     setFormData({
@@ -240,7 +230,7 @@ export const FlightsView: React.FC = () => {
       terminalOrigin: flight.terminalOrigin || '',
       terminalDestination: flight.terminalDestination || '',
       gate: flight.gate || '',
-      baggageAllowance: { ...flight.baggageAllowance },
+      baggageAllowance: flight.baggageAllowance || '',
       status: flight.status,
       ticketCostUSD: flight.ticketCostUSD || 0,
       ticketCostBRL: flight.ticketCostBRL || 0,
@@ -312,36 +302,10 @@ export const FlightsView: React.FC = () => {
     }
   };
 
-  const handleAddAttachment = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!attModalFlightId || !newAttName.trim() || isSavingAtt) return;
-    
-    setIsSavingAtt(true);
-    try {
-      await addFlightAttachment(attModalFlightId, {
-        name: newAttName.trim(),
-        type: newAttType,
-        url: '#',
-      });
-      setAttModalFlightId(null);
-      setNewAttName('');
-    } catch (err) {
-      console.error('Erro ao adicionar anexo:', err);
-    } finally {
-      setIsSavingAtt(false);
-    }
-  };
-
   const { handleBackdropClick: handleFlightModalBackdrop } = useModalKeyEvents({
-    isOpen: modalOpen && !attModalFlightId,
+    isOpen: modalOpen,
     onCancel: () => setModalOpen(false),
     onSave: () => handleSaveFlight({ preventDefault: () => {} } as React.FormEvent),
-  });
-
-  const { handleBackdropClick: handleAttModalBackdrop } = useModalKeyEvents({
-    isOpen: !!attModalFlightId,
-    onCancel: () => setAttModalFlightId(null),
-    onSave: () => handleAddAttachment({ preventDefault: () => {} } as React.FormEvent),
   });
 
   // Financial Summary for Flights
@@ -1684,92 +1648,6 @@ export const FlightsView: React.FC = () => {
                 >
                   <CheckCircle2 className={`w-4 h-4 ${isSaving ? 'text-white' : 'text-[#D4AF37]'}`} />
                   <span>{isSaving ? 'Salvando...' : 'Salvar'}</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL: ATTACHMENT UPLOAD */}
-      {attModalFlightId && (
-        <div
-          onClick={handleAttModalBackdrop}
-          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs overflow-hidden animate-in fade-in duration-200"
-        >
-          <div className="w-full max-w-6xl bg-white rounded-3xl shadow-2xl border border-slate-200 overflow-hidden h-[90vh] max-h-[92vh] flex flex-col my-auto animate-in zoom-in-95 duration-150">
-            <div className="bg-[#1A2B4C] text-white p-5 sm:p-6 flex items-center justify-between border-b border-[#D4AF37]/30 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-[#D4AF37]/20 border border-[#D4AF37]/40 flex items-center justify-center text-[#D4AF37] shrink-0">
-                  <Paperclip className="w-6 h-6" />
-                </div>
-                <div>
-                  <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-[#D4AF37] block">
-                    Documentos & Passagens Aéreas
-                  </span>
-                  <h2 className="text-base sm:text-xl font-bold font-serif text-white tracking-tight">
-                    Anexar Bilhete / Cartão de Embarque
-                  </h2>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setAttModalFlightId(null)}
-                className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
-                aria-label="Fechar"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleAddAttachment} className="flex flex-col flex-1 min-h-0 overflow-hidden text-xs">
-              <div className="p-5 sm:p-6 space-y-4 flex-1 overflow-y-auto min-h-0 custom-scrollbar">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Nome do Documento / Voucher</label>
-                  <input
-                    type="text"
-                    value={newAttName}
-                    onChange={(e) => setNewAttName(e.target.value)}
-                    placeholder="Ex: Bilhetes_Eletronicos_LATAM_Ida.pdf"
-                    className="w-full p-2.5 rounded-lg border border-slate-200 text-xs"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Tipo de Arquivo</label>
-                  <select
-                    value={newAttType}
-                    onChange={(e) => setNewAttType(e.target.value as any)}
-                    className="w-full p-2.5 rounded-lg border border-slate-200 text-xs bg-white"
-                  >
-                    <option value="pdf">Documento PDF (e-Ticket)</option>
-                    <option value="ticket">Cartão de Embarque / Wallet</option>
-                    <option value="image">Imagem / Captura de Tela</option>
-                  </select>
-                </div>
-
-                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-600 text-[11px] leading-relaxed">
-                  ℹ️ No ambiente simulado KingdomCompass, o voucher fica vinculado de forma segura e sincronizada com todos os viajantes da família.
-                </div>
-              </div>
-
-              <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-3 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setAttModalFlightId(null)}
-                  className="px-5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSavingAtt}
-                  className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md disabled:opacity-50"
-                >
-                  <CheckCircle2 className={`w-4 h-4 ${isSavingAtt ? 'text-white' : 'text-[#D4AF37]'}`} />
-                  <span>{isSavingAtt ? 'Salvando...' : 'Salvar'}</span>
                 </button>
               </div>
             </form>

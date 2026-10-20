@@ -636,6 +636,8 @@ export function mapDbToFlight(row: any): FlightSegment {
     airline: row.airline,
     airlineCode: row.airline_code,
     flightNumber: row.flight_number,
+    departureAirport: row.departure_airport || row.origin_airport || row.origin_code || '',
+    arrivalAirport: row.arrival_airport || row.destination_airport || row.destination_code || '',
     pnrLocator: row.pnr_locator,
     originAirport: row.origin_airport,
     originCity: row.origin_city,
@@ -654,7 +656,7 @@ export function mapDbToFlight(row: any): FlightSegment {
     terminalOrigin: row.terminal_origin,
     terminalDestination: row.terminal_destination,
     gate: row.gate,
-    baggageAllowance: row.baggage_allowance || { personalItem: true, carryOnQty: 1, checkedQty: 1, notes: '' },
+    baggageAllowance: typeof row.baggage_allowance === 'string' ? row.baggage_allowance : (row.baggage_allowance ? JSON.stringify(row.baggage_allowance) : ''),
     status: row.status,
     ticketCostUSD: row.ticket_cost_usd ? Number(row.ticket_cost_usd) : undefined,
     ticketCostBRL: row.ticket_cost_brl ? Number(row.ticket_cost_brl) : undefined,
@@ -2546,54 +2548,7 @@ export const SupabaseService = {
     }
   },
 
-  /**
-   * Persists an attachment/voucher for a car rental booking in Supabase.
-   * Note: The current database schema does not have an `attachments` JSONB column
-   * or a dedicated attachments table for `car_rentals`. This operation returns
-   * an explicit uncompleted status until schema migration is provided.
-   */
-  async saveCarRentalAttachment(
-    tripId: string,
-    rentalId: string,
-    attachment: { id?: string; name: string; type: string; url: string; size?: string }
-  ): Promise<{ success: boolean; error?: string }> {
-    try {
-      if (!tripId || !rentalId || !attachment) {
-        return { success: false, error: 'Parâmetros inválidos para anexo de locação' };
-      }
-      // Schema verification: current Supabase schema lacks attachments storage for car_rentals
-      return {
-        success: false,
-        error: 'O esquema atual do Supabase não possui coluna nem tabela para armazenar anexos em car_rentals. É necessária uma migração de esquema adicionando a coluna attachments (JSONB) para viabilizar a persistência.',
-      };
-    } catch (err: any) {
-      return { success: false, error: err?.message || 'Erro ao persistir anexo de locação' };
-    }
-  },
 
-  /**
-   * Persists an attachment/voucher for an accommodation booking in Supabase.
-   * Note: The current database schema does not have an `attachments` JSONB column
-   * or a dedicated attachments table for `accommodations`. This operation returns
-   * an explicit uncompleted status until schema migration is provided.
-   */
-  async saveAccommodationAttachment(
-    tripId: string,
-    accId: string,
-    attachment: { id?: string; name: string; type: string; url: string; size?: string }
-  ): Promise<{ success: boolean; error?: string }> {
-    try {
-      if (!tripId || !accId || !attachment) {
-        return { success: false, error: 'Parâmetros inválidos para anexo de hospedagem' };
-      }
-      return {
-        success: false,
-        error: 'O esquema atual do Supabase não possui coluna nem tabela para armazenar anexos em accommodations. É necessária uma migração de esquema adicionando a coluna attachments (JSONB) para viabilizar a persistência.',
-      };
-    } catch (err: any) {
-      return { success: false, error: err?.message || 'Erro ao persistir anexo de hospedagem' };
-    }
-  },
 
   /**
    * Delete Park Photo Package and its records
@@ -3168,30 +3123,7 @@ export const SupabaseService = {
     }
   },
 
-  /**
-   * Persists an attachment/voucher for an itinerary day in Supabase.
-   * Note: The current database schema does not have an `attachments` JSONB column
-   * or a dedicated attachments table for `itinerary_days`. This operation returns
-   * an explicit uncompleted status until schema migration is provided.
-   */
-  async saveItineraryAttachment(
-    tripId: string,
-    dayId: string,
-    attachment: { id?: string; name: string; type: string; url: string; size?: string }
-  ): Promise<{ success: boolean; error?: string }> {
-    try {
-      if (!tripId || !dayId || !attachment) {
-        return { success: false, error: 'Parâmetros inválidos para anexo de roteiro' };
-      }
-      // Schema verification: current Supabase schema lacks attachments storage for itinerary_days
-      return {
-        success: false,
-        error: 'O esquema atual do Supabase não possui coluna nem tabela para armazenar anexos em itinerary_days. É necessária uma migração de esquema adicionando a coluna attachments (JSONB) para viabilizar a persistência.',
-      };
-    } catch (err: any) {
-      return { success: false, error: err?.message || 'Erro ao persistir anexo de roteiro' };
-    }
-  },
+
 
   /**
    * Fetch expenses by Trip ID directly from Supabase

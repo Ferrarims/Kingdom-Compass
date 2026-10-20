@@ -142,16 +142,6 @@ export interface ItineraryDayPeriod {
   notes: string;
 }
 
-export interface ItineraryAttachment {
-  id: string;
-  name: string;
-  type: 'pdf' | 'image' | 'ticket';
-  url: string;
-  size?: string;
-  uploadedBy?: string;
-  uploadedAt?: string;
-}
-
 export interface HourlyScheduleItem {
   id: string;
   time: string; // e.g. "08:00", "09:00", "09:30"
@@ -288,7 +278,7 @@ export interface ItineraryDay {
   afternoon: ItineraryDayPeriod;
   night: ItineraryDayPeriod;
   generalNotes: string;
-  attachments: ItineraryAttachment[];
+  attachments?: unknown[];
   hourlySchedule?: HourlyScheduleItem[];
   customRouteStops?: CustomRouteStop[];
   parkBooking?: ParkDayBooking;
@@ -370,68 +360,42 @@ export interface ParkInfo {
   parkType?: 'Temático' | 'Aquático' | 'Experiência Imersiva' | 'Ciência & Espaço';
 }
 
-export interface FlightAttachment {
-  id: string;
-  name: string;
-  url: string;
-  type: 'pdf' | 'image' | 'ticket';
-  uploadedAt?: string;
-}
-
 export interface FlightSegment {
   id: string;
-  type: 'outbound' | 'inbound' | 'connection' | 'extra';
-  typeLabel: string; // 'Voo de Ida' | 'Voo de Volta' | 'Conexão' | 'Voo Interno'
-  airline: string; // e.g. 'LATAM Airlines'
-  airlineCode?: string; // e.g. 'LA'
-  flightNumber: string; // e.g. 'LA8126'
-  pnrLocator: string; // e.g. 'K9X2PZ'
-  
-  originAirport: string; // e.g. 'São Paulo - Guarulhos (GRU)'
-  originCity: string;
-  originCode: string;
-  
-  destinationAirport: string; // e.g. 'Orlando International (MCO)'
-  destinationCity: string;
-  destinationCode: string;
-  
-  departureDate: string; // YYYY-MM-DD
-  departureTime: string; // HH:mm
-  arrivalDate: string; // YYYY-MM-DD
-  arrivalTime: string; // HH:mm
-  
-  duration: string; // e.g. '9h 25m'
-  stopovers: string; // e.g. 'Voo Direto' or '1 Parada em Miami (MIA)'
-  
-  cabinClass: 'Econômica' | 'Premium Economy' | 'Executiva' | 'Primeira Classe';
-  seats: string; // e.g. '14A, 14B, 14C, 14D, 14E'
+  type: 'outbound' | 'inbound' | 'internal' | 'connection';
+  typeLabel?: string;
+  airline: string;
+  airlineCode?: string;
+  flightNumber: string;
+  departureAirport?: string;
+  arrivalAirport?: string;
+  departureDate: string;
+  departureTime: string;
+  arrivalDate: string;
+  arrivalTime: string;
+  pnrLocator?: string;
+  ticketCostUSD?: number;
+  ticketCostBRL?: number;
+  status: 'Reservado / Confirmado' | 'Pago' | 'Pendente' | 'Concluído' | 'Emitido / Confirmado' | 'Check-in Realizado' | 'Embarcado';
+  payerId?: string;
+  travelerIds?: string[];
+  notes?: string;
+  passengers?: string[];
+  attachments?: unknown[];
+  originCity?: string;
+  originAirport?: string;
+  originCode?: string;
+  destinationCity?: string;
+  destinationAirport?: string;
+  destinationCode?: string;
+  cabinClass?: string;
+  duration?: string;
+  stopovers?: string;
+  seats?: string;
   terminalOrigin?: string;
   terminalDestination?: string;
   gate?: string;
-  
-  baggageAllowance: {
-    personalItem: boolean;
-    carryOnQty: number; // Mala de mão (10kg)
-    checkedQty: number; // Mala despachada (23kg)
-    notes?: string;
-  };
-  
-  status: 'Emitido / Confirmado' | 'Check-in Aberto' | 'Check-in Realizado' | 'Embarcado' | 'Concluído';
-  ticketCostUSD?: number;
-  ticketCostBRL?: number;
-  notes?: string;
-  payerId?: string;
-  travelerIds?: string[];
-  passengers?: string[];
-  attachments?: FlightAttachment[];
-}
-
-export interface CarRentalAttachment {
-  id: string;
-  name: string;
-  url: string;
-  type: 'pdf' | 'image' | 'ticket';
-  uploadedAt?: string;
+  baggageAllowance?: string | { personalItem?: boolean; carryOnQty?: number; checkedQty?: number; notes?: string };
 }
 
 export interface CarRentalBooking {
@@ -457,15 +421,7 @@ export interface CarRentalBooking {
   includedInsurances?: string[];
   tollOption?: string; // e.g. 'Visitor Toll Pass (Gratuito MCO)'
   notes?: string;
-  attachments?: CarRentalAttachment[];
-}
-
-export interface AccommodationAttachment {
-  id: string;
-  name: string;
-  url: string;
-  type: 'pdf' | 'image' | 'ticket';
-  uploadedAt?: string;
+  attachments?: unknown[];
 }
 
 export interface AccommodationBooking {
@@ -489,7 +445,7 @@ export interface AccommodationBooking {
   amenities?: string[];
   contactPhone?: string;
   notes?: string;
-  attachments?: AccommodationAttachment[];
+  attachments?: unknown[];
 }
 
 export interface ExchangeRateData {

@@ -12,11 +12,8 @@ import {
   SyncNotification,
   ExpenseCategory,
   FlightSegment,
-  FlightAttachment,
   CarRentalBooking,
-  CarRentalAttachment,
   AccommodationBooking,
-  AccommodationAttachment,
   ParkTicketPurchase,
   Trip,
   AiParsedData,
@@ -576,32 +573,24 @@ interface PlannerContextType {
   toggleDayCompleted: (id: string) => void;
   addItineraryDay: () => void;
   deleteItineraryDay: (id: string) => void;
-  addAttachmentToDay: (dayId: string, attachment: { name: string; type: 'pdf' | 'image' | 'ticket'; url: string; size?: string }) => Promise<{ success: boolean; error?: string }>;
-  removeAttachmentFromDay: (dayId: string, attachmentId: string) => void;
 
   // Flights
   flights: FlightSegment[];
   addFlight: (flight: Omit<FlightSegment, 'id'>) => void;
   updateFlight: (id: string, updates: Partial<FlightSegment>) => void;
   deleteFlight: (id: string) => void;
-  addFlightAttachment: (flightId: string, attachment: Omit<FlightAttachment, 'id'>) => void;
-  removeFlightAttachment: (flightId: string, attachmentId: string) => void;
 
   // Car Rentals & Transportation
   carRentals: CarRentalBooking[];
   addCarRental: (rental: Omit<CarRentalBooking, 'id'>) => Promise<{ success: boolean; error?: string }>;
   updateCarRental: (id: string, updates: Partial<CarRentalBooking>) => Promise<{ success: boolean; error?: string }>;
   deleteCarRental: (id: string) => void;
-  addCarRentalAttachment: (rentalId: string, attachment: Omit<CarRentalAttachment, 'id'>) => Promise<{ success: boolean; error?: string }>;
-  removeCarRentalAttachment: (rentalId: string, attachmentId: string) => void;
 
   // Accommodations & Hotels / Airbnb
   accommodations: AccommodationBooking[];
   addAccommodation: (acc: Omit<AccommodationBooking, 'id'>) => Promise<{ success: boolean; error?: string }>;
   updateAccommodation: (id: string, updates: Partial<AccommodationBooking>) => Promise<{ success: boolean; error?: string }>;
   deleteAccommodation: (id: string) => Promise<{ success: boolean; error?: string }>;
-  addAccommodationAttachment: (accId: string, attachment: Omit<AccommodationAttachment, 'id'>) => Promise<{ success: boolean; error?: string }>;
-  removeAccommodationAttachment: (accId: string, attachmentId: string) => void;
   syncAccommodationToDays: (acc: AccommodationBooking, removeOnly?: boolean, previousAcc?: AccommodationBooking) => Promise<{ success: boolean; error?: string }>;
   syncAccommodationsToSupabase: () => Promise<boolean>;
   reloadAccommodationsFromSupabase: () => Promise<boolean>;
@@ -3670,59 +3659,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     addNotification(`Removeu um dia do roteiro`);
   };
 
-  const addAttachmentToDay = async (
-    dayId: string,
-    attachment: { name: string; type: 'pdf' | 'image' | 'ticket'; url: string; size?: string }
-  ): Promise<{ success: boolean; error?: string }> => {
-    const newAtt = {
-      ...attachment,
-      id: `att-${Date.now()}`,
-      uploadedBy: currentUser.name,
-      uploadedAt: new Date().toLocaleDateString('pt-BR'),
-    };
-    
-    if (activeTripId || supabaseStatus.connected) {
-      try {
-        const res = await SupabaseService.saveItineraryAttachment(activeTripId || '', dayId, newAtt);
-        if (!res || !res.success) {
-          return { success: false, error: res?.error || 'Não é possível salvar anexo: suporte de armazenamento indisponível no Supabase para roteiro.' };
-        }
-        setRawDays((prev) =>
-          prev.map((day) =>
-            day.id === dayId
-              ? {
-                  ...day,
-                  attachments: [...day.attachments, newAtt],
-                }
-              : day
-          )
-        );
-        addNotification(`Anexou voucher "${attachment.name}"`);
-        return { success: true };
-      } catch (e: any) {
-        return { success: false, error: e?.message || 'Erro inesperado ao salvar anexo de roteiro' };
-      }
-    }
 
-    return {
-      success: false,
-      error: 'O esquema atual do Supabase não possui coluna nem tabela para armazenar anexos em itinerary_days. É necessária uma migração de esquema adicionando a coluna attachments (JSONB) para viabilizar a persistência.',
-    };
-  };
-
-  const removeAttachmentFromDay = (dayId: string, attachmentId: string) => {
-    setRawDays((prev) =>
-      prev.map((day) =>
-        day.id === dayId
-          ? {
-              ...day,
-              attachments: day.attachments.filter((a) => a.id !== attachmentId),
-            }
-          : day
-      )
-    );
-    addNotification('Removeu anexo do dia');
-  };
 
   const toggleDocSubItem = (docId: string, subItemId: string, targetTravelerId?: string) => {
     const tId = targetTravelerId || currentUser?.id || '1';
@@ -4737,95 +4674,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   };
 
-  const addFlightAttachment = (
-    flightId: string,
-    attachment: Omit<FlightAttachment, 'id'>
-  ) => {
-    const newAtt: FlightAttachment = {
-      ...attachment,
-      id: `att-flt-${Date.now()}`,
-      uploadedAt: new Date().toLocaleDateString('pt-BR'),
-    };
-    let updatedFlight: FlightSegment | null = null;
-    setFlights((prev) => {
-      const nextFlights = prev.map((f) => {
-        if (f.id === flightId) {
-          const updated = {
-            ...f,
-            attachments: [...(f.attachments || []), newAtt],
-          };
-          updatedFlight = updated;
-          return updated;
-        }
-        return f;
-      });
-      setTrips((prevTrips) =>
-        prevTrips.map((t) => (t.id === activeTripId ? { ...t, flights: nextFlights } : t))
-      );
-      return nextFlights;
-    });
 
-    if (activeTripId && updatedFlight) {
-      const fallbackTrip = activeTrip || {
-        id: activeTripId,
-        tripCode: settings.tripCode,
-        tripName: settings.tripName,
-        destination: settings.destination,
-        startDate: settings.startDate,
-        durationDays: settings.durationDays,
-        travelersCount: settings.travelersCount,
-        dollarRate: settings.dollarRate,
-        totalBudgetGoalBRL: settings.totalBudgetGoalBRL,
-        status: settings.status,
-        coverTheme: settings.coverTheme,
-        travelers: settings.travelers || [],
-      };
-      SupabaseService.saveFlight(activeTripId, updatedFlight, fallbackTrip);
-    }
-
-    addNotification(`Anexou comprovante no voo`);
-  };
-
-  const removeFlightAttachment = (flightId: string, attachmentId: string) => {
-    let updatedFlight: FlightSegment | null = null;
-    setFlights((prev) => {
-      const nextFlights = prev.map((f) => {
-        if (f.id === flightId) {
-          const updated = {
-            ...f,
-            attachments: (f.attachments || []).filter((a) => a.id !== attachmentId),
-          };
-          updatedFlight = updated;
-          return updated;
-        }
-        return f;
-      });
-      setTrips((prevTrips) =>
-        prevTrips.map((t) => (t.id === activeTripId ? { ...t, flights: nextFlights } : t))
-      );
-      return nextFlights;
-    });
-
-    if (activeTripId && updatedFlight) {
-      const fallbackTrip = activeTrip || {
-        id: activeTripId,
-        tripCode: settings.tripCode,
-        tripName: settings.tripName,
-        destination: settings.destination,
-        startDate: settings.startDate,
-        durationDays: settings.durationDays,
-        travelersCount: settings.travelersCount,
-        dollarRate: settings.dollarRate,
-        totalBudgetGoalBRL: settings.totalBudgetGoalBRL,
-        status: settings.status,
-        coverTheme: settings.coverTheme,
-        travelers: settings.travelers || [],
-      };
-      SupabaseService.saveFlight(activeTripId, updatedFlight, fallbackTrip);
-    }
-
-    addNotification(`Removeu anexo do voo`);
-  };
 
   // Car Rental Handlers
   const syncCarRentalToItineraryDays = async (rental: CarRentalBooking): Promise<{ success: boolean; error?: string }> => {
@@ -5161,58 +5010,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   };
 
-  const addCarRentalAttachment = async (
-    rentalId: string,
-    attachment: Omit<CarRentalAttachment, 'id'>
-  ): Promise<{ success: boolean; error?: string }> => {
-    const newAtt: CarRentalAttachment = {
-      ...attachment,
-      id: `att-car-${Date.now()}`,
-      uploadedAt: new Date().toLocaleDateString('pt-BR'),
-    };
-    
-    if (activeTripId || supabaseStatus.connected) {
-      try {
-        const res = await SupabaseService.saveCarRentalAttachment(activeTripId || '', rentalId, newAtt);
-        if (!res || !res.success) {
-          return { success: false, error: res?.error || 'Não é possível salvar anexo: suporte de armazenamento indisponível no Supabase para aluguel de veículo.' };
-        }
-        setCarRentals((prev) =>
-          prev.map((c) =>
-            c.id === rentalId
-              ? {
-                  ...c,
-                  attachments: [...(c.attachments || []), newAtt],
-                }
-              : c
-          )
-        );
-        addNotification(`Anexou comprovante no veículo`);
-        return { success: true };
-      } catch (e: any) {
-        return { success: false, error: e?.message || 'Erro inesperado ao salvar anexo de locação' };
-      }
-    }
 
-    return {
-      success: false,
-      error: 'O esquema atual do Supabase não possui coluna nem tabela para armazenar anexos em car_rentals. É necessária uma migração de esquema adicionando a coluna attachments (JSONB) para viabilizar a persistência.',
-    };
-  };
-
-  const removeCarRentalAttachment = (rentalId: string, attachmentId: string) => {
-    setCarRentals((prev) =>
-      prev.map((c) =>
-        c.id === rentalId
-          ? {
-              ...c,
-              attachments: (c.attachments || []).filter((a) => a.id !== attachmentId),
-            }
-          : c
-      )
-    );
-    addNotification(`Removeu anexo do veículo`);
-  };
 
   // Accommodation Schedule Synchronizer to Daily Itinerary
   const syncAccommodationToDays = async (
@@ -5432,61 +5230,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     return { success: true };
   };
 
-  const addAccommodationAttachment = async (
-    accId: string,
-    attachment: Omit<AccommodationAttachment, 'id'>
-  ): Promise<{ success: boolean; error?: string }> => {
-    const newAtt: AccommodationAttachment = {
-      ...attachment,
-      id: `att-acc-${Date.now()}`,
-      uploadedAt: new Date().toLocaleDateString('pt-BR'),
-    };
 
-    if (activeTripId || supabaseStatus.connected) {
-      try {
-        const res = await SupabaseService.saveAccommodationAttachment(activeTripId || '', accId, newAtt);
-        if (!res || !res.success) {
-          return {
-            success: false,
-            error: res?.error || 'Não é possível salvar anexo: suporte de armazenamento indisponível no Supabase para hospedagens.',
-          };
-        }
-        setAccommodations((prev) =>
-          prev.map((a) =>
-            a.id === accId
-              ? {
-                  ...a,
-                  attachments: [...(a.attachments || []), newAtt],
-                }
-              : a
-          )
-        );
-        addNotification(`Anexou comprovante na hospedagem`);
-        return { success: true };
-      } catch (e: any) {
-        return { success: false, error: e?.message || 'Erro inesperado ao salvar anexo de hospedagem' };
-      }
-    }
-
-    return {
-      success: false,
-      error: 'O esquema atual do Supabase não possui coluna nem tabela para armazenar anexos em accommodations. É necessária uma migração de esquema adicionando a coluna attachments (JSONB) para viabilizar a persistência.',
-    };
-  };
-
-  const removeAccommodationAttachment = (accId: string, attachmentId: string) => {
-    setAccommodations((prev) =>
-      prev.map((a) =>
-        a.id === accId
-          ? {
-              ...a,
-              attachments: (a.attachments || []).filter((att) => att.id !== attachmentId),
-            }
-          : a
-      )
-    );
-    addNotification(`Removeu anexo da hospedagem`);
-  };
 
   const syncAccommodationsToSupabase = async (): Promise<boolean> => {
     if (!activeTripId) return false;
@@ -6210,26 +5954,18 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         toggleDayCompleted,
         addItineraryDay,
         deleteItineraryDay,
-        addAttachmentToDay,
-        removeAttachmentFromDay,
         flights,
         addFlight,
         updateFlight,
         deleteFlight,
-        addFlightAttachment,
-        removeFlightAttachment,
         carRentals,
         addCarRental,
         updateCarRental,
         deleteCarRental,
-        addCarRentalAttachment,
-        removeCarRentalAttachment,
         accommodations,
         addAccommodation,
         updateAccommodation,
         deleteAccommodation,
-        addAccommodationAttachment,
-        removeAccommodationAttachment,
         syncAccommodationToDays,
         syncAccommodationsToSupabase,
         reloadAccommodationsFromSupabase,

@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { usePlanner, calculateDateOffset } from '../context/PlannerContext';
-import { CarRentalBooking, CarRentalAttachment } from '../types';
+import { CarRentalBooking } from '../types';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { parseInputToNumber, formatInputDisplay } from '../utils/currency';
 import { TravelerSelector } from './TravelerSelector';
@@ -16,7 +16,6 @@ import {
   Trash2,
   Edit3,
   FileText,
-  Paperclip,
   ExternalLink,
   ShieldCheck,
   AlertTriangle,
@@ -25,7 +24,6 @@ import {
   KeyRound,
   X,
   ChevronRight,
-  Upload,
   CreditCard,
   Navigation,
   Bus,
@@ -44,8 +42,6 @@ export const TransportationView: React.FC = () => {
     addCarRental,
     updateCarRental,
     deleteCarRental,
-    addCarRentalAttachment,
-    removeCarRentalAttachment,
     settings,
     updateSettings,
     flights,
@@ -90,11 +86,8 @@ export const TransportationView: React.FC = () => {
   // Input formatting temporary states
   const [focusedField, setFocusedField] = useState<string | null>(null);
   const [tempValue, setTempValue] = useState('');
-
-  // Modal state for Attachments
-  const [attachmentModalRentalId, setAttachmentModalRentalId] = useState<string | null>(null);
-  const [newAttName, setNewAttName] = useState('');
-  const [newAttType, setNewAttType] = useState<'pdf' | 'image' | 'ticket'>('pdf');
+  const [isSaving, setIsSaving] = useState(false);
+  const rentalFormSubmitLockRef = useRef(false);
 
   const adjustTime = (timeStr: string, hourDelta: number): string => {
     if (!timeStr || !timeStr.includes(':')) return timeStr;
@@ -198,10 +191,6 @@ export const TransportationView: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const [isSaving, setIsSaving] = useState(false);
-  const rentalFormSubmitLockRef = useRef(false);
-  const attachmentFormSubmitLockRef = useRef(false);
-
   const handleSubmitModal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (rentalFormSubmitLockRef.current || isSaving) return;
@@ -232,42 +221,10 @@ export const TransportationView: React.FC = () => {
     }
   };
 
-  const handleAddAttachment = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!attachmentModalRentalId || !newAttName.trim() || attachmentFormSubmitLockRef.current || isSaving) return;
-
-    attachmentFormSubmitLockRef.current = true;
-    setIsSaving(true);
-    try {
-      const res = await addCarRentalAttachment(attachmentModalRentalId, {
-        name: newAttName.trim().endsWith('.pdf') ? newAttName.trim() : `${newAttName.trim()}.pdf`,
-        type: newAttType,
-        url: '#',
-      });
-      if (res.success) {
-        setNewAttName('');
-        setAttachmentModalRentalId(null);
-      } else {
-        alert(`Erro ao salvar anexo: ${res.error || 'Erro desconhecido'}`);
-      }
-    } catch (error) {
-      alert('Erro inesperado ao salvar anexo.');
-    } finally {
-      attachmentFormSubmitLockRef.current = false;
-      setIsSaving(false);
-    }
-  };
-
   const { handleBackdropClick: handleRentalModalBackdrop } = useModalKeyEvents({
-    isOpen: isModalOpen && !attachmentModalRentalId,
+    isOpen: isModalOpen,
     onCancel: () => setIsModalOpen(false),
     onSave: () => handleSubmitModal({ preventDefault: () => {} } as React.FormEvent),
-  });
-
-  const { handleBackdropClick: handleAttModalBackdrop } = useModalKeyEvents({
-    isOpen: !!attachmentModalRentalId,
-    onCancel: () => setAttachmentModalRentalId(null),
-    onSave: () => handleAddAttachment({ preventDefault: () => {} } as React.FormEvent),
   });
 
   // Helper for dates
@@ -818,70 +775,7 @@ export const TransportationView: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* Attachments & Vouchers Header */}
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-slate-200">
-                        <div>
-                          <div className="text-xs font-bold text-[#1A2B4C] flex items-center gap-1.5">
-                            <Paperclip className="w-4 h-4 text-[#D4AF37]" />
-                            <span>Vouchers & Documentos Anexados ({rental.attachments?.length || 0})</span>
-                          </div>
-                        </div>
 
-                        <button
-                          type="button"
-                          onClick={() => setAttachmentModalRentalId(rental.id)}
-                          className="px-3.5 py-2 rounded-lg bg-slate-100 hover:bg-[#1A2B4C] hover:text-white text-slate-700 font-bold text-xs transition-colors flex items-center gap-1.5 cursor-pointer self-start sm:self-auto"
-                        >
-                          <Upload className="w-3.5 h-3.5 text-[#D4AF37]" />
-                          <span>Anexar Voucher (PDF/Imagem)</span>
-                        </button>
-                      </div>
-
-                      {/* Attachments List */}
-                      {rental.attachments && rental.attachments.length > 0 && (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                          {rental.attachments.map((att) => (
-                            <div
-                              key={att.id}
-                              className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2"
-                            >
-                              <div className="flex items-center gap-2.5 truncate">
-                                <div className="p-2 rounded-lg bg-red-100 text-red-700 shrink-0">
-                                  <FileText className="w-4 h-4" />
-                                </div>
-                                <div className="truncate">
-                                  <p className="text-xs font-bold text-slate-800 truncate" title={att.name}>
-                                    {att.name}
-                                  </p>
-                                  <p className="text-[10px] text-slate-600">
-                                    {att.uploadedAt || 'Recente'}
-                                  </p>
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-1 shrink-0">
-                                <a
-                                  href={att.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="p-1.5 rounded-md hover:bg-slate-200 text-slate-600"
-                                  title="Abrir Anexo"
-                                >
-                                  <ExternalLink className="w-3.5 h-3.5" />
-                                </a>
-                                <button
-                                  type="button"
-                                  onClick={() => removeCarRentalAttachment(rental.id, att.id)}
-                                  className="p-1.5 rounded-md hover:bg-rose-100 text-rose-600 cursor-pointer"
-                                  title="Remover Anexo"
-                                >
-                                  <X className="w-3.5 h-3.5" />
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      )}
                     </div>
                   </div>
                 );
@@ -1606,94 +1500,7 @@ export const TransportationView: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL: ATTACH VOUCHER / PDF */}
-      {attachmentModalRentalId && (
-        <div
-          onClick={handleAttModalBackdrop}
-          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 z-50 animate-in fade-in duration-200 overflow-hidden"
-        >
-          <div className="bg-white rounded-3xl max-w-6xl w-full flex flex-col shadow-2xl h-[90vh] max-h-[92vh] my-auto overflow-hidden animate-in zoom-in-95 duration-150">
-            <div className="bg-[#1A2B4C] text-white p-5 sm:p-6 flex items-center justify-between border-b border-[#D4AF37]/30 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-[#D4AF37]/20 border border-[#D4AF37]/40 flex items-center justify-center text-[#D4AF37] shrink-0">
-                  <Paperclip className="w-6 h-6" />
-                </div>
-                <div>
-                  <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-[#D4AF37] block">
-                    Documentos & Contratos de Locação
-                  </span>
-                  <h2 className="text-base sm:text-xl font-bold font-serif text-white tracking-tight">
-                    Anexar Voucher do Aluguel de Carro
-                  </h2>
-                </div>
-              </div>
 
-              <button
-                type="button"
-                onClick={() => setAttachmentModalRentalId(null)}
-                className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
-                aria-label="Fechar"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleAddAttachment} className="flex flex-col flex-1 min-h-0 overflow-hidden text-xs">
-              <div className="p-5 sm:p-6 space-y-4 flex-1 overflow-y-auto min-h-0 custom-scrollbar">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Nome do Arquivo / Voucher
-                  </label>
-                  <input
-                    type="text"
-                    value={newAttName}
-                    onChange={(e) => setNewAttName(e.target.value)}
-                    placeholder="Ex: Voucher_Confirmacao_Alamo.pdf"
-                    className="w-full p-2.5 rounded-xl border border-slate-200 text-xs font-semibold"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Tipo de Documento</label>
-                  <select
-                    value={newAttType}
-                    onChange={(e) => setNewAttType(e.target.value as any)}
-                    className="w-full p-2.5 rounded-xl border border-slate-200 text-xs font-semibold"
-                  >
-                    <option value="pdf">Documento PDF (Voucher / Contrato)</option>
-                    <option value="image">Foto / Captura de Tela</option>
-                    <option value="ticket">Comprovante de Pagamento</option>
-                  </select>
-                </div>
-
-                <div className="p-4 bg-slate-50 border border-dashed border-slate-300 rounded-xl text-center text-xs text-slate-500 space-y-1">
-                  <Upload className="w-6 h-6 text-slate-400 mx-auto" />
-                  <p className="font-semibold text-slate-700">Simulação de Upload de Arquivo</p>
-                  <p className="text-[10px]">O documento será vinculado com segurança à sua viagem.</p>
-                </div>
-              </div>
-
-              <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setAttachmentModalRentalId(null)}
-                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 font-bold text-xs cursor-pointer hover:bg-slate-200 transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSaving}
-                  className="px-5 py-2 rounded-xl bg-[#1A2B4C] hover:bg-[#2A437E] text-white font-bold text-xs shadow-md cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isSaving ? 'Salvando...' : 'Salvar'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {/* MODAL: CONFIRM DELETE CAR RENTAL */}
       {rentalToDelete && (

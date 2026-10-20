@@ -12,7 +12,6 @@ import {
   Plus,
   Trash2,
   FileText,
-  Paperclip,
   Printer,
   ChevronDown,
   ChevronUp,
@@ -153,8 +152,6 @@ export const ItineraryPlanner: React.FC = () => {
     toggleDayCompleted,
     addItineraryDay,
     deleteItineraryDay,
-    addAttachmentToDay,
-    removeAttachmentFromDay,
     settings,
     currentUser,
     flights,
@@ -193,11 +190,6 @@ export const ItineraryPlanner: React.FC = () => {
     }
     prevLengthRef.current = itineraryDays.length;
   }, [itineraryDays, selectedDayId, selectedDayNumber]);
-
-  // Modals state
-  const [newAttName, setNewAttName] = useState('');
-  const [newAttType, setNewAttType] = useState<'pdf' | 'ticket' | 'image'>('pdf');
-  const [attModalOpen, setAttModalOpen] = useState(false);
 
   // Park Change Quick Modal
   const [parkModalOpen, setParkModalOpen] = useState(false);
@@ -619,7 +611,6 @@ export const ItineraryPlanner: React.FC = () => {
 
   const hourlyItemSubmitLockRef = useRef(false);
   const parkModalSubmitLockRef = useRef(false);
-  const attachmentSubmitLockRef = useRef(false);
   const [isSaving, setIsSaving] = useState(false);
 
   // Save hourly item
@@ -764,34 +755,6 @@ export const ItineraryPlanner: React.FC = () => {
     }
   };
 
-  // Attachment upload handler
-  const handleSimulatedFileUpload = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newAttName.trim() || !activeDay || attachmentSubmitLockRef.current || isSaving) return;
-
-    attachmentSubmitLockRef.current = true;
-    setIsSaving(true);
-    try {
-      const res = await addAttachmentToDay(activeDay.id, {
-        name: newAttName.endsWith('.pdf') ? newAttName : `${newAttName}.pdf`,
-        type: newAttType,
-        url: '#',
-        size: `${(Math.random() * 2 + 0.5).toFixed(1)} MB`,
-      });
-      if (res.success) {
-        setNewAttName('');
-        setAttModalOpen(false);
-      } else {
-        alert(`Erro ao salvar anexo: ${res.error || 'Erro desconhecido'}`);
-      }
-    } catch (error) {
-      alert('Erro inesperado ao salvar anexo.');
-    } finally {
-      attachmentSubmitLockRef.current = false;
-      setIsSaving(false);
-    }
-  };
-
   // Auto fill all days
   const handleAutoFillAllDays = () => {
     itineraryDays.forEach((day) => {
@@ -824,12 +787,6 @@ export const ItineraryPlanner: React.FC = () => {
     isOpen: parkModalOpen,
     onCancel: () => setParkModalOpen(false),
     onSave: () => handleSaveParkModal(),
-  });
-
-  const { handleBackdropClick: handleAttModalBackdrop } = useModalKeyEvents({
-    isOpen: attModalOpen,
-    onCancel: () => setAttModalOpen(false),
-    onSave: () => handleSimulatedFileUpload({ preventDefault: () => {} } as React.FormEvent),
   });
 
   const { handleBackdropClick: handlePdfModalBackdrop } = useModalKeyEvents({
@@ -1275,15 +1232,6 @@ export const ItineraryPlanner: React.FC = () => {
             <!-- Hourly Schedule Timeline -->
             ${hourlyHtml}
 
-            <!-- Attached Vouchers -->
-            ${
-              day.attachments && day.attachments.length > 0
-                ? `<div class="day-attached-vouchers">
-                     <span>📎 <strong>Vouchers & Ingressos Vinculados:</strong></span>
-                     <span>${day.attachments.map((a) => escapeHtml(a.name)).join(' • ')}</span>
-                   </div>`
-                : ''
-            }
           </div>
         `;
       })
@@ -3366,89 +3314,6 @@ export const ItineraryPlanner: React.FC = () => {
       )}
 
       {/* ========================================================================= */}
-      {/* MODAL: ATTACHMENT UPLOAD                                                  */}
-      {/* ========================================================================= */}
-      {attModalOpen && (
-        <div
-          id="modal-attachment-upload"
-          onClick={handleAttModalBackdrop}
-          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
-        >
-          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden animate-in fade-in zoom-in-95">
-            <div className="bg-[#1A2B4C] text-white p-5 sm:p-6 flex items-center justify-between border-b border-[#D4AF37]/30 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-[#D4AF37]/20 border border-[#D4AF37]/40 flex items-center justify-center text-[#D4AF37] shrink-0">
-                  <Paperclip className="w-6 h-6" />
-                </div>
-                <div>
-                  <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-[#D4AF37] block">
-                    Documentos do Dia {activeDay.dayNumber}
-                  </span>
-                  <h2 className="text-base sm:text-xl font-bold font-serif text-white tracking-tight">
-                    Anexar Documento / Voucher
-                  </h2>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setAttModalOpen(false)}
-                className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
-                aria-label="Fechar"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSimulatedFileUpload} className="p-5 sm:p-6 space-y-4 text-xs">
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Nome do Documento / Voucher *</label>
-                <input
-                  type="text"
-                  required
-                  value={newAttName}
-                  onChange={(e) => setNewAttName(e.target.value)}
-                  placeholder="Ex: Ingresso Magic Kingdom, Reserva Be Our Guest..."
-                  className="w-full p-2.5 rounded-xl border border-slate-200 font-medium text-slate-800"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Tipo de Arquivo</label>
-                <select
-                  value={newAttType}
-                  onChange={(e) => setNewAttType(e.target.value as any)}
-                  className="w-full p-2.5 rounded-xl border border-slate-200 font-medium text-slate-800"
-                >
-                  <option value="pdf">Documento PDF / Voucher</option>
-                  <option value="ticket">Ingresso / Ticket Digital</option>
-                  <option value="image">Foto / Comprovante</option>
-                </select>
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-200">
-                <button
-                  type="button"
-                  onClick={() => setAttModalOpen(false)}
-                  className="px-5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSaving}
-                  className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
-                  <span>{isSaving ? 'Salvando...' : 'Salvar'}</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
       {/* MODAL: PDF PRINT / EXPORT PREFERENCES                                     */}
       {/* ========================================================================= */}
       {pdfModalOpen && (
@@ -4460,14 +4325,6 @@ export const ItineraryPlanner: React.FC = () => {
                     </div>
                   )}
                 </div>
-
-                {/* Attachments / Vouchers if present */}
-                {day.attachments && day.attachments.length > 0 && (
-                  <div className="pt-2 border-t border-slate-100 flex items-center gap-2 text-[10px] text-slate-600">
-                    <strong className="text-[#1A2B4C]">Documentos / Vouchers Anexados:</strong>
-                    <span>{day.attachments.map((a) => a.name).join(' • ')}</span>
-                  </div>
-                )}
               </div>
             );
           })}
