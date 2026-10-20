@@ -3476,7 +3476,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           afternoon: { ...sourceDay.afternoon },
           night: { ...sourceDay.night },
           generalNotes: sourceDay.generalNotes || '',
-          attachments: [...(sourceDay.attachments || [])],
           parkBooking: sourceDay.parkBooking
             ? {
                 ...sourceDay.parkBooking,
@@ -3502,7 +3501,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           afternoon: { where: '', dining: '', notes: '' },
           night: { where: '', dining: '', notes: '' },
           generalNotes: '',
-          attachments: [],
           parkBooking: undefined,
           hourlySchedule: sourceFixedItems,
         };
@@ -3516,7 +3514,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           afternoon: { ...sourceDay.afternoon },
           night: { ...sourceDay.night },
           generalNotes: sourceDay.generalNotes || '',
-          attachments: [...(sourceDay.attachments || [])],
           parkBooking: sourceDay.parkBooking
             ? {
                 ...sourceDay.parkBooking,
@@ -3535,7 +3532,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           afternoon: { ...targetDay.afternoon },
           night: { ...targetDay.night },
           generalNotes: targetDay.generalNotes || '',
-          attachments: [...(targetDay.attachments || [])],
           parkBooking: targetDay.parkBooking
             ? {
                 ...targetDay.parkBooking,
@@ -3638,7 +3634,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       afternoon: { where: '', dining: '', notes: '' },
       night: { where: '', dining: '', notes: '' },
       generalNotes: '',
-      attachments: [],
     };
     setRawDays((prev) => [...prev, newDay]);
     setSettings((prev) => ({ ...prev, durationDays: newDayNum }));

@@ -273,7 +273,6 @@ export interface ItineraryDay {
   afternoon: ItineraryDayPeriod;
   night: ItineraryDayPeriod;
   generalNotes: string;
-  attachments?: unknown[];
   hourlySchedule?: HourlyScheduleItem[];
   customRouteStops?: CustomRouteStop[];
   parkBooking?: ParkDayBooking;
@@ -376,7 +375,6 @@ export interface FlightSegment {
   travelerIds?: string[];
   notes?: string;
   passengers?: string[];
-  attachments?: unknown[];
   originCity?: string;
   originAirport?: string;
   originCode?: string;
@@ -416,7 +414,6 @@ export interface CarRentalBooking {
   includedInsurances?: string[];
   tollOption?: string; // e.g. 'Visitor Toll Pass (Gratuito MCO)'
   notes?: string;
-  attachments?: unknown[];
 }
 
 export interface AccommodationBooking {
@@ -440,7 +437,6 @@ export interface AccommodationBooking {
   amenities?: string[];
   contactPhone?: string;
   notes?: string;
-  attachments?: unknown[];
 }
 
 export interface ExchangeRateData {
