@@ -3391,9 +3391,14 @@ export function syncAllEventsToHourlySchedule(
             );
           });
 
+          const checkInTime = nightAcc.checkInTime || '16:00';
+          const nightTime = checkInTime.localeCompare('21:00') > 0
+            ? addMinutesToTimeString(checkInTime, 90)
+            : '22:30';
+
           const nightItem: HourlyScheduleItem = {
             id: `auto-retorno-${day.dayNumber || '1'}`,
-            time: '22:30',
+            time: nightTime,
             title: `🌙 Fim do dia na acomodação (${nightAccName})`,
             location: nightLocation,
             category: nightCategory,
@@ -4384,7 +4389,10 @@ export function auditAndCorrectTrip(trip: any): any {
     durationDays,
     flights,
     accommodations,
-    rawDays,
+    rawDays: rawDays.map((day: any) => ({
+      ...day,
+      hourlySchedule: syncAllEventsToHourlySchedule(day, trip)
+    })),
   };
 }
 
