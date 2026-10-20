@@ -1019,19 +1019,16 @@ export const SupabaseService = {
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (tripsErr) {
-        if (isSupabaseMissingTableError(tripsErr)) {
-          // Schema not initialized yet in Supabase
-          return null;
-        }
-        console.warn('Supabase: Erro ao buscar viagens:', tripsErr);
+      if (tripsErr || !tripsData || !Array.isArray(tripsData)) {
+        const msg = tripsErr ? tripsErr.message : 'Dados de viagens nulos ou inválidos';
+        console.warn('Supabase: Erro ou tabela ausente em trips:', msg);
         return {
           trips: [],
-          errors: [{ tripId: 'global', table: 'trips', operation: 'SELECT', message: tripsErr.message }]
+          errors: [{ tripId: 'global', table: 'trips', operation: 'SELECT', message: msg }]
         };
       }
 
-      if (!tripsData || tripsData.length === 0) {
+      if (tripsData.length === 0) {
         return { trips: [], errors: [] };
       }
 
@@ -1044,12 +1041,13 @@ export const SupabaseService = {
 
         // Fetch travelers for this trip (Mandatory table)
         const { data: trvData, error: trvErr } = await supabase.from('travelers').select('*').eq('trip_id', tripId);
-        if (trvErr && !isSupabaseMissingTableError(trvErr)) {
-          console.error(`[Supabase] Erro ao carregar travelers para a viagem ${tripId}:`, trvErr);
-          allErrors.push({ tripId, table: 'travelers', operation: 'SELECT', message: trvErr.message });
+        if (trvErr || !trvData || !Array.isArray(trvData)) {
+          const msg = trvErr ? trvErr.message : 'Dados de viajantes nulos ou inválidos';
+          console.error(`[Supabase] Erro ou tabela ausente em travelers para a viagem ${tripId}:`, msg);
+          allErrors.push({ tripId, table: 'travelers', operation: 'SELECT', message: msg });
           continue;
         }
-        const travelers = (!trvErr ? (trvData || []).map(mapDbToTraveler) : []);
+        const travelers = trvData.map(mapDbToTraveler);
 
         // Fetch other collections
         const [
@@ -1088,31 +1086,32 @@ export const SupabaseService = {
           supabase.from('park_photo_packages').select('*').eq('trip_id', tripId),
         ]);
 
-        // Classification of queries into mandatory and optional
+        // Classification of queries into mandatory and optional (including missing table errors)
         const queriesToCheck = [
-          { table: 'expenses', error: expErr, mandatory: true },
-          { table: 'itinerary_days', error: daysErr, mandatory: true },
-          { table: 'hourly_schedules', error: hourlyErr, mandatory: false },
-          { table: 'flight_segments', error: fltErr, mandatory: false },
-          { table: 'car_rentals', error: carErr, mandatory: false },
-          { table: 'accommodations', error: accErr, mandatory: false },
-          { table: 'park_ticket_purchases', error: tktErr, mandatory: false },
-          { table: 'preparation_documents', error: docErr, mandatory: false },
-          { table: 'booking_milestones', error: mlsErr, mandatory: false },
-          { table: 'baggage_items', error: bagErr, mandatory: false },
-          { table: 'park_day_bookings', error: pbErr, mandatory: false },
-          { table: 'traveler_attraction_selections', error: attrErr, mandatory: false },
-          { table: 'park_shows_reservations', error: showsErr, mandatory: false },
-          { table: 'park_dining_reservations', error: diningErr, mandatory: false },
-          { table: 'park_fast_passes', error: fpErr, mandatory: false },
-          { table: 'park_photo_packages', error: photoErr, mandatory: false },
+          { table: 'expenses', data: expData, error: expErr, mandatory: true },
+          { table: 'itinerary_days', data: daysData, error: daysErr, mandatory: true },
+          { table: 'hourly_schedules', data: hourlyData, error: hourlyErr, mandatory: false },
+          { table: 'flight_segments', data: fltData, error: fltErr, mandatory: false },
+          { table: 'car_rentals', data: carData, error: carErr, mandatory: false },
+          { table: 'accommodations', data: accData, error: accErr, mandatory: false },
+          { table: 'park_ticket_purchases', data: tktData, error: tktErr, mandatory: false },
+          { table: 'preparation_documents', data: docData, error: docErr, mandatory: false },
+          { table: 'booking_milestones', data: mlsData, error: mlsErr, mandatory: false },
+          { table: 'baggage_items', data: bagData, error: bagErr, mandatory: false },
+          { table: 'park_day_bookings', data: parkBookingsData, error: pbErr, mandatory: false },
+          { table: 'traveler_attraction_selections', data: attrSelData, error: attrErr, mandatory: false },
+          { table: 'park_shows_reservations', data: showsData, error: showsErr, mandatory: false },
+          { table: 'park_dining_reservations', data: diningData, error: diningErr, mandatory: false },
+          { table: 'park_fast_passes', data: fastPassData, error: fpErr, mandatory: false },
+          { table: 'park_photo_packages', data: photoPkgData, error: photoErr, mandatory: false },
         ];
 
         let tripHasMandatoryError = false;
         for (const q of queriesToCheck) {
-          if (q.error && !isSupabaseMissingTableError(q.error)) {
-            console.error(`[Supabase] Erro ao carregar ${q.table} para a viagem ${tripId}:`, q.error);
-            allErrors.push({ tripId, table: q.table, operation: 'SELECT', message: q.error.message });
+          if (q.error || !q.data || !Array.isArray(q.data)) {
+            const msg = q.error ? q.error.message : 'Dados retornados nulos ou inválidos';
+            console.error(`[Supabase] Erro ou tabela ausente em ${q.table} para a viagem ${tripId}:`, msg);
+            allErrors.push({ tripId, table: q.table, operation: 'SELECT', message: msg });
             if (q.mandatory) {
               tripHasMandatoryError = true;
             }
