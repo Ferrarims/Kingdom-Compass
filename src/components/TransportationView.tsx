@@ -1326,6 +1326,7 @@ export const TransportationView: React.FC = () => {
                         <option value="Pendente">⚠️ Pendente</option>
                         <option value="Concluído">🏁 Concluído</option>
                         <option value="Planejado">📋 Planejado (Legado)</option>
+                        <option value="Planejando">📋 Planejando (Legado)</option>
                       </select>
                     </div>
                   </div>
