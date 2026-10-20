@@ -621,54 +621,60 @@ export const ItineraryPlanner: React.FC = () => {
     if (e && typeof e.preventDefault === 'function') {
       e.preventDefault();
     }
-    if (!hourlyForm.title.trim()) {
+    if (!hourlyForm.title.trim() || isSaving) {
       return;
     }
+    setIsSaving(true);
+    try {
+      // Resolve target day safely
+      const targetDay =
+        itineraryDays.find((d) => d.id === hourlyTargetDayId) ||
+        itineraryDays.find((d) => d.id === selectedDayId) ||
+        activeDay ||
+        itineraryDays[0];
 
-    // Resolve target day safely
-    const targetDay =
-      itineraryDays.find((d) => d.id === hourlyTargetDayId) ||
-      itineraryDays.find((d) => d.id === selectedDayId) ||
-      activeDay ||
-      itineraryDays[0];
+      if (!targetDay) {
+        return;
+      }
+      const targetDayId = targetDay.id;
 
-    if (!targetDay) {
-      return;
-    }
-    const targetDayId = targetDay.id;
+      let success = false;
+      if (editingHourlyItemId) {
+        const existing = (targetDay.hourlySchedule || []).find((i) => i.id === editingHourlyItemId);
+        const updatedItem: HourlyScheduleItem = {
+          id: editingHourlyItemId,
+          time: hourlyForm.time || '08:00',
+          title: hourlyForm.title.trim(),
+          location: hourlyForm.location.trim() || targetDay.park || '',
+          category: hourlyForm.category || 'park',
+          notes: hourlyForm.notes.trim(),
+          completed: existing?.completed || false,
+          sourceType: existing?.sourceType || 'manual',
+          sourceId: existing?.sourceId,
+        };
+        success = await saveHourlyScheduleItem(targetDayId, updatedItem);
+      } else {
+        const newItem: HourlyScheduleItem = {
+          id: generateUUID(),
+          time: hourlyForm.time || '08:00',
+          title: hourlyForm.title.trim(),
+          location: hourlyForm.location.trim() || targetDay.park || '',
+          category: hourlyForm.category || 'park',
+          completed: false,
+          notes: hourlyForm.notes.trim(),
+          sourceType: 'manual',
+        };
+        success = await saveHourlyScheduleItem(targetDayId, newItem);
+      }
 
-    let success = false;
-    if (editingHourlyItemId) {
-      const existing = (targetDay.hourlySchedule || []).find((i) => i.id === editingHourlyItemId);
-      const updatedItem: HourlyScheduleItem = {
-        id: editingHourlyItemId,
-        time: hourlyForm.time || '08:00',
-        title: hourlyForm.title.trim(),
-        location: hourlyForm.location.trim() || targetDay.park || '',
-        category: hourlyForm.category || 'park',
-        notes: hourlyForm.notes.trim(),
-        completed: existing?.completed || false,
-        sourceType: existing?.sourceType || 'manual',
-        sourceId: existing?.sourceId,
-      };
-      success = await saveHourlyScheduleItem(targetDayId, updatedItem);
-    } else {
-      const newItem: HourlyScheduleItem = {
-        id: generateUUID(),
-        time: hourlyForm.time || '08:00',
-        title: hourlyForm.title.trim(),
-        location: hourlyForm.location.trim() || targetDay.park || '',
-        category: hourlyForm.category || 'park',
-        completed: false,
-        notes: hourlyForm.notes.trim(),
-        sourceType: 'manual',
-      };
-      success = await saveHourlyScheduleItem(targetDayId, newItem);
-    }
-
-    if (success) {
-      setIsHourlyModalOpen(false);
-      setEditingHourlyItemId(null);
+      if (success) {
+        setIsHourlyModalOpen(false);
+        setEditingHourlyItemId(null);
+      }
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -745,18 +751,25 @@ export const ItineraryPlanner: React.FC = () => {
   };
 
   // Attachment upload handler
-  const handleSimulatedFileUpload = (e: React.FormEvent) => {
+  const handleSimulatedFileUpload = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newAttName.trim() || !activeDay) return;
+    if (!newAttName.trim() || !activeDay || isSaving) return;
 
-    addAttachmentToDay(activeDay.id, {
-      name: newAttName.endsWith('.pdf') ? newAttName : `${newAttName}.pdf`,
-      type: newAttType,
-      url: '#',
-      size: `${(Math.random() * 2 + 0.5).toFixed(1)} MB`,
-    });
-    setNewAttName('');
-    setAttModalOpen(false);
+    setIsSaving(true);
+    try {
+      await addAttachmentToDay(activeDay.id, {
+        name: newAttName.endsWith('.pdf') ? newAttName : `${newAttName}.pdf`,
+        type: newAttType,
+        url: '#',
+        size: `${(Math.random() * 2 + 0.5).toFixed(1)} MB`,
+      });
+      setNewAttName('');
+      setAttModalOpen(false);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Auto fill all days

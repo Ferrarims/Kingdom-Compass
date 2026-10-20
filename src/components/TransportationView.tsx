@@ -223,18 +223,24 @@ export const TransportationView: React.FC = () => {
     }
   };
 
-  const handleAddAttachment = (e: React.FormEvent) => {
+  const handleAddAttachment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!attachmentModalRentalId || !newAttName.trim()) return;
+    if (!attachmentModalRentalId || !newAttName.trim() || isSaving) return;
 
-    addCarRentalAttachment(attachmentModalRentalId, {
-      name: newAttName.trim().endsWith('.pdf') ? newAttName.trim() : `${newAttName.trim()}.pdf`,
-      type: newAttType,
-      url: '#',
-    });
-
-    setNewAttName('');
-    setAttachmentModalRentalId(null);
+    setIsSaving(true);
+    try {
+      await addCarRentalAttachment(attachmentModalRentalId, {
+        name: newAttName.trim().endsWith('.pdf') ? newAttName.trim() : `${newAttName.trim()}.pdf`,
+        type: newAttType,
+        url: '#',
+      });
+      setNewAttName('');
+      setAttachmentModalRentalId(null);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const { handleBackdropClick: handleRentalModalBackdrop } = useModalKeyEvents({
