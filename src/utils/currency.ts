@@ -30,16 +30,33 @@ export const formatCurrency = (val: number | null | undefined, currency: Currenc
   }
 };
 
-export const parseInputToNumber = (valStr: string, currency: CurrencyType = 'BRL'): number => {
-  if (!valStr) return 0;
-  let clean = valStr.trim();
-  if (currency === 'BRL') {
-    clean = clean.replace(/\./g, '').replace(',', '.');
-  } else {
-    clean = clean.replace(/,/g, '');
+/**
+ * Strict parser validating full string according to currency format.
+ * Rejects partially numeric text or invalid separator positions.
+ */
+export const parseInputToNumber = (valStr: string | number | null | undefined, currency: CurrencyType = 'BRL'): number | null => {
+  if (valStr === null || valStr === undefined) return null;
+  if (typeof valStr === 'number') {
+    return isNaN(valStr) ? null : valStr;
   }
-  const parsed = parseFloat(clean);
-  return isNaN(parsed) ? 0 : parsed;
+  const clean = String(valStr).trim();
+  if (!clean) return null;
+
+  if (currency === 'BRL') {
+    // Strict BRL format: optional thousand separators (.) and mandatory comma decimals (,) with 2 digits
+    const brlRegex = /^(\d{1,3}(\.\d{3})*|\d+)(,\d{2})?$/;
+    if (!brlRegex.test(clean)) return null;
+    const numStr = clean.replace(/\./g, '').replace(',', '.');
+    const parsed = Number(numStr);
+    return isNaN(parsed) ? null : parsed;
+  } else {
+    // Strict USD format: optional thousand separators (,) and mandatory dot decimals (.) with 2 digits
+    const usdRegex = /^(\d{1,3}(,\d{3})*|\d+)(\.\d{2})?$/;
+    if (!usdRegex.test(clean)) return null;
+    const numStr = clean.replace(/,/g, '');
+    const parsed = Number(numStr);
+    return isNaN(parsed) ? null : parsed;
+  }
 };
 
 export const digitsToNumber = (digitsStr: string): number => {

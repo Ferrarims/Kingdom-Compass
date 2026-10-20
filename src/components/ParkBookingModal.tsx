@@ -421,12 +421,12 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
         setPhotoPkgIncludedParks(existingPkg.includedParks || []);
         setPhotoPkgCode(existingPkg.confirmationCode || '');
         setPhotoPkgAccount(existingPkg.accountEmailOrUser || '');
-        let existUsd = existingPkg.costUSD !== undefined ? String(existingPkg.costUSD) : '';
-        let existBrl = existingPkg.costBRL !== undefined ? String(existingPkg.costBRL) : '';
+        let existUsd = existingPkg.costUSD !== undefined ? Number(existingPkg.costUSD) : 0;
+        let existBrl = existingPkg.costBRL !== undefined ? Number(existingPkg.costBRL) : 0;
         if (!existBrl && existUsd && dollarRate > 0) {
-          existBrl = (parseFloat(existUsd) * dollarRate).toFixed(2);
+          existBrl = Math.round(existUsd * dollarRate * 100) / 100;
         } else if (!existUsd && existBrl && dollarRate > 0) {
-          existUsd = (parseFloat(existBrl) / dollarRate).toFixed(2);
+          existUsd = Math.round((existBrl / dollarRate) * 100) / 100;
         }
         setPhotoPkgCostUSD(existUsd);
         setPhotoPkgCostBRL(existBrl);
@@ -907,8 +907,9 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
         "Disney's Blizzard Beach",
       ]);
       setPhotoPkgValidityDesc('Válido por 30 dias em todos os parques Disney a partir do download da 1ª foto');
-      setPhotoPkgCostUSD('185.00');
-      setPhotoPkgCostBRL((185 * dollarRate).toFixed(2));
+      const usdVal = 185;
+      setPhotoPkgCostUSD(usdVal);
+      setPhotoPkgCostBRL(Math.round(usdVal * dollarRate * 100) / 100);
       setPhotoPkgNotes(
         'Download digital ilimitado de todas as fotos e vídeos de atrações e fotógrafos PhotoPass no My Disney Experience. As fotos expiram em 45 dias.'
       );
@@ -918,8 +919,9 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       setPhotoPkgComplex('Disney');
       setPhotoPkgIncludedParks([selectedParkName || 'Magic Kingdom']);
       setPhotoPkgValidityDesc('Válido para todas as fotos tiradas em 1 único dia escolhido');
-      setPhotoPkgCostUSD('75.00');
-      setPhotoPkgCostBRL((75 * dollarRate).toFixed(2));
+      const usdVal = 75;
+      setPhotoPkgCostUSD(usdVal);
+      setPhotoPkgCostBRL(Math.round(usdVal * dollarRate * 100) / 100);
       setPhotoPkgNotes('Válido para fotos tiradas exclusivamente neste dia em qualquer parque Disney visitado.');
     } else if (preset === 'universal_3days') {
       setPhotoPkgName('Universal My Universal Photos (3 Dias)');
@@ -931,8 +933,9 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
         "Universal's Volcano Bay",
       ]);
       setPhotoPkgValidityDesc('Válido por 3 dias consecutivos nos parques Universal');
-      setPhotoPkgCostUSD('129.99');
-      setPhotoPkgCostBRL((129.99 * dollarRate).toFixed(2));
+      const usdVal = 129.99;
+      setPhotoPkgCostUSD(usdVal);
+      setPhotoPkgCostBRL(Math.round(usdVal * dollarRate * 100) / 100);
       setPhotoPkgNotes('Fotos ilimitadas em atrações e com personagens nos 3 parques da Universal.');
     } else if (preset === 'universal_1day') {
       setPhotoPkgName('Universal My Universal Photos (1 Dia)');
@@ -940,8 +943,9 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       setPhotoPkgComplex('Universal');
       setPhotoPkgIncludedParks([selectedParkName || 'Universal Studios Florida']);
       setPhotoPkgValidityDesc('Válido por 1 dia inteiro nos parques da Universal');
-      setPhotoPkgCostUSD('89.99');
-      setPhotoPkgCostBRL((89.99 * dollarRate).toFixed(2));
+      const usdVal = 89.99;
+      setPhotoPkgCostUSD(usdVal);
+      setPhotoPkgCostBRL(Math.round(usdVal * dollarRate * 100) / 100);
       setPhotoPkgNotes('Fotos ilimitadas nas atrações participantes durante o dia.');
     } else if (preset === 'seaworld_season') {
       setPhotoPkgName('SeaWorld PhotoKey (All Season / Multi-Park)');
@@ -949,8 +953,9 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       setPhotoPkgComplex('SeaWorld');
       setPhotoPkgIncludedParks(['SeaWorld Orlando', 'Busch Gardens Tampa Bay', 'Aquatica Orlando']);
       setPhotoPkgValidityDesc('Válido para toda a temporada nos parques do grupo SeaWorld');
-      setPhotoPkgCostUSD('99.99');
-      setPhotoPkgCostBRL((99.99 * dollarRate).toFixed(2));
+      const usdVal = 99.99;
+      setPhotoPkgCostUSD(usdVal);
+      setPhotoPkgCostBRL(Math.round(usdVal * dollarRate * 100) / 100);
       setPhotoPkgNotes('Fotos ilimitadas em montanhas-russas participantes e fotos de boas-vindas.');
     } else if (preset === 'seaworld_1day') {
       setPhotoPkgName('SeaWorld PhotoKey (1 Dia)');
@@ -958,8 +963,9 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       setPhotoPkgComplex('SeaWorld');
       setPhotoPkgIncludedParks([selectedParkName || 'SeaWorld Orlando']);
       setPhotoPkgValidityDesc('Válido por 1 dia no parque');
-      setPhotoPkgCostUSD('49.99');
-      setPhotoPkgCostBRL((49.99 * dollarRate).toFixed(2));
+      const usdVal = 49.99;
+      setPhotoPkgCostUSD(usdVal);
+      setPhotoPkgCostBRL(Math.round(usdVal * dollarRate * 100) / 100);
       setPhotoPkgNotes('Fotos ilimitadas nas atrações participantes do parque neste dia.');
     }
   };
@@ -972,12 +978,12 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     setPhotoPkgValidityDesc(pkg.validityDescription || '');
     setPhotoPkgCode(pkg.confirmationCode || '');
     setPhotoPkgAccount(pkg.accountEmailOrUser || '');
-    let usd = pkg.costUSD !== undefined ? String(pkg.costUSD) : '';
-    let brl = pkg.costBRL !== undefined ? String(pkg.costBRL) : '';
+    let usd = pkg.costUSD !== undefined ? Number(pkg.costUSD) : 0;
+    let brl = pkg.costBRL !== undefined ? Number(pkg.costBRL) : 0;
     if (!brl && usd && dollarRate > 0) {
-      brl = (parseFloat(usd) * dollarRate).toFixed(2);
+      brl = Math.round(usd * dollarRate * 100) / 100;
     } else if (!usd && brl && dollarRate > 0) {
-      usd = (parseFloat(brl) / dollarRate).toFixed(2);
+      usd = Math.round((brl / dollarRate) * 100) / 100;
     }
     setPhotoPkgCostUSD(usd);
     setPhotoPkgCostBRL(brl);

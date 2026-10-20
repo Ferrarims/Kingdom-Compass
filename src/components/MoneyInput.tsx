@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { CurrencyType, formatInputDisplay } from '../utils/currency';
+import React, { useState, useEffect, useRef } from 'react';
+import { CurrencyType, formatInputDisplay, parseInputToNumber } from '../utils/currency';
 
 interface MoneyInputProps {
   currency: CurrencyType;
@@ -27,6 +27,7 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
   autoFocus,
 }) => {
   const [displayValue, setDisplayValue] = useState<string>('');
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (value === null || value === undefined || isNaN(value)) {
@@ -39,13 +40,14 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value;
     const digits = raw.replace(/\D/g, '');
-    
+
     if (!digits) {
       setDisplayValue('');
       onChange(required ? 0 : null);
       return;
     }
 
+    // Banking right-to-left cent insertion
     const numericVal = parseInt(digits, 10) / 100;
     onChange(numericVal);
     setDisplayValue(formatInputDisplay(numericVal, currency));
@@ -56,27 +58,13 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
     const pasteText = e.clipboardData.getData('text').trim();
     if (!pasteText) return;
 
+    // Clean currency symbol if present
     const cleanPaste = pasteText.replace(currency === 'BRL' ? /^[R\$\s]*/i : /^[\$\s]*/, '').trim();
-    let isValid = false;
-    let parsedNum = 0;
+    
+    // Strict validation using parseInputToNumber
+    const parsedNum = parseInputToNumber(cleanPaste, currency);
 
-    if (currency === 'BRL') {
-      const brlRegex = /^(\d{1,3}(\.\d{3})*|\d+)(,\d{2})?$/;
-      if (brlRegex.test(cleanPaste)) {
-        isValid = true;
-        const numStr = cleanPaste.replace(/\./g, '').replace(',', '.');
-        parsedNum = Number(numStr);
-      }
-    } else {
-      const usdRegex = /^(\d{1,3}(,\d{3})*|\d+)(\.\d{2})?$/;
-      if (usdRegex.test(cleanPaste)) {
-        isValid = true;
-        const numStr = cleanPaste.replace(/,/g, '');
-        parsedNum = Number(numStr);
-      }
-    }
-
-    if (isValid && !isNaN(parsedNum)) {
+    if (parsedNum !== null && !isNaN(parsedNum)) {
       onChange(parsedNum);
       setDisplayValue(formatInputDisplay(parsedNum, currency));
     } else {
@@ -92,6 +80,7 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
         {symbol}
       </span>
       <input
+        ref={inputRef}
         type="text"
         inputMode="numeric"
         id={id}
