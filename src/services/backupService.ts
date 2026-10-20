@@ -315,10 +315,19 @@ export async function executeBackupRestore(
     totalExpected += expectedCount;
 
     try {
+      // Sanitize rows if table is park_ticket_purchases to omit legacy voucher_attachment
+      const sanitizedRows = tableName === 'park_ticket_purchases'
+        ? rows.map((r: any) => {
+            if (!r || typeof r !== 'object') return r;
+            const { voucher_attachment, voucherAttachment, ...rest } = r;
+            return rest;
+          })
+        : rows;
+
       // 1. Batch upsert rows and select ids
       const { data: upsertData, error: upsertError } = await supabase
         .from(tableName)
-        .upsert(rows, { onConflict: 'id' })
+        .upsert(sanitizedRows, { onConflict: 'id' })
         .select('id');
 
       if (upsertError || !Array.isArray(upsertData)) {
