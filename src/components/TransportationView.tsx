@@ -1669,9 +1669,10 @@ export const TransportationView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 rounded-xl bg-[#1A2B4C] hover:bg-[#2A437E] text-white font-bold text-xs shadow-md cursor-pointer transition-colors"
+                  disabled={isSaving}
+                  className="px-5 py-2 rounded-xl bg-[#1A2B4C] hover:bg-[#2A437E] text-white font-bold text-xs shadow-md cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Salvar
+                  {isSaving ? 'Salvando...' : 'Salvar'}
                 </button>
               </div>
             </form>
