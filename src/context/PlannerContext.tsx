@@ -2174,6 +2174,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       updates.flexibleInboundEnd = normalizeDateToYMD(updates.flexibleInboundEnd);
     }
 
+    const previousTrips = trips;
+    const previousRawDays = rawDays;
+    const previousSettings = settings;
+
     let tripToSync: Trip | null = null;
 
     setTrips((prev) =>
@@ -2253,7 +2257,16 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     );
 
     if (tripToSync) {
-      return await SupabaseService.syncTripToSupabase(tripToSync);
+      const res = await SupabaseService.syncTripToSupabase(tripToSync);
+      if (!res.success) {
+        setTrips(previousTrips);
+        if (id === activeTripId) {
+          setRawDays(previousRawDays);
+          setSettings(previousSettings);
+        }
+        return { success: false, error: res.error || 'Falha ao salvar alterações da viagem no Supabase' };
+      }
+      return { success: true };
     }
     return { success: true };
   };
@@ -3617,6 +3630,30 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       uploadedBy: currentUser.name,
       uploadedAt: new Date().toLocaleDateString('pt-BR'),
     };
+    
+    if (activeTripId) {
+      try {
+        const res = await SupabaseService.saveItineraryAttachment(activeTripId, dayId, newAtt);
+        if (!res || !res.success) {
+          return { success: false, error: res?.error || 'Não é possível salvar anexo: suporte de armazenamento indisponível no Supabase.' };
+        }
+        setRawDays((prev) =>
+          prev.map((day) =>
+            day.id === dayId
+              ? {
+                  ...day,
+                  attachments: [...day.attachments, newAtt],
+                }
+              : day
+          )
+        );
+        addNotification(`Anexou voucher "${attachment.name}"`);
+        return { success: true };
+      } catch (e: any) {
+        return { success: false, error: e?.message || 'Erro inesperado ao salvar anexo de roteiro' };
+      }
+    }
+
     setRawDays((prev) =>
       prev.map((day) =>
         day.id === dayId
@@ -3627,41 +3664,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           : day
       )
     );
-    addNotification(`Anexou voucher "${attachment.name}"`);
-    
-    if (activeTripId) {
-      try {
-        const res = await SupabaseService.saveItineraryAttachment(activeTripId, dayId, newAtt);
-        if (res && !res.success) {
-          // Rollback optimistic state
-          setRawDays((prev) =>
-            prev.map((day) =>
-              day.id === dayId
-                ? {
-                    ...day,
-                    attachments: (day.attachments || []).filter((a) => a.id !== newAtt.id),
-                  }
-                : day
-            )
-          );
-          return { success: false, error: res.error || 'Falha ao salvar anexo no Supabase' };
-        }
-        return { success: true };
-      } catch (e: any) {
-        // Rollback optimistic state
-        setRawDays((prev) =>
-          prev.map((day) =>
-            day.id === dayId
-              ? {
-                  ...day,
-                  attachments: (day.attachments || []).filter((a) => a.id !== newAtt.id),
-                }
-              : day
-          )
-        );
-        return { success: false, error: e.message || 'Erro inesperado ao salvar anexo' };
-      }
-    }
+    addNotification(`Anexou voucher "${attachment.name}" (local)`);
     return { success: true };
   };
 
@@ -4332,7 +4335,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   };
 
-  const syncCarRentalExpense = (rental: CarRentalBooking, rate: number) => {
+  const syncCarRentalExpense = async (rental: CarRentalBooking, rate: number): Promise<{ success: boolean; error?: string }> => {
     const expId = generateDeterministicUUID('car-expense', rental.id);
     const usd = rental.costUSD || 0;
     const brl = rental.costBRL || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
@@ -4406,12 +4409,18 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           durationDays: settings.durationDays,
           travelers: settings.travelers,
         };
-        SupabaseService.saveExpense(activeTripId, expData, fallbackTrip);
+        const expRes = await SupabaseService.saveExpense(activeTripId, expData, fallbackTrip);
+        if (expRes && !expRes.success) {
+          return { success: false, error: expRes.error || 'Erro ao sincronizar despesa de locação de veículo' };
+        }
       }
     } else {
       setExpenses((prev) => prev.filter((e) => e.id !== expId));
-      SupabaseService.deleteExpense(expId);
+      if (activeTripId) {
+        await SupabaseService.deleteExpense(expId);
+      }
     }
+    return { success: true };
   };
 
   // Flight Handlers
@@ -4777,12 +4786,16 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   // Car Rental Handlers
-  const syncCarRentalToItineraryDays = (rental: CarRentalBooking) => {
+  const syncCarRentalToItineraryDays = async (rental: CarRentalBooking): Promise<{ success: boolean; error?: string }> => {
     const pickupDate = rental.pickupDate || settings.startDate;
     const dropoffDate = rental.dropoffDate || rental.pickupDate || settings.startDate;
 
     const pickupDayNum = rental.pickupDate ? Math.max(1, calculateDurationFromDates(settings.startDate, rental.pickupDate)) : 1;
     const dropoffDayNum = rental.dropoffDate ? Math.max(1, calculateDurationFromDates(settings.startDate, rental.dropoffDate)) : rawDays.length;
+
+    let updatedDaysSnapshot: Omit<ItineraryDay, 'date'>[] = [];
+    let pickupIndex = -1;
+    let dropoffIndex = -1;
 
     setRawDays((prevDays) => {
       let updatedDays = [...prevDays];
@@ -4827,7 +4840,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       };
 
       // 3. Inserir retirada no dia correspondente
-      const pickupIndex = updatedDays.findIndex((d) => d.dayNumber === pickupDayNum);
+      pickupIndex = updatedDays.findIndex((d) => d.dayNumber === pickupDayNum);
       if (pickupIndex !== -1) {
         const dDay = updatedDays[pickupIndex];
         const nextSched = [...(dDay.hourlySchedule || []), pickupItem];
@@ -4836,7 +4849,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
 
       // 4. Inserir devolução no dia correspondente
-      const dropoffIndex = updatedDays.findIndex((d) => d.dayNumber === dropoffDayNum);
+      dropoffIndex = updatedDays.findIndex((d) => d.dayNumber === dropoffDayNum);
       if (dropoffIndex !== -1) {
         const dDay = updatedDays[dropoffIndex];
         const nextSched = [...(dDay.hourlySchedule || []), dropoffItem];
@@ -4844,32 +4857,43 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         updatedDays[dropoffIndex] = { ...dDay, hourlySchedule: nextSched };
       }
 
-      // 5. Salvar dias modificados no Supabase
-      if (activeTripId) {
-        [pickupIndex, dropoffIndex].forEach((idx) => {
-          if (idx !== -1) {
-            const dayToSave = updatedDays[idx];
-            const fallbackTrip = activeTrip || {
-              id: activeTripId,
-              tripName: settings.tripName,
-              destination: settings.destination,
-              startDate: settings.startDate,
-              durationDays: settings.durationDays,
-              travelersCount: settings.travelersCount,
-              dollarRate: settings.dollarRate,
-              totalBudgetGoalBRL: settings.totalBudgetGoalBRL,
-              status: settings.status,
-              coverTheme: settings.coverTheme,
-              travelers: settings.travelers || [],
-              rawDays: updatedDays,
-            };
-            SupabaseService.saveItineraryDay(activeTripId, dayToSave, fallbackTrip);
-          }
-        });
-      }
-
+      updatedDaysSnapshot = updatedDays;
       return updatedDays;
     });
+
+    // 5. Salvar dias modificados no Supabase e aguardar persistência
+    if (activeTripId && updatedDaysSnapshot.length > 0) {
+      const fallbackTrip = activeTrip || {
+        id: activeTripId,
+        tripName: settings.tripName,
+        destination: settings.destination,
+        startDate: settings.startDate,
+        durationDays: settings.durationDays,
+        travelersCount: settings.travelersCount,
+        dollarRate: settings.dollarRate,
+        totalBudgetGoalBRL: settings.totalBudgetGoalBRL,
+        status: settings.status,
+        coverTheme: settings.coverTheme,
+        travelers: settings.travelers || [],
+        rawDays: updatedDaysSnapshot,
+      };
+
+      const daysToSaveIndices = Array.from(new Set([pickupIndex, dropoffIndex])).filter((idx) => idx !== -1);
+      for (const idx of daysToSaveIndices) {
+        const dayToSave = updatedDaysSnapshot[idx];
+        if (dayToSave) {
+          const saveRes = await SupabaseService.saveItineraryDay(activeTripId, dayToSave, fallbackTrip);
+          if (!saveRes.success) {
+            return {
+              success: false,
+              error: `Erro ao persistir horário de aluguel no Dia ${dayToSave.dayNumber}: ${saveRes.error || 'Falha no banco de dados'}`,
+            };
+          }
+        }
+      }
+    }
+
+    return { success: true };
   };
 
   const addCarRental = async (rental: Omit<CarRentalBooking, 'id'>): Promise<{ success: boolean; error?: string }> => {
@@ -4878,47 +4902,58 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       id: generateUUID(),
       attachments: rental.attachments || [],
     };
+
+    const previousRentals = carRentals;
+    const previousDays = rawDays;
+    const previousExpensesList = expenses;
+
+    // Optimistic state
     setCarRentals((prev) => [...prev, newRental]);
-    syncCarRentalExpense(newRental, settings.dollarRate || 5.75);
-    syncCarRentalToItineraryDays(newRental);
-    
+
     if (activeTripId) {
       try {
+        // 1. Primária: car_rentals
         const res = await SupabaseService.saveCarRental(activeTripId, newRental, activeTrip || undefined);
-        if (res && !res.success) {
-          // Rollback optimistic state
-          setCarRentals((prev) => prev.filter((c) => c.id !== newRental.id));
-          const expId = generateDeterministicUUID('car-expense', newRental.id);
-          setExpenses((prev) => prev.filter((e) => e.id !== expId && e.id !== `exp-car-${newRental.id}`));
-          setRawDays((prevDays) =>
-            prevDays.map((d) => ({
-              ...d,
-              hourlySchedule: (d.hourlySchedule || []).filter(
-                (item) => !(item.sourceType === 'car_rental' && (item.sourceId === newRental.id || item.id.includes(newRental.id)))
-              ),
-            }))
-          );
-          return { success: false, error: res.error || 'Falha ao salvar aluguel de veículo no Supabase' };
+        if (!res || !res.success) {
+          setCarRentals(previousRentals);
+          return { success: false, error: res?.error || 'Falha ao salvar aluguel de veículo no Supabase' };
         }
+
+        // 2. Secundária 1: despesa
+        const expRes = await syncCarRentalExpense(newRental, settings.dollarRate || 5.75);
+        if (!expRes.success) {
+          setCarRentals(previousRentals);
+          setExpenses(previousExpensesList);
+          await SupabaseService.deleteCarRental(newRental.id);
+          const expId = generateDeterministicUUID('car-expense', newRental.id);
+          await SupabaseService.deleteExpense(expId);
+          return { success: false, error: `Aluguel salvo, mas falhou ao registrar despesa: ${expRes.error}` };
+        }
+
+        // 3. Secundária 2: cronograma do roteiro
+        const itinRes = await syncCarRentalToItineraryDays(newRental);
+        if (!itinRes.success) {
+          setCarRentals(previousRentals);
+          setExpenses(previousExpensesList);
+          setRawDays(previousDays);
+          await SupabaseService.deleteCarRental(newRental.id);
+          const expId = generateDeterministicUUID('car-expense', newRental.id);
+          await SupabaseService.deleteExpense(expId);
+          return { success: false, error: `Aluguel salvo, mas falhou ao sincronizar no cronograma: ${itinRes.error}` };
+        }
+
         addNotification(`Cadastrou aluguel de veículo (${rental.company}) e sincronizou no orçamento e cronograma`);
         return { success: true };
       } catch (e: any) {
-        // Rollback optimistic state
-        setCarRentals((prev) => prev.filter((c) => c.id !== newRental.id));
-        const expId = generateDeterministicUUID('car-expense', newRental.id);
-        setExpenses((prev) => prev.filter((e) => e.id !== expId && e.id !== `exp-car-${newRental.id}`));
-        setRawDays((prevDays) =>
-          prevDays.map((d) => ({
-            ...d,
-            hourlySchedule: (d.hourlySchedule || []).filter(
-              (item) => !(item.sourceType === 'car_rental' && (item.sourceId === newRental.id || item.id.includes(newRental.id)))
-            ),
-          }))
-        );
-        return { success: false, error: e.message || 'Erro inesperado ao cadastrar aluguel' };
+        setCarRentals(previousRentals);
+        setExpenses(previousExpensesList);
+        setRawDays(previousDays);
+        return { success: false, error: e?.message || 'Erro inesperado ao cadastrar aluguel' };
       }
     }
-    
+
+    await syncCarRentalExpense(newRental, settings.dollarRate || 5.75);
+    await syncCarRentalToItineraryDays(newRental);
     addNotification(`Cadastrou aluguel de veículo (${rental.company}) e sincronizou no orçamento e cronograma`);
     return { success: true };
   };
@@ -4930,29 +4965,55 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
     const updated: CarRentalBooking = { ...previous, ...updates };
 
+    const previousRentals = carRentals;
+    const previousDays = rawDays;
+    const previousExpensesList = expenses;
+
     setCarRentals((prev) => prev.map((c) => (c.id === id ? updated : c)));
-    syncCarRentalExpense(updated, settings.dollarRate || 5.75);
-    syncCarRentalToItineraryDays(updated);
 
     if (activeTripId) {
       try {
+        // 1. Primária: car_rentals
         const res = await SupabaseService.saveCarRental(activeTripId, updated, activeTrip || undefined);
-        if (res && !res.success) {
-          // Rollback optimistic update
-          setCarRentals((prev) => prev.map((c) => (c.id === id ? previous : c)));
-          syncCarRentalExpense(previous, settings.dollarRate || 5.75);
-          syncCarRentalToItineraryDays(previous);
-          return { success: false, error: res.error || 'Falha ao atualizar aluguel no Supabase' };
+        if (!res || !res.success) {
+          setCarRentals(previousRentals);
+          return { success: false, error: res?.error || 'Falha ao atualizar aluguel no Supabase' };
         }
+
+        // 2. Secundária 1: despesa
+        const expRes = await syncCarRentalExpense(updated, settings.dollarRate || 5.75);
+        if (!expRes.success) {
+          setCarRentals(previousRentals);
+          setExpenses(previousExpensesList);
+          await SupabaseService.saveCarRental(activeTripId, previous, activeTrip || undefined);
+          await syncCarRentalExpense(previous, settings.dollarRate || 5.75);
+          return { success: false, error: `Falha ao sincronizar despesa de locação: ${expRes.error}` };
+        }
+
+        // 3. Secundária 2: cronograma do roteiro
+        const itinRes = await syncCarRentalToItineraryDays(updated);
+        if (!itinRes.success) {
+          setCarRentals(previousRentals);
+          setExpenses(previousExpensesList);
+          setRawDays(previousDays);
+          await SupabaseService.saveCarRental(activeTripId, previous, activeTrip || undefined);
+          await syncCarRentalExpense(previous, settings.dollarRate || 5.75);
+          await syncCarRentalToItineraryDays(previous);
+          return { success: false, error: `Falha ao sincronizar cronograma de locação: ${itinRes.error}` };
+        }
+
+        addNotification(`Atualizou informações de aluguel de carro, orçamento e cronograma`);
+        return { success: true };
       } catch (e: any) {
-        // Rollback optimistic update
-        setCarRentals((prev) => prev.map((c) => (c.id === id ? previous : c)));
-        syncCarRentalExpense(previous, settings.dollarRate || 5.75);
-        syncCarRentalToItineraryDays(previous);
-        return { success: false, error: e.message || 'Erro inesperado ao atualizar aluguel' };
+        setCarRentals(previousRentals);
+        setExpenses(previousExpensesList);
+        setRawDays(previousDays);
+        return { success: false, error: e?.message || 'Erro inesperado ao atualizar aluguel' };
       }
     }
 
+    await syncCarRentalExpense(updated, settings.dollarRate || 5.75);
+    await syncCarRentalToItineraryDays(updated);
     addNotification(`Atualizou informações de aluguel de carro, orçamento e cronograma`);
     return { success: true };
   };
@@ -4992,6 +5053,30 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       id: `att-car-${Date.now()}`,
       uploadedAt: new Date().toLocaleDateString('pt-BR'),
     };
+    
+    if (activeTripId) {
+      try {
+        const res = await SupabaseService.saveCarRentalAttachment(activeTripId, rentalId, newAtt);
+        if (!res || !res.success) {
+          return { success: false, error: res?.error || 'Não é possível salvar anexo: suporte de armazenamento indisponível no Supabase.' };
+        }
+        setCarRentals((prev) =>
+          prev.map((c) =>
+            c.id === rentalId
+              ? {
+                  ...c,
+                  attachments: [...(c.attachments || []), newAtt],
+                }
+              : c
+          )
+        );
+        addNotification(`Anexou comprovante no veículo`);
+        return { success: true };
+      } catch (e: any) {
+        return { success: false, error: e?.message || 'Erro inesperado ao salvar anexo de locação' };
+      }
+    }
+
     setCarRentals((prev) =>
       prev.map((c) =>
         c.id === rentalId
@@ -5002,41 +5087,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           : c
       )
     );
-    addNotification(`Anexou comprovante no veículo`);
-    
-    if (activeTripId) {
-      try {
-        const res = await SupabaseService.saveCarRentalAttachment(activeTripId, rentalId, newAtt);
-        if (res && !res.success) {
-          // Rollback optimistic state
-          setCarRentals((prev) =>
-            prev.map((c) =>
-              c.id === rentalId
-                ? {
-                    ...c,
-                    attachments: (c.attachments || []).filter((a) => a.id !== newAtt.id),
-                  }
-                : c
-            )
-          );
-          return { success: false, error: res.error || 'Falha ao salvar anexo de locação no Supabase' };
-        }
-        return { success: true };
-      } catch (e: any) {
-        // Rollback optimistic state
-        setCarRentals((prev) =>
-          prev.map((c) =>
-            c.id === rentalId
-              ? {
-                  ...c,
-                  attachments: (c.attachments || []).filter((a) => a.id !== newAtt.id),
-                }
-              : c
-          )
-        );
-        return { success: false, error: e.message || 'Erro inesperado ao salvar anexo de locação' };
-      }
-    }
+    addNotification(`Anexou comprovante no veículo (local)`);
     return { success: true };
   };
 

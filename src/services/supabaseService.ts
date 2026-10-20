@@ -1498,7 +1498,9 @@ export const SupabaseService = {
   /**
    * Save or Update an entire Trip structure to Supabase
    */
-  async syncTripToSupabase(trip: Trip): Promise<{ success: boolean; error?: string; tablesExist?: boolean }> {
+  async syncTripToSupabase(
+    trip: Trip
+  ): Promise<{ success: boolean; error?: string; tablesExist?: boolean; tableErrors?: Array<{ table: string; operation: string; error: string }> }> {
     try {
       const tripDb = mapTripToDb(trip);
       const { error: tripErr } = await supabase.from('trips').upsert(tripDb, { onConflict: 'id' });
@@ -1514,6 +1516,7 @@ export const SupabaseService = {
       }
 
       const tripId = trip.id;
+      const tableErrors: Array<{ table: string; operation: string; error: string }> = [];
 
       // Helper to sync sub-collections and remove deleted items from Supabase
       const syncSubCollection = async <T extends { id: string }>(
@@ -1521,20 +1524,32 @@ export const SupabaseService = {
         items: T[] | undefined,
         mapFn: (item: T, tId: string) => Record<string, any>
       ) => {
-        const currentItems = items || [];
-        const dbRows = currentItems.map((item) => mapFn(item, tripId));
-        const currentIds = dbRows.map((row) => row.id).filter(Boolean);
+        try {
+          const currentItems = items || [];
+          const dbRows = currentItems.map((item) => mapFn(item, tripId));
+          const currentIds = dbRows.map((row) => row.id).filter(Boolean);
 
-        const { data: existing } = await supabase.from(tableName).select('id').eq('trip_id', tripId);
-        if (existing && existing.length > 0) {
-          const idsToDelete = existing.map((r: any) => r.id).filter((id: string) => !currentIds.includes(id));
-          if (idsToDelete.length > 0) {
-            await supabase.from(tableName).delete().eq('trip_id', tripId).in('id', idsToDelete);
+          const { data: existing, error: selErr } = await supabase.from(tableName).select('id').eq('trip_id', tripId);
+          if (selErr) {
+            tableErrors.push({ table: tableName, operation: 'SELECT', error: selErr.message });
+          } else if (existing && existing.length > 0) {
+            const idsToDelete = existing.map((r: any) => r.id).filter((id: string) => !currentIds.includes(id));
+            if (idsToDelete.length > 0) {
+              const { error: delErr } = await supabase.from(tableName).delete().eq('trip_id', tripId).in('id', idsToDelete);
+              if (delErr) {
+                tableErrors.push({ table: tableName, operation: 'DELETE', error: delErr.message });
+              }
+            }
           }
-        }
 
-        if (dbRows.length > 0) {
-          await supabase.from(tableName).upsert(dbRows, { onConflict: 'id' });
+          if (dbRows.length > 0) {
+            const { error: upErr } = await supabase.from(tableName).upsert(dbRows, { onConflict: 'id' });
+            if (upErr) {
+              tableErrors.push({ table: tableName, operation: 'UPSERT', error: upErr.message });
+            }
+          }
+        } catch (subErr: any) {
+          tableErrors.push({ table: tableName, operation: 'SYNC', error: subErr?.message || 'Erro inesperado' });
         }
       };
 
@@ -1575,26 +1590,36 @@ export const SupabaseService = {
         const dbHourlyRows = allHourlyItems.map(({ item, dayId }, idx) => mapHourlyScheduleToDb(item, dayId, tripId, idx));
         const currentHourlyIds = dbHourlyRows.map((r) => r.id).filter(Boolean);
 
-        const { data: existingHourly } = await supabase
+        const { data: existingHourly, error: hSelErr } = await supabase
           .from('hourly_schedules')
           .select('id')
           .eq('trip_id', tripId);
 
-        if (existingHourly && existingHourly.length > 0) {
+        if (hSelErr && !isSupabaseMissingTableError(hSelErr)) {
+          tableErrors.push({ table: 'hourly_schedules', operation: 'SELECT', error: hSelErr.message });
+        } else if (existingHourly && existingHourly.length > 0) {
           const staleIds = existingHourly
             .map((r: any) => r.id)
             .filter((id: string) => !currentHourlyIds.includes(id));
 
           if (staleIds.length > 0) {
-            await supabase.from('hourly_schedules').delete().eq('trip_id', tripId).in('id', staleIds);
+            const { error: hDelErr } = await supabase.from('hourly_schedules').delete().eq('trip_id', tripId).in('id', staleIds);
+            if (hDelErr && !isSupabaseMissingTableError(hDelErr)) {
+              tableErrors.push({ table: 'hourly_schedules', operation: 'DELETE', error: hDelErr.message });
+            }
           }
         }
 
         if (dbHourlyRows.length > 0) {
-          await supabase.from('hourly_schedules').upsert(dbHourlyRows, { onConflict: 'id' });
+          const { error: hUpErr } = await supabase.from('hourly_schedules').upsert(dbHourlyRows, { onConflict: 'id' });
+          if (hUpErr && !isSupabaseMissingTableError(hUpErr)) {
+            tableErrors.push({ table: 'hourly_schedules', operation: 'UPSERT', error: hUpErr.message });
+          }
         }
-      } catch (hourlySyncErr) {
-        console.warn('Hourly schedules sync note:', hourlySyncErr);
+      } catch (hourlySyncErr: any) {
+        if (!isSupabaseMissingTableError(hourlySyncErr)) {
+          tableErrors.push({ table: 'hourly_schedules', operation: 'SYNC', error: hourlySyncErr?.message || 'Erro inesperado' });
+        }
       }
 
       // 3c. Park Day Bookings
@@ -1608,22 +1633,30 @@ export const SupabaseService = {
           }
         });
 
-        const { data: existingBookings } = await supabase
+        const { data: existingBookings, error: bSelErr } = await supabase
           .from('park_day_bookings')
           .select('id, itinerary_day_id')
           .eq('trip_id', tripId);
 
-        if (existingBookings && existingBookings.length > 0) {
+        if (bSelErr && !isSupabaseMissingTableError(bSelErr)) {
+          tableErrors.push({ table: 'park_day_bookings', operation: 'SELECT', error: bSelErr.message });
+        } else if (existingBookings && existingBookings.length > 0) {
           const toDelete = existingBookings
             .filter((b: any) => !parkBookingDayIds.includes(b.itinerary_day_id))
             .map((b: any) => b.id);
           if (toDelete.length > 0) {
-            await supabase.from('park_day_bookings').delete().eq('trip_id', tripId).in('id', toDelete);
+            const { error: bDelErr } = await supabase.from('park_day_bookings').delete().eq('trip_id', tripId).in('id', toDelete);
+            if (bDelErr && !isSupabaseMissingTableError(bDelErr)) {
+              tableErrors.push({ table: 'park_day_bookings', operation: 'DELETE', error: bDelErr.message });
+            }
           }
         }
 
         if (parkBookingsToUpsert.length > 0) {
-          await supabase.from('park_day_bookings').upsert(parkBookingsToUpsert, { onConflict: 'itinerary_day_id' });
+          const { error: bUpErr } = await supabase.from('park_day_bookings').upsert(parkBookingsToUpsert, { onConflict: 'itinerary_day_id' });
+          if (bUpErr && !isSupabaseMissingTableError(bUpErr)) {
+            tableErrors.push({ table: 'park_day_bookings', operation: 'UPSERT', error: bUpErr.message });
+          }
         }
 
         // Sincronizar tabelas secundárias para FastPasses, Refeições e Shows
@@ -1716,32 +1749,58 @@ export const SupabaseService = {
           });
 
           // Limpar e re-inserir registros atualizados se existirem
-          await Promise.allSettled([
+          const [delFp, delDin, delShow, delPhoto] = await Promise.allSettled([
             supabase.from('park_fast_passes').delete().eq('trip_id', tripId),
             supabase.from('park_dining_reservations').delete().eq('trip_id', tripId),
             supabase.from('park_shows_reservations').delete().eq('trip_id', tripId),
             supabase.from('park_photo_packages').delete().eq('trip_id', tripId),
           ]);
+          if (delFp.status === 'fulfilled' && delFp.value.error && !isSupabaseMissingTableError(delFp.value.error)) {
+            tableErrors.push({ table: 'park_fast_passes', operation: 'DELETE', error: delFp.value.error.message });
+          }
+          if (delDin.status === 'fulfilled' && delDin.value.error && !isSupabaseMissingTableError(delDin.value.error)) {
+            tableErrors.push({ table: 'park_dining_reservations', operation: 'DELETE', error: delDin.value.error.message });
+          }
+          if (delShow.status === 'fulfilled' && delShow.value.error && !isSupabaseMissingTableError(delShow.value.error)) {
+            tableErrors.push({ table: 'park_shows_reservations', operation: 'DELETE', error: delShow.value.error.message });
+          }
+          if (delPhoto.status === 'fulfilled' && delPhoto.value.error && !isSupabaseMissingTableError(delPhoto.value.error)) {
+            tableErrors.push({ table: 'park_photo_packages', operation: 'DELETE', error: delPhoto.value.error.message });
+          }
 
           if (allFastPassRows.length > 0) {
-            await supabase.from('park_fast_passes').upsert(allFastPassRows, { onConflict: 'id' });
+            const { error: fpErr } = await supabase.from('park_fast_passes').upsert(allFastPassRows, { onConflict: 'id' });
+            if (fpErr && !isSupabaseMissingTableError(fpErr)) {
+              tableErrors.push({ table: 'park_fast_passes', operation: 'UPSERT', error: fpErr.message });
+            }
           }
           if (allDiningRows.length > 0) {
-            await supabase.from('park_dining_reservations').upsert(allDiningRows, { onConflict: 'id' });
+            const { error: dinErr } = await supabase.from('park_dining_reservations').upsert(allDiningRows, { onConflict: 'id' });
+            if (dinErr && !isSupabaseMissingTableError(dinErr)) {
+              tableErrors.push({ table: 'park_dining_reservations', operation: 'UPSERT', error: dinErr.message });
+            }
           }
           if (allShowRows.length > 0) {
-            await supabase.from('park_shows_reservations').upsert(allShowRows, { onConflict: 'id' });
+            const { error: showErr } = await supabase.from('park_shows_reservations').upsert(allShowRows, { onConflict: 'id' });
+            if (showErr && !isSupabaseMissingTableError(showErr)) {
+              tableErrors.push({ table: 'park_shows_reservations', operation: 'UPSERT', error: showErr.message });
+            }
           }
           if (allPhotoPkgRows.length > 0) {
-            await supabase.from('park_photo_packages').upsert(allPhotoPkgRows, { onConflict: 'id' });
+            const { error: photoErr } = await supabase.from('park_photo_packages').upsert(allPhotoPkgRows, { onConflict: 'id' });
+            if (photoErr && !isSupabaseMissingTableError(photoErr)) {
+              tableErrors.push({ table: 'park_photo_packages', operation: 'UPSERT', error: photoErr.message });
+            }
           }
-        } catch (secSyncErr) {
+        } catch (secSyncErr: any) {
           if (!isSupabaseMissingTableError(secSyncErr)) {
-            console.warn('Secondary park tables sync note:', secSyncErr);
+            tableErrors.push({ table: 'park_secondary_tables', operation: 'SYNC', error: secSyncErr?.message || 'Erro inesperado' });
           }
         }
-      } catch (pbSyncErr) {
-        console.warn('Park day bookings sync note:', pbSyncErr);
+      } catch (pbSyncErr: any) {
+        if (!isSupabaseMissingTableError(pbSyncErr)) {
+          tableErrors.push({ table: 'park_day_bookings', operation: 'SYNC', error: pbSyncErr?.message || 'Erro inesperado' });
+        }
       }
 
       // 4. Flights
@@ -1797,12 +1856,28 @@ export const SupabaseService = {
             // Batch upsert without deleting existing records that may have different UUIDs
             for (let i = 0; i < dbRows.length; i += 50) {
               const chunk = dbRows.slice(i, i + 50);
-              await supabase.from('traveler_attraction_selections').upsert(chunk, { onConflict: 'id' });
+              const { error: attrErr } = await supabase.from('traveler_attraction_selections').upsert(chunk, { onConflict: 'id' });
+              if (attrErr && !isSupabaseMissingTableError(attrErr)) {
+                tableErrors.push({ table: 'traveler_attraction_selections', operation: 'UPSERT', error: attrErr.message });
+              }
             }
           }
         }
-      } catch (attrSyncErr) {
-        console.warn('Attraction selections sync note:', attrSyncErr);
+      } catch (attrSyncErr: any) {
+        if (!isSupabaseMissingTableError(attrSyncErr)) {
+          tableErrors.push({ table: 'traveler_attraction_selections', operation: 'SYNC', error: attrSyncErr?.message || 'Erro inesperado' });
+        }
+      }
+
+      if (tableErrors.length > 0) {
+        const errorSummary = tableErrors.map((e) => `${e.table} [${e.operation}]: ${e.error}`).join('; ');
+        console.error('Supabase syncTripToSupabase subcollections failed:', errorSummary);
+        return {
+          success: false,
+          error: `Falha na sincronização do Supabase: ${errorSummary}`,
+          tablesExist: true,
+          tableErrors,
+        };
       }
 
       return { success: true, tablesExist: true };
@@ -2472,7 +2547,10 @@ export const SupabaseService = {
   },
 
   /**
-   * Persists an attachment/voucher for a car rental booking in Supabase
+   * Persists an attachment/voucher for a car rental booking in Supabase.
+   * Note: The current database schema does not have an `attachments` JSONB column
+   * or a dedicated attachments table for `car_rentals`. This operation returns
+   * an explicit uncompleted status until schema migration is provided.
    */
   async saveCarRentalAttachment(
     tripId: string,
@@ -2483,34 +2561,11 @@ export const SupabaseService = {
       if (!tripId || !rentalId || !attachment) {
         return { success: false, error: 'Parâmetros inválidos para anexo de locação' };
       }
-      const resolvedRentalId = ensureValidUUID(rentalId, 'car', `${tripId}-${rentalId}`);
-      
-      const { data, error } = await supabase
-        .from('car_rentals')
-        .update({ updated_at: new Date().toISOString() })
-        .eq('id', resolvedRentalId)
-        .eq('trip_id', tripId)
-        .select('id');
-
-      if (error) {
-        if (isSupabaseMissingTableError(error)) {
-          return { success: false, error: 'Tabela car_rentals não encontrada no Supabase.' };
-        }
-        return { success: false, error: error.message };
-      }
-
-      if (!data || data.length === 0) {
-        const { data: existingCheck, error: checkErr } = await supabase
-          .from('car_rentals')
-          .select('id')
-          .eq('trip_id', tripId)
-          .limit(1);
-        if (checkErr) {
-          return { success: false, error: checkErr.message };
-        }
-      }
-
-      return { success: true };
+      // Schema verification: current Supabase schema lacks attachments storage for car_rentals
+      return {
+        success: false,
+        error: 'O esquema atual do Supabase não possui coluna nem tabela para armazenar anexos em car_rentals. É necessária uma migração de esquema adicionando a coluna attachments (JSONB) para viabilizar a persistência.',
+      };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Erro ao persistir anexo de locação' };
     }
@@ -3090,7 +3145,10 @@ export const SupabaseService = {
   },
 
   /**
-   * Persists an attachment/voucher for an itinerary day in Supabase
+   * Persists an attachment/voucher for an itinerary day in Supabase.
+   * Note: The current database schema does not have an `attachments` JSONB column
+   * or a dedicated attachments table for `itinerary_days`. This operation returns
+   * an explicit uncompleted status until schema migration is provided.
    */
   async saveItineraryAttachment(
     tripId: string,
@@ -3101,34 +3159,11 @@ export const SupabaseService = {
       if (!tripId || !dayId || !attachment) {
         return { success: false, error: 'Parâmetros inválidos para anexo de roteiro' };
       }
-      const resolvedDayId = ensureValidUUID(dayId, 'day', `${tripId}-${dayId}`);
-
-      const { data, error } = await supabase
-        .from('itinerary_days')
-        .update({ updated_at: new Date().toISOString() })
-        .eq('id', resolvedDayId)
-        .eq('trip_id', tripId)
-        .select('id');
-
-      if (error) {
-        if (isSupabaseMissingTableError(error)) {
-          return { success: false, error: 'Tabela itinerary_days não encontrada no Supabase.' };
-        }
-        return { success: false, error: error.message };
-      }
-
-      if (!data || data.length === 0) {
-        const { data: existingCheck, error: checkErr } = await supabase
-          .from('itinerary_days')
-          .select('id')
-          .eq('trip_id', tripId)
-          .limit(1);
-        if (checkErr) {
-          return { success: false, error: checkErr.message };
-        }
-      }
-
-      return { success: true };
+      // Schema verification: current Supabase schema lacks attachments storage for itinerary_days
+      return {
+        success: false,
+        error: 'O esquema atual do Supabase não possui coluna nem tabela para armazenar anexos em itinerary_days. É necessária uma migração de esquema adicionando a coluna attachments (JSONB) para viabilizar a persistência.',
+      };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Erro ao persistir anexo de roteiro' };
     }

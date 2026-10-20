@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { usePlanner, calculateDateOffset } from '../context/PlannerContext';
 import { CarRentalBooking, CarRentalAttachment } from '../types';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
@@ -199,10 +199,13 @@ export const TransportationView: React.FC = () => {
   };
 
   const [isSaving, setIsSaving] = useState(false);
+  const rentalFormSubmitLockRef = useRef(false);
+  const attachmentFormSubmitLockRef = useRef(false);
 
   const handleSubmitModal = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSaving) return;
+    if (rentalFormSubmitLockRef.current || isSaving) return;
+    rentalFormSubmitLockRef.current = true;
     setIsSaving(true);
     try {
       const cleanedData = {
@@ -224,14 +227,16 @@ export const TransportationView: React.FC = () => {
     } catch (err: any) {
       alert(`Erro inesperado ao salvar aluguel de veículo: ${err?.message || 'Erro desconhecido'}`);
     } finally {
+      rentalFormSubmitLockRef.current = false;
       setIsSaving(false);
     }
   };
 
   const handleAddAttachment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!attachmentModalRentalId || !newAttName.trim() || isSaving) return;
+    if (!attachmentModalRentalId || !newAttName.trim() || attachmentFormSubmitLockRef.current || isSaving) return;
 
+    attachmentFormSubmitLockRef.current = true;
     setIsSaving(true);
     try {
       const res = await addCarRentalAttachment(attachmentModalRentalId, {
@@ -248,6 +253,7 @@ export const TransportationView: React.FC = () => {
     } catch (error) {
       alert('Erro inesperado ao salvar anexo.');
     } finally {
+      attachmentFormSubmitLockRef.current = false;
       setIsSaving(false);
     }
   };

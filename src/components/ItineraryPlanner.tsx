@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import {
   Calendar,
   Clock,
@@ -617,14 +617,20 @@ export const ItineraryPlanner: React.FC = () => {
     setIsHourlyModalOpen(true);
   };
 
+  const hourlyItemSubmitLockRef = useRef(false);
+  const parkModalSubmitLockRef = useRef(false);
+  const attachmentSubmitLockRef = useRef(false);
+  const [isSaving, setIsSaving] = useState(false);
+
   // Save hourly item
   const handleSaveHourlyItem = async (e?: React.FormEvent) => {
     if (e && typeof e.preventDefault === 'function') {
       e.preventDefault();
     }
-    if (!hourlyForm.title.trim() || isSaving) {
+    if (!hourlyForm.title.trim() || hourlyItemSubmitLockRef.current || isSaving) {
       return;
     }
+    hourlyItemSubmitLockRef.current = true;
     setIsSaving(true);
     try {
       // Resolve target day safely
@@ -675,6 +681,7 @@ export const ItineraryPlanner: React.FC = () => {
     } catch (error) {
       console.error(error);
     } finally {
+      hourlyItemSubmitLockRef.current = false;
       setIsSaving(false);
     }
   };
@@ -690,9 +697,9 @@ export const ItineraryPlanner: React.FC = () => {
     setParkModalOpen(true);
   };
 
-  const [isSaving, setIsSaving] = useState(false);
   const handleSaveParkModal = async () => {
-    if (isSaving) return;
+    if (parkModalSubmitLockRef.current || isSaving) return;
+    parkModalSubmitLockRef.current = true;
     setIsSaving(true);
     try {
       const targetDay =
@@ -741,12 +748,18 @@ export const ItineraryPlanner: React.FC = () => {
         updates.hourlySchedule = [];
       }
 
-      updateItineraryDay(targetDay.id, updates);
+      const res = await updateItineraryDay(targetDay.id, updates);
+      if (res && !res.success) {
+        alert(`Erro ao salvar parque no roteiro: ${res.error || 'Erro desconhecido'}`);
+        return;
+      }
       setParkModalOpen(false);
       setParkModalTargetDayId('');
-    } catch (err) {
+    } catch (err: any) {
       console.error("Erro ao salvar dia:", err);
+      alert(`Erro inesperado ao salvar dia: ${err?.message || 'Erro desconhecido'}`);
     } finally {
+      parkModalSubmitLockRef.current = false;
       setIsSaving(false);
     }
   };
@@ -754,8 +767,9 @@ export const ItineraryPlanner: React.FC = () => {
   // Attachment upload handler
   const handleSimulatedFileUpload = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newAttName.trim() || !activeDay || isSaving) return;
+    if (!newAttName.trim() || !activeDay || attachmentSubmitLockRef.current || isSaving) return;
 
+    attachmentSubmitLockRef.current = true;
     setIsSaving(true);
     try {
       const res = await addAttachmentToDay(activeDay.id, {
@@ -773,6 +787,7 @@ export const ItineraryPlanner: React.FC = () => {
     } catch (error) {
       alert('Erro inesperado ao salvar anexo.');
     } finally {
+      attachmentSubmitLockRef.current = false;
       setIsSaving(false);
     }
   };

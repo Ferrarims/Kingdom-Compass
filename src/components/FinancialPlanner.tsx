@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   DollarSign,
   Plus,
@@ -95,6 +95,7 @@ export const FinancialPlanner: React.FC = () => {
   // Confirmation states
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const expenseSubmitLockRef = useRef(false);
 
   useConfirmationKeyboard({
     isOpen: !!confirmDelete,
@@ -160,7 +161,8 @@ export const FinancialPlanner: React.FC = () => {
 
   const handleSaveExpense = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSaving) return;
+    if (expenseSubmitLockRef.current || isSaving) return;
+    expenseSubmitLockRef.current = true;
     setIsSaving(true);
     try {
       const expenseTitle = title.trim() || 'Novo Gasto';
@@ -196,10 +198,11 @@ export const FinancialPlanner: React.FC = () => {
         return;
       }
       setModalOpen(false);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Erro ao salvar despesa:', error);
-      alert('Erro ao salvar despesa. Tente novamente.');
+      alert(`Erro inesperado ao salvar despesa: ${error?.message || 'Tente novamente.'}`);
     } finally {
+      expenseSubmitLockRef.current = false;
       setIsSaving(false);
     }
   };

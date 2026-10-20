@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { usePlanner, calculateDateOffset, formatDisplayDate, getTripEndDate } from '../context/PlannerContext';
 import { parseInputToNumber, formatInputDisplay } from '../utils/currency';
 import { AccommodationBooking, AccommodationAttachment } from '../types';
@@ -226,10 +226,12 @@ export const AccommodationsView: React.FC = () => {
   };
 
   const [isSavingAcc, setIsSavingAcc] = useState(false);
+  const accSubmitLockRef = useRef(false);
 
   const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSavingAcc) return;
+    if (accSubmitLockRef.current || isSavingAcc) return;
+    accSubmitLockRef.current = true;
     setIsSavingAcc(true);
     try {
       const accName = formData.name.trim() || 'Nova Hospedagem';
@@ -276,6 +278,7 @@ export const AccommodationsView: React.FC = () => {
     } catch (err: any) {
       setValidationError(err?.message || 'Erro inesperado ao salvar hospedagem.');
     } finally {
+      accSubmitLockRef.current = false;
       setIsSavingAcc(false);
     }
   };
@@ -287,9 +290,12 @@ export const AccommodationsView: React.FC = () => {
   };
 
   const [isSavingAttachment, setIsSavingAttachment] = useState(false);
+  const accAttachmentLockRef = useRef(false);
+
   const handleAddAttachmentSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!attachmentModalAccId || !newAttName || isSavingAttachment) return;
+    if (!attachmentModalAccId || !newAttName || accAttachmentLockRef.current || isSavingAttachment) return;
+    accAttachmentLockRef.current = true;
     setIsSavingAttachment(true);
     try {
       await addAccommodationAttachment(attachmentModalAccId, {
@@ -302,6 +308,7 @@ export const AccommodationsView: React.FC = () => {
     } catch (err) {
       console.error(err);
     } finally {
+      accAttachmentLockRef.current = false;
       setIsSavingAttachment(false);
     }
   };

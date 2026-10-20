@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Sparkles,
   Plus,
@@ -90,6 +90,8 @@ export const HomeTripsView: React.FC = () => {
   const [portalSuccess, setPortalSuccess] = useState<string | null>(null);
   const [isCreatingPortalTrip, setIsCreatingPortalTrip] = useState(false);
   const [isSavingTrip, setIsSavingTrip] = useState(false);
+  const portalQuickCreateLockRef = useRef(false);
+  const saveTripModalLockRef = useRef(false);
 
   // Quick Create inline fields
   const [newTripNameInput, setNewTripNameInput] = useState('Férias Mágicas em Orlando');
@@ -151,16 +153,19 @@ export const HomeTripsView: React.FC = () => {
 
   const handlePortalQuickCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isCreatingPortalTrip) return;
+    if (portalQuickCreateLockRef.current || isCreatingPortalTrip) return;
+    portalQuickCreateLockRef.current = true;
     setPortalError(null);
     setPortalSuccess(null);
 
     if (!newTripNameInput.trim()) {
       setPortalError('Por favor, digite o nome da viagem.');
+      portalQuickCreateLockRef.current = false;
       return;
     }
     if (!newOrganizerName.trim() || !newOrganizerEmail.trim()) {
       setPortalError('Por favor, informe o Nome e E-mail do organizador da viagem.');
+      portalQuickCreateLockRef.current = false;
       return;
     }
 
@@ -230,6 +235,7 @@ export const HomeTripsView: React.FC = () => {
     } catch (err: any) {
       setPortalError(err?.message || 'Erro inesperado ao cadastrar viagem.');
     } finally {
+      portalQuickCreateLockRef.current = false;
       setIsCreatingPortalTrip(false);
     }
   };
@@ -337,7 +343,8 @@ export const HomeTripsView: React.FC = () => {
     if (e && e.preventDefault) {
       e.preventDefault();
     }
-    if (isSavingTrip) return;
+    if (saveTripModalLockRef.current || isSavingTrip) return;
+    saveTripModalLockRef.current = true;
     setIsSavingTrip(true);
     try {
       const finalTripName = tripName.trim() || editingTrip?.tripName || (destination ? `Viagem a ${destination}` : 'Viagem Orlando 2026/2027');
@@ -424,6 +431,7 @@ export const HomeTripsView: React.FC = () => {
     } catch (err: any) {
       alert(`Erro inesperado ao salvar viagem: ${err?.message || 'Erro desconhecido'}`);
     } finally {
+      saveTripModalLockRef.current = false;
       setIsSavingTrip(false);
     }
   };
