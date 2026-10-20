@@ -168,6 +168,7 @@ export const FlightsView: React.FC = () => {
   };
 
   const [isSaving, setIsSaving] = useState(false);
+  const [isSavingAtt, setIsSavingAtt] = useState(false);
   const handleOpenAddModal = () => {
     setEditingFlight(null);
     setFormData({
@@ -259,8 +260,11 @@ export const FlightsView: React.FC = () => {
     setModalOpen(true);
   };
 
-  const handleSaveFlight = (e: React.FormEvent) => {
+  const handleSaveFlight = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
+    setIsSaving(true);
+    
     const flightNum = formData.flightNumber.trim() || 'VOO-001';
 
     let originC = formData.originCity.trim() || formData.originAirport || 'Origem';
@@ -294,26 +298,38 @@ export const FlightsView: React.FC = () => {
       destinationCode: destCd,
     };
 
-    if (editingFlight) {
-      updateFlight(editingFlight.id, dataToSave);
-    } else {
-      addFlight(dataToSave);
+    try {
+      if (editingFlight) {
+        await updateFlight(editingFlight.id, dataToSave);
+      } else {
+        await addFlight(dataToSave);
+      }
+      setModalOpen(false);
+    } catch (err) {
+      console.error('Erro ao salvar voo:', err);
+    } finally {
+      setIsSaving(false);
     }
-    setModalOpen(false);
   };
 
-  const handleAddAttachment = (e: React.FormEvent) => {
+  const handleAddAttachment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!attModalFlightId || !newAttName.trim()) return;
-
-    addFlightAttachment(attModalFlightId, {
-      name: newAttName.trim(),
-      type: newAttType,
-      url: '#',
-    });
-
-    setAttModalFlightId(null);
-    setNewAttName('');
+    if (!attModalFlightId || !newAttName.trim() || isSavingAtt) return;
+    
+    setIsSavingAtt(true);
+    try {
+      await addFlightAttachment(attModalFlightId, {
+        name: newAttName.trim(),
+        type: newAttType,
+        url: '#',
+      });
+      setAttModalFlightId(null);
+      setNewAttName('');
+    } catch (err) {
+      console.error('Erro ao adicionar anexo:', err);
+    } finally {
+      setIsSavingAtt(false);
+    }
   };
 
   const { handleBackdropClick: handleFlightModalBackdrop } = useModalKeyEvents({
@@ -1663,10 +1679,11 @@ export const FlightsView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md"
+                  disabled={isSaving}
+                  className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md disabled:opacity-50"
                 >
-                  <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
-                  <span>Salvar</span>
+                  <CheckCircle2 className={`w-4 h-4 ${isSaving ? 'text-white' : 'text-[#D4AF37]'}`} />
+                  <span>{isSaving ? 'Salvando...' : 'Salvar'}</span>
                 </button>
               </div>
             </form>
@@ -1748,10 +1765,11 @@ export const FlightsView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md"
+                  disabled={isSavingAtt}
+                  className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md disabled:opacity-50"
                 >
-                  <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
-                  <span>Salvar</span>
+                  <CheckCircle2 className={`w-4 h-4 ${isSavingAtt ? 'text-white' : 'text-[#D4AF37]'}`} />
+                  <span>{isSavingAtt ? 'Salvando...' : 'Salvar'}</span>
                 </button>
               </div>
             </form>

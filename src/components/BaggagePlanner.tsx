@@ -102,7 +102,7 @@ export const BaggagePlanner: React.FC = () => {
     if (!editingItem || !editForm.name.trim() || isSaving) return;
     setIsSaving(true);
     try {
-      updateBaggageItem({
+      await updateBaggageItem({
         ...editingItem,
         name: editForm.name.trim(),
         category: editForm.category,
