@@ -198,21 +198,24 @@ export function validateBackupPayload(jsonContent: string | object): {
 }
 
 /**
- * Restore database from a backup payload with strict per-table tracking:
- * - Expected count vs Written count vs Verified count (via ID persistence check).
- * - Distinguishes tables present, missing in file, empty, successfully restored, and failed.
- * - Reports partial restoration if some tables succeeded before failure.
+ * Restore database from a backup payload with rigorous validation:
+ * - Requires all 19 expected tables for version 2.0 to be present (missing_in_file marked as error / partial).
+ * - Validates IDs on all rows before upserting.
+ * - Does NOT assume writtenCount = expectedCount without confirmed upsert and subsequent ID verification query in Supabase.
+ * - Handles empty/no-op backups correctly.
  */
 export async function executeBackupRestore(
   payload: BackupPayload
 ): Promise<RestoreResult> {
   const tableMetrics: Record<string, TableRestoreMetrics> = {};
   const failedTables: string[] = [];
+  const missingTables: string[] = [];
   let totalExpected = 0;
   let totalRestored = 0;
   let totalVerified = 0;
   let tablesAttemptedCount = 0;
   let tablesSuccessfulCount = 0;
+  let tablesEmptyCount = 0;
 
   const tables = payload.tables || {};
 
@@ -223,18 +226,48 @@ export async function executeBackupRestore(
         writtenCount: 0,
         verifiedCount: 0,
         status: 'missing_in_file',
+        error: 'Tabela obrigatória ausente no arquivo de backup',
       };
+      missingTables.push(tableName);
+      failedTables.push(tableName);
       continue;
     }
 
     const rows = tables[tableName];
-    if (!Array.isArray(rows) || rows.length === 0) {
+    if (!Array.isArray(rows)) {
+      tableMetrics[tableName] = {
+        expectedCount: 0,
+        writtenCount: 0,
+        verifiedCount: 0,
+        status: 'failed',
+        error: 'Dados da tabela no backup não estão em formato de array',
+      };
+      failedTables.push(tableName);
+      continue;
+    }
+
+    if (rows.length === 0) {
       tableMetrics[tableName] = {
         expectedCount: 0,
         writtenCount: 0,
         verifiedCount: 0,
         status: 'empty',
       };
+      tablesEmptyCount++;
+      continue;
+    }
+
+    // Validate that all rows have a valid non-empty id
+    const invalidRow = rows.find((r: any) => !r || r.id === null || r.id === undefined || String(r.id).trim() === '');
+    if (invalidRow) {
+      tableMetrics[tableName] = {
+        expectedCount: rows.length,
+        writtenCount: 0,
+        verifiedCount: 0,
+        status: 'failed',
+        error: 'Registros contêm IDs ausentes ou inválidos',
+      };
+      failedTables.push(tableName);
       continue;
     }
 
@@ -243,52 +276,46 @@ export async function executeBackupRestore(
     tablesAttemptedCount++;
 
     try {
-      // 1. Batch upsert rows
+      // 1. Batch upsert rows and select ids
       const { data: upsertData, error: upsertError } = await supabase
         .from(tableName)
         .upsert(rows, { onConflict: 'id' })
         .select('id');
 
-      if (upsertError) {
+      if (upsertError || !Array.isArray(upsertData)) {
         tableMetrics[tableName] = {
           expectedCount,
           writtenCount: 0,
           verifiedCount: 0,
           status: 'failed',
-          error: upsertError.message,
+          error: upsertError?.message || 'Upsert não retornou confirmação válida de gravação',
         };
         failedTables.push(tableName);
         continue;
       }
 
-      const writtenCount = Array.isArray(upsertData) ? upsertData.length : expectedCount;
+      const writtenCount = upsertData.length;
 
-      // 2. Verify persistence by querying IDs
-      const ids = rows.map((r: any) => r.id).filter(Boolean);
-      let verifiedCount = 0;
+      // 2. Verify persistence by querying IDs back from Supabase
+      const ids = rows.map((r: any) => r.id);
+      const { data: verifyData, error: verifyError } = await supabase
+        .from(tableName)
+        .select('id')
+        .in('id', ids);
 
-      if (ids.length > 0) {
-        const { data: verifyData, error: verifyError } = await supabase
-          .from(tableName)
-          .select('id')
-          .in('id', ids);
-
-        if (verifyError) {
-          tableMetrics[tableName] = {
-            expectedCount,
-            writtenCount,
-            verifiedCount: 0,
-            status: 'failed',
-            error: `Erro ao verificar persistência: ${verifyError.message}`,
-          };
-          failedTables.push(tableName);
-          continue;
-        }
-
-        verifiedCount = Array.isArray(verifyData) ? verifyData.length : 0;
-      } else {
-        verifiedCount = writtenCount;
+      if (verifyError || !Array.isArray(verifyData)) {
+        tableMetrics[tableName] = {
+          expectedCount,
+          writtenCount,
+          verifiedCount: 0,
+          status: 'failed',
+          error: `Erro ao confirmar persistência: ${verifyError?.message || 'Resposta inválida'}`,
+        };
+        failedTables.push(tableName);
+        continue;
       }
+
+      const verifiedCount = verifyData.length;
 
       if (verifiedCount < expectedCount) {
         tableMetrics[tableName] = {
@@ -296,7 +323,7 @@ export async function executeBackupRestore(
           writtenCount,
           verifiedCount,
           status: 'failed',
-          error: `Verificação incompleta: esperados ${expectedCount}, persistidos ${verifiedCount}`,
+          error: `Verificação incompleta: esperados ${expectedCount}, confirmados no Supabase ${verifiedCount}`,
         };
         failedTables.push(tableName);
       } else {
@@ -316,14 +343,17 @@ export async function executeBackupRestore(
         writtenCount: 0,
         verifiedCount: 0,
         status: 'failed',
-        error: err?.message || 'Exceção ao restaurar tabela',
+        error: err?.message || 'Exceção ao processar restauração da tabela',
       };
       failedTables.push(tableName);
     }
   }
 
-  const success = failedTables.length === 0 && tablesAttemptedCount > 0;
-  const isPartial = !success && tablesSuccessfulCount > 0;
+  // Success is true ONLY if:
+  // 1. Zero failed tables and zero missing tables.
+  // 2. All 19 tables are represented (restored or empty).
+  const success = failedTables.length === 0 && missingTables.length === 0;
+  const isPartial = !success && (tablesSuccessfulCount > 0 || tablesEmptyCount > 0 || missingTables.length > 0);
 
   return {
     success,
@@ -333,6 +363,6 @@ export async function executeBackupRestore(
     totalRestored,
     totalVerified,
     failedTables,
-    error: failedTables.length > 0 ? `Falha ao restaurar as tabelas: ${failedTables.join(', ')}` : undefined,
+    error: failedTables.length > 0 ? `Falhas detectadas nas tabelas: ${failedTables.join(', ')}` : undefined,
   };
 }

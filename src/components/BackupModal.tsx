@@ -177,7 +177,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
         addNotification('Backup restaurado integralmente com sucesso!');
         await reloadFromSupabase();
       } else if (res.isPartial) {
-        addNotification('Aviso: Restauração parcial concluída com falhas em algumas tabelas.', 'warning');
+        addNotification('Aviso: Restauração parcial concluída com omissões ou falhas.', 'warning');
         await reloadFromSupabase();
       } else {
         addNotification('Erro ao restaurar o backup. Nenhuma tabela foi totalmente validada.', 'error');
@@ -395,7 +395,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
                   <span className="font-bold block text-blue-900 mb-0.5">
                     Restauração com Verificação de Integridade por ID
                   </span>
-                  O sistema valida cada tabela enviada, registrando a <strong>quantidade esperada</strong>, a <strong>quantidade gravada</strong> e a <strong>quantidade confirmada</strong> após checar a persistência no Supabase.
+                  O sistema valida cada tabela enviada, exigindo todas as 19 tabelas obrigatórias, validando IDs em todos os registros, gravando via upsert e confirmando a persistência no Supabase por consulta ID.
                 </div>
               </div>
 
@@ -516,35 +516,42 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
                       <>
                         <CheckCircle2 className="w-5 h-5 text-emerald-600" />
                         <span className="font-bold text-emerald-950 text-xs">
-                          Restauração Completa Realizada com Sucesso! ({restoreResult.totalVerified} registros verificados em todas as tabelas).
+                          Restauração Completa Realizada com Sucesso! ({restoreResult.totalVerified} registros verificados em todas as 19 tabelas).
                         </span>
                       </>
                     ) : restoreResult.isPartial ? (
                       <>
                         <AlertTriangle className="w-5 h-5 text-amber-600" />
                         <span className="font-bold text-amber-950 text-xs">
-                          Restauração Parcial: Algumas tabelas foram restauradas com sucesso, mas houve falha em {restoreResult.failedTables.length} tabela(s).
+                          Restauração Parcial: Algumas tabelas foram restauradas, mas houve omissões ou falhas em {restoreResult.failedTables.length} tabela(s).
                         </span>
                       </>
                     ) : (
                       <>
                         <AlertCircle className="w-5 h-5 text-rose-600" />
                         <span className="font-bold text-rose-950 text-xs">
-                          Falha na Restauração: Nenhuma tabela foi totalmente validada. Veja os detalhes abaixo.
+                          Falha na Restauração: Tabelas ausentes ou com falha de validação. Veja os detalhes abaixo.
                         </span>
                       </>
                     )}
                   </div>
 
-                  <div className="pt-2 border-t border-slate-200 space-y-2 max-h-56 overflow-y-auto">
+                  {/* Complete 19-table report including restored, empty, missing, and failed */}
+                  <div className="pt-2 border-t border-slate-200 space-y-2 max-h-64 overflow-y-auto">
                     {(Object.entries(restoreResult.tableMetrics) as [string, TableRestoreMetrics][]).map(([tbl, metrics]) => {
-                      if (metrics.status === 'missing_in_file' || metrics.status === 'empty') return null;
+                      const isRestored = metrics.status === 'restored';
+                      const isEmpty = metrics.status === 'empty';
+                      const isMissing = metrics.status === 'missing_in_file';
+                      const isFailed = metrics.status === 'failed';
+
                       return (
                         <div
                           key={tbl}
-                          className={`p-2 rounded-lg text-xs flex items-center justify-between border ${
-                            metrics.status === 'restored'
-                              ? 'bg-white/90 border-emerald-200 text-emerald-950'
+                          className={`p-2.5 rounded-xl text-xs flex items-center justify-between border ${
+                            isRestored
+                              ? 'bg-white border-emerald-200 text-emerald-950 shadow-2xs'
+                              : isEmpty
+                              ? 'bg-slate-50 border-slate-200 text-slate-700'
                               : 'bg-rose-50 border-rose-200 text-rose-950'
                           }`}
                         >
@@ -553,15 +560,27 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
                             {metrics.error && <span className="block text-[10px] text-rose-600">{metrics.error}</span>}
                           </div>
                           <div className="flex items-center gap-3 shrink-0 text-[11px]">
-                            <span title="Quantidade Esperada">Esperado: <strong>{metrics.expectedCount}</strong></span>
-                            <span title="Quantidade Gravada">Gravado: <strong>{metrics.writtenCount}</strong></span>
-                            <span title="Quantidade Confirmada no Supabase">Verificado: <strong className="text-emerald-700">{metrics.verifiedCount}</strong></span>
+                            {isMissing ? (
+                              <span className="text-rose-600 font-bold">Ausente no arquivo</span>
+                            ) : isEmpty ? (
+                              <span className="text-slate-500 font-semibold">Tabela vazia (0)</span>
+                            ) : (
+                              <>
+                                <span title="Quantidade Esperada">Esperado: <strong>{metrics.expectedCount}</strong></span>
+                                <span title="Quantidade Gravada">Gravado: <strong>{metrics.writtenCount}</strong></span>
+                                <span title="Quantidade Confirmada no Supabase">Verificado: <strong className="text-emerald-700">{metrics.verifiedCount}</strong></span>
+                              </>
+                            )}
                             <span
                               className={`px-2 py-0.5 rounded font-bold text-[10px] uppercase ${
-                                metrics.status === 'restored' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                                isRestored
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : isEmpty
+                                  ? 'bg-slate-200 text-slate-700'
+                                  : 'bg-rose-100 text-rose-800'
                               }`}
                             >
-                              {metrics.status === 'restored' ? 'Sucesso' : 'Falha'}
+                              {isRestored ? 'Sucesso' : isEmpty ? 'Vazia' : isMissing ? 'Ausente' : 'Falha'}
                             </span>
                           </div>
                         </div>
@@ -601,7 +620,7 @@ export const BackupModal: React.FC<BackupModalProps> = ({ isOpen, onClose }) => 
         {/* Modal Actions Footer */}
         <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0">
           <span className="text-[11px] text-slate-500 font-medium">
-            Segurança Rigorosa: validação de contagem esperada, gravada e verificada por ID no Supabase.
+            Segurança Rigorosa: exibe tabelas restauradas, vazias, ausentes e com falha no relatório final.
           </span>
           <button
             type="button"
