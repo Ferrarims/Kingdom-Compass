@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { CurrencyType, formatInputDisplay, digitsToNumber, parseInputToNumber } from '../utils/currency';
+import { CurrencyType, formatInputDisplay } from '../utils/currency';
 
 interface MoneyInputProps {
   currency: CurrencyType;
@@ -38,27 +38,50 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const raw = e.target.value;
+    const digits = raw.replace(/\D/g, '');
     
-    // If empty
-    if (!raw.trim()) {
+    if (!digits) {
       setDisplayValue('');
       onChange(required ? 0 : null);
       return;
     }
 
-    // Check if user pasted a full formatted string or typed standard decimal
-    // e.g. "1234.56" or "1.234,56" or "1,234.56"
-    if (raw.includes('.') || raw.includes(',')) {
-      const parsed = parseInputToNumber(raw, currency);
-      onChange(parsed);
-      setDisplayValue(formatInputDisplay(parsed, currency));
-      return;
-    }
-
-    // Banking style right-to-left digit extraction
-    const numericVal = digitsToNumber(raw);
+    const numericVal = parseInt(digits, 10) / 100;
     onChange(numericVal);
     setDisplayValue(formatInputDisplay(numericVal, currency));
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    const pasteText = e.clipboardData.getData('text').trim();
+    if (!pasteText) return;
+
+    const cleanPaste = pasteText.replace(currency === 'BRL' ? /^[R\$\s]*/i : /^[\$\s]*/, '').trim();
+    let isValid = false;
+    let parsedNum = 0;
+
+    if (currency === 'BRL') {
+      const brlRegex = /^(\d{1,3}(\.\d{3})*|\d+)(,\d{2})?$/;
+      if (brlRegex.test(cleanPaste)) {
+        isValid = true;
+        const numStr = cleanPaste.replace(/\./g, '').replace(',', '.');
+        parsedNum = Number(numStr);
+      }
+    } else {
+      const usdRegex = /^(\d{1,3}(,\d{3})*|\d+)(\.\d{2})?$/;
+      if (usdRegex.test(cleanPaste)) {
+        isValid = true;
+        const numStr = cleanPaste.replace(/,/g, '');
+        parsedNum = Number(numStr);
+      }
+    }
+
+    if (isValid && !isNaN(parsedNum)) {
+      onChange(parsedNum);
+      setDisplayValue(formatInputDisplay(parsedNum, currency));
+    } else {
+      alert(`Valor colado inválido para o formato ${currency}. Esperado: ${currency === 'BRL' ? '1.234,56' : '1,234.56'}`);
+    }
   };
 
   const symbol = currency === 'BRL' ? 'R$' : '$';
@@ -75,6 +98,7 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
         name={name}
         value={displayValue}
         onChange={handleChange}
+        onPaste={handlePaste}
         placeholder={placeholder || (currency === 'BRL' ? '0,00' : '0.00')}
         disabled={disabled}
         required={required}

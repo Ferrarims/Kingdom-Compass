@@ -31,6 +31,7 @@ import {
   CreditCard,
 } from 'lucide-react';
 import { TravelerSelector } from './TravelerSelector';
+import { MoneyInput } from './MoneyInput';
 import {
   ItineraryDay,
   ParkDayBooking,
@@ -261,8 +262,8 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
   const [photoPkgIncludedParks, setPhotoPkgIncludedParks] = useState<string[]>([]);
   const [photoPkgCode, setPhotoPkgCode] = useState<string>('');
   const [photoPkgAccount, setPhotoPkgAccount] = useState<string>('');
-  const [photoPkgCostUSD, setPhotoPkgCostUSD] = useState<string>('');
-  const [photoPkgCostBRL, setPhotoPkgCostBRL] = useState<string>('');
+  const [photoPkgCostUSD, setPhotoPkgCostUSD] = useState<number | null>(0);
+  const [photoPkgCostBRL, setPhotoPkgCostBRL] = useState<number | null>(0);
   const [photoPkgStatus, setPhotoPkgStatus] = useState<PhotoPackageItem['status']>('Confirmado');
   const [photoPkgPaymentStatus, setPhotoPkgPaymentStatus] = useState<'Reservado / Confirmado' | 'Pago' | 'Pendente' | 'Falta Pagar'>('Reservado / Confirmado');
   const [photoPkgPayerId, setPhotoPkgPayerId] = useState<string>('all');
@@ -279,27 +280,19 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
   }, [liveExchangeRate, settings?.dollarRate]);
 
   // Handle USD Change with auto-conversion to BRL
-  const handlePhotoPkgCostUSDChange = (val: string) => {
-    setPhotoPkgCostUSD(val);
-    const cleaned = val.replace(',', '.').trim();
-    const num = parseFloat(cleaned);
-    if (!isNaN(num) && num > 0 && dollarRate > 0) {
-      setPhotoPkgCostBRL((num * dollarRate).toFixed(2));
-    } else if (val === '') {
-      setPhotoPkgCostBRL('');
-    }
+  const handlePhotoPkgCostUSDChange = (val: number | null) => {
+    const usd = val || 0;
+    setPhotoPkgCostUSD(usd);
+    const brl = Math.round(usd * dollarRate * 100) / 100;
+    setPhotoPkgCostBRL(brl);
   };
 
   // Handle BRL Change with auto-conversion to USD
-  const handlePhotoPkgCostBRLChange = (val: string) => {
-    setPhotoPkgCostBRL(val);
-    const cleaned = val.replace(',', '.').trim();
-    const num = parseFloat(cleaned);
-    if (!isNaN(num) && num > 0 && dollarRate > 0) {
-      setPhotoPkgCostUSD((num / dollarRate).toFixed(2));
-    } else if (val === '') {
-      setPhotoPkgCostUSD('');
-    }
+  const handlePhotoPkgCostBRLChange = (val: number | null) => {
+    const brl = val || 0;
+    setPhotoPkgCostBRL(brl);
+    const usd = dollarRate > 0 ? Math.round((brl / dollarRate) * 100) / 100 : 0;
+    setPhotoPkgCostUSD(usd);
   };
 
   // Unlink Confirmation State
@@ -470,12 +463,12 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
           setPhotoPkgIncludedParks(detectedPkg.includedParks || []);
           setPhotoPkgCode(detectedPkg.confirmationCode || '');
           setPhotoPkgAccount(detectedPkg.accountEmailOrUser || '');
-          let detUsd = detectedPkg.costUSD ? String(detectedPkg.costUSD) : '';
-          let detBrl = detectedPkg.costBRL ? String(detectedPkg.costBRL) : '';
+          let detUsd = detectedPkg.costUSD !== undefined ? detectedPkg.costUSD : 0;
+          let detBrl = detectedPkg.costBRL !== undefined ? detectedPkg.costBRL : 0;
           if (!detBrl && detUsd && dollarRate > 0) {
-            detBrl = (parseFloat(detUsd) * dollarRate).toFixed(2);
+            detBrl = Math.round(detUsd * dollarRate * 100) / 100;
           } else if (!detUsd && detBrl && dollarRate > 0) {
-            detUsd = (parseFloat(detBrl) / dollarRate).toFixed(2);
+            detUsd = Math.round((detBrl / dollarRate) * 100) / 100;
           }
           setPhotoPkgCostUSD(detUsd);
           setPhotoPkgCostBRL(detBrl);
@@ -530,8 +523,8 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
           }
           setPhotoPkgCode('');
           setPhotoPkgAccount('');
-          setPhotoPkgCostUSD('');
-          setPhotoPkgCostBRL('');
+          setPhotoPkgCostUSD(0);
+          setPhotoPkgCostBRL(0);
           setPhotoPkgStatus('Confirmado');
           setPhotoPkgPaymentStatus('Reservado / Confirmado');
           setPhotoPkgPayerId(settings?.currentUserId || 'all');
@@ -1059,8 +1052,8 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
           includedParks: photoPkgIncludedParks,
           confirmationCode: photoPkgCode.trim() || undefined,
           accountEmailOrUser: photoPkgAccount.trim() || undefined,
-          costUSD: photoPkgCostUSD ? Number(photoPkgCostUSD.replace(',', '.')) : undefined,
-          costBRL: photoPkgCostBRL ? Number(photoPkgCostBRL.replace(',', '.')) : undefined,
+          costUSD: photoPkgCostUSD !== null && photoPkgCostUSD !== undefined ? photoPkgCostUSD : undefined,
+          costBRL: photoPkgCostBRL !== null && photoPkgCostBRL !== undefined ? photoPkgCostBRL : undefined,
           status: photoPkgStatus,
           paymentStatus: photoPkgPaymentStatus,
           payerId: photoPkgPayerId || 'all',
@@ -1070,8 +1063,8 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       : undefined;
 
     // Sincroniza o pacote de fotos com o módulo Financeiro / Divisão de Despesas
-    const parsedUsd = photoPkgCostUSD ? Number(photoPkgCostUSD.replace(',', '.')) : 0;
-    const parsedBrl = photoPkgCostBRL ? Number(photoPkgCostBRL.replace(',', '.')) : (parsedUsd * dollarRate);
+    const parsedUsd = photoPkgCostUSD || 0;
+    const parsedBrl = photoPkgCostBRL || (parsedUsd * dollarRate);
 
     if (hasPhotoPackage && finalPhotoPackage) {
       const isPaid = photoPkgPaymentStatus === 'Pago' || photoPkgPaymentStatus === 'Reservado / Confirmado';
@@ -3103,20 +3096,11 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
                           <span>Valor a Pagar (US$)</span>
                           <span className="text-[9px] font-mono text-slate-400 font-bold uppercase">USD</span>
                         </label>
-                        <div className="relative">
-                          <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">$</span>
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            value={photoPkgCostUSD}
-                            onChange={(e) => handlePhotoPkgCostUSDChange(e.target.value)}
-                            placeholder="0,00"
-                            className="w-full pl-7 pr-3.5 py-2 rounded-xl border border-slate-200 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] bg-white text-slate-900 shadow-2xs"
-                          />
-                        </div>
-                        <span className="text-[10px] font-mono font-medium text-purple-700 block">
-                          Digitar atualiza R$
-                        </span>
+                        <MoneyInput
+                          currency="USD"
+                          value={photoPkgCostUSD}
+                          onChange={handlePhotoPkgCostUSDChange}
+                        />
                       </div>
 
                       {/* Valor BRL */}
@@ -3125,20 +3109,11 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
                           <span>Valor a Pagar (R$)</span>
                           <span className="text-[9px] font-mono text-slate-400 font-bold uppercase">BRL</span>
                         </label>
-                        <div className="relative">
-                          <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">R$</span>
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            value={photoPkgCostBRL}
-                            onChange={(e) => handlePhotoPkgCostBRLChange(e.target.value)}
-                            placeholder="0,00"
-                            className="w-full pl-8 pr-3.5 py-2 rounded-xl border border-slate-200 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] bg-white text-emerald-900 shadow-2xs"
-                          />
-                        </div>
-                        <span className="text-[10px] font-mono font-medium text-emerald-700 block">
-                          Digitar atualiza US$
-                        </span>
+                        <MoneyInput
+                          currency="BRL"
+                          value={photoPkgCostBRL}
+                          onChange={handlePhotoPkgCostBRLChange}
+                        />
                       </div>
 
                       {/* Status do Pagamento */}
@@ -3187,28 +3162,28 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
                       </span>
                       <button
                         type="button"
-                        onClick={() => handlePhotoPkgCostUSDChange('185')}
+                        onClick={() => handlePhotoPkgCostUSDChange(185)}
                         className="px-2 py-0.5 rounded-md bg-white hover:bg-purple-100/70 border border-purple-200 text-purple-900 font-semibold text-[10px] cursor-pointer transition-colors shadow-2xs"
                       >
                         Disney 30d ($185)
                       </button>
                       <button
                         type="button"
-                        onClick={() => handlePhotoPkgCostUSDChange('75')}
+                        onClick={() => handlePhotoPkgCostUSDChange(75)}
                         className="px-2 py-0.5 rounded-md bg-white hover:bg-purple-100/70 border border-purple-200 text-purple-900 font-semibold text-[10px] cursor-pointer transition-colors shadow-2xs"
                       >
                         Disney 1 Dia ($75)
                       </button>
                       <button
                         type="button"
-                        onClick={() => handlePhotoPkgCostUSDChange('129.99')}
+                        onClick={() => handlePhotoPkgCostUSDChange(129.99)}
                         className="px-2 py-0.5 rounded-md bg-white hover:bg-purple-100/70 border border-purple-200 text-purple-900 font-semibold text-[10px] cursor-pointer transition-colors shadow-2xs"
                       >
                         Universal 3d ($129,99)
                       </button>
                       <button
                         type="button"
-                        onClick={() => handlePhotoPkgCostUSDChange('89.99')}
+                        onClick={() => handlePhotoPkgCostUSDChange(89.99)}
                         className="px-2 py-0.5 rounded-md bg-white hover:bg-purple-100/70 border border-purple-200 text-purple-900 font-semibold text-[10px] cursor-pointer transition-colors shadow-2xs"
                       >
                         Universal 1d ($89,99)

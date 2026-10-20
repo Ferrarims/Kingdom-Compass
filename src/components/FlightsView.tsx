@@ -33,6 +33,7 @@ import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { parseInputToNumber, formatInputDisplay } from '../utils/currency';
 import { TravelerSelector } from './TravelerSelector';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
+import { MoneyInput } from './MoneyInput';
 
 const getCheckInUrl = (airlineName: string) => {
   const name = (airlineName || '').toLowerCase();
@@ -109,8 +110,8 @@ export const FlightsView: React.FC = () => {
   // Input formatting temporary states
   const [focusedField, setFocusedField] = useState<string | null>(null);
   const [tempValue, setTempValue] = useState('');
-  const [unitCostUSD, setUnitCostUSD] = useState<string>('');
-  const [unitCostBRL, setUnitCostBRL] = useState<string>('');
+  const [unitCostUSD, setUnitCostUSD] = useState<number | null>(0);
+  const [unitCostBRL, setUnitCostBRL] = useState<number | null>(0);
 
   // Form State
   const [formData, setFormData] = useState<Omit<FlightSegment, 'id'>>({
@@ -197,8 +198,8 @@ export const FlightsView: React.FC = () => {
       travelerIds: ['all'],
       passengers: (settings.travelers || []).map((t) => t?.name || 'Viajante'),
     });
-    setUnitCostUSD('');
-    setUnitCostBRL('');
+    setUnitCostUSD(0);
+    setUnitCostBRL(0);
     setModalOpen(true);
   };
 
@@ -239,10 +240,8 @@ export const FlightsView: React.FC = () => {
 
     const travelers = settings.travelers || [];
     const q = (flight.travelerIds?.includes('all') ? travelers.length : flight.travelerIds?.length) || travelers.length || 1;
-    if (flight.ticketCostUSD) setUnitCostUSD((flight.ticketCostUSD / q).toFixed(2));
-    else setUnitCostUSD('');
-    if (flight.ticketCostBRL) setUnitCostBRL((flight.ticketCostBRL / q).toFixed(2));
-    else setUnitCostBRL('');
+    setUnitCostUSD(flight.ticketCostUSD ? flight.ticketCostUSD / q : 0);
+    setUnitCostBRL(flight.ticketCostBRL ? flight.ticketCostBRL / q : 0);
 
     setModalOpen(true);
   };
@@ -1471,31 +1470,25 @@ export const FlightsView: React.FC = () => {
                         Valor a Pagar (US$)
                         <span className="text-[9px] text-slate-400 font-mono">USD/pessoa</span>
                       </label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">$</span>
-                        <input
-                          type="text"
-                          value={unitCostUSD}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setUnitCostUSD(val);
-                            const usd = parseInputToNumber(val);
-                            const rate = settings.dollarRate || 5.75;
-                            const brl = usd * rate;
-                            setUnitCostBRL(brl.toFixed(2).replace('.', ','));
-                            
-                            const travelers = settings.travelers || [];
-                            const q = (formData.travelerIds?.includes('all') ? travelers.length : formData.travelerIds?.length) || travelers.length || 1;
-                            setFormData({
-                              ...formData,
-                              ticketCostUSD: usd * q,
-                              ticketCostBRL: Math.round(usd * q * rate * 100) / 100
-                            });
-                          }}
-                          placeholder="0,00"
-                          className="w-full bg-white border border-slate-200 rounded-xl pl-7 pr-3 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                        />
-                      </div>
+                      <MoneyInput
+                        currency="USD"
+                        value={unitCostUSD}
+                        onChange={(val) => {
+                          const usd = val || 0;
+                          setUnitCostUSD(usd);
+                          const rate = settings.dollarRate || 5.75;
+                          const brl = Math.round(usd * rate * 100) / 100;
+                          setUnitCostBRL(brl);
+                          
+                          const travelers = settings.travelers || [];
+                          const q = (formData.travelerIds?.includes('all') ? travelers.length : formData.travelerIds?.length) || travelers.length || 1;
+                          setFormData({
+                            ...formData,
+                            ticketCostUSD: usd * q,
+                            ticketCostBRL: brl * q
+                          });
+                        }}
+                      />
                     </div>
 
                     <div className="space-y-1">
@@ -1503,31 +1496,25 @@ export const FlightsView: React.FC = () => {
                         Valor a Pagar (R$)
                         <span className="text-[9px] text-slate-400 font-mono">BRL/pessoa</span>
                       </label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">R$</span>
-                        <input
-                          type="text"
-                          value={unitCostBRL}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setUnitCostBRL(val);
-                            const brl = parseInputToNumber(val);
-                            const rate = settings.dollarRate || 5.75;
-                            const usd = rate > 0 ? brl / rate : 0;
-                            setUnitCostUSD(usd.toFixed(2).replace('.', ','));
+                      <MoneyInput
+                        currency="BRL"
+                        value={unitCostBRL}
+                        onChange={(val) => {
+                          const brl = val || 0;
+                          setUnitCostBRL(brl);
+                          const rate = settings.dollarRate || 5.75;
+                          const usd = rate > 0 ? Math.round((brl / rate) * 100) / 100 : 0;
+                          setUnitCostUSD(usd);
 
-                            const travelers = settings.travelers || [];
-                            const q = (formData.travelerIds?.includes('all') ? travelers.length : formData.travelerIds?.length) || travelers.length || 1;
-                            setFormData({
-                              ...formData,
-                              ticketCostBRL: brl * q,
-                              ticketCostUSD: Math.round((brl * q / rate) * 100) / 100
-                            });
-                          }}
-                          placeholder="0,00"
-                          className="w-full bg-white border border-slate-200 rounded-xl pl-8 pr-3 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                        />
-                      </div>
+                          const travelers = settings.travelers || [];
+                          const q = (formData.travelerIds?.includes('all') ? travelers.length : formData.travelerIds?.length) || travelers.length || 1;
+                          setFormData({
+                            ...formData,
+                            ticketCostBRL: brl * q,
+                            ticketCostUSD: usd * q
+                          });
+                        }}
+                      />
                     </div>
 
                     <div className="space-y-1">

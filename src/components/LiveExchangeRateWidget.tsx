@@ -14,6 +14,7 @@ import {
 import { usePlanner } from '../context/PlannerContext';
 import { ExchangeRateData } from '../types';
 import { fetchLiveExchangeRate } from '../services/exchangeRateService';
+import { MoneyInput } from './MoneyInput';
 
 export type { ExchangeRateData };
 export { fetchLiveExchangeRate };
@@ -341,20 +342,14 @@ export const LiveExchangeRateWidget: React.FC = () => {
                     <label className="text-[10px] font-bold text-slate-500 uppercase block">
                       Dólar (USD)
                     </label>
-                    <div className="relative flex items-center">
-                      <span className="absolute left-2.5 font-bold text-slate-400">$</span>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={simUsd ? simUsd.toFixed(2).replace('.', ',') : ''}
-                        onChange={(e) => {
-                          const num = parseFloat(e.target.value.replace(',', '.')) || 0;
-                          handleSimUsdChange(num);
-                        }}
-                        className="w-full pl-6 pr-2 py-1 rounded-lg font-mono font-bold text-sm text-[#1A2B4C] focus:outline-none bg-white"
-                        placeholder="100,00"
-                      />
-                    </div>
+                    <MoneyInput
+                      currency="USD"
+                      value={simUsd}
+                      onChange={(val) => {
+                        const usd = val || 0;
+                        handleSimUsdChange(usd);
+                      }}
+                    />
                   </div>
 
                   {/* Input BRL */}
@@ -362,21 +357,15 @@ export const LiveExchangeRateWidget: React.FC = () => {
                     <label className="text-[10px] font-bold text-slate-500 uppercase block">
                       Reais (BRL)
                     </label>
-                    <div className="relative flex items-center">
-                      <span className="absolute left-2.5 font-bold text-slate-400">R$</span>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={simBrl ? simBrl.toFixed(2).replace('.', ',') : ''}
-                        onChange={(e) => {
-                          const num = parseFloat(e.target.value.replace(',', '.')) || 0;
-                          setSimBrl(num);
-                          setSimUsd(Math.round((num / effectiveConverterRate) * 100) / 100);
-                        }}
-                        className="w-full pl-8 pr-2 py-1 rounded-lg font-mono font-bold text-sm text-emerald-800 focus:outline-none bg-white"
-                        placeholder="575,00"
-                      />
-                    </div>
+                    <MoneyInput
+                      currency="BRL"
+                      value={simBrl}
+                      onChange={(val) => {
+                        const brl = val || 0;
+                        setSimBrl(brl);
+                        setSimUsd(Math.round((brl / effectiveConverterRate) * 100) / 100);
+                      }}
+                    />
                   </div>
                 </div>
               </div>
