@@ -926,12 +926,25 @@ export const MapView: React.FC = () => {
     if (!text || !text.trim()) return null;
     const lower = text.toLowerCase().trim();
 
-    // 0. Primary Accommodation check (STRICTLY prioritize the registered accommodation address and coordinates)
+    // 0. Primary Accommodation check (STRICTLY prioritize the registered accommodation address and coordinates, UNLESS text specifies another distinct location/address)
     if (primaryHotelLocation) {
       const accNameLower = primaryHotelLocation.name.toLowerCase();
       const accAddrLower = (primaryHotelLocation.address || '').toLowerCase();
+      
+      const hasDistinctLocation =
+        lower.includes('miami') ||
+        lower.includes('brickell') ||
+        lower.includes('comfort inn') ||
+        lower.includes('100 southeast') ||
+        lower.includes('orlando international') ||
+        lower.includes('mco') ||
+        lower.includes('sanford') ||
+        lower.includes('guarulhos') ||
+        lower.includes('aeroporto');
+
       const isAccMatch =
-        (accNameLower && (lower.includes(accNameLower) || accNameLower.includes(lower))) ||
+        !hasDistinctLocation &&
+        ((accNameLower && (lower.includes(accNameLower) || accNameLower.includes(lower))) ||
         (accAddrLower && (lower.includes(accAddrLower) || accAddrLower.includes(lower))) ||
         lower.includes('modern retreat') ||
         lower.includes('venetian bay') ||
@@ -939,7 +952,7 @@ export const MapView: React.FC = () => {
         ((lower.includes('saída da acomodação') || lower.includes('saida da acomodacao') || lower.startsWith('saída de') || lower.startsWith('saida de')) && !lower.includes('aeroporto') && !lower.includes('parque')) ||
         ((lower.includes('fim do dia na acomodação') || lower.includes('retorno à acomodação') || lower.includes('retorno a acomodacao') || lower.includes('chegada e fim do dia na acomodação')) && !lower.includes('aeroporto')) ||
         ((lower.includes('check-in') || lower.includes('checkin') || lower.includes('check-out') || lower.includes('checkout')) && (lower.includes('hotel') || lower.includes('hospedagem') || lower.includes('resort') || lower.includes('casa') || lower.includes('airbnb') || lower.includes(accNameLower))) ||
-        ((lower === 'hotel' || lower === 'acomodação' || lower === 'acomodacao' || lower === 'hospedagem') && !lower.includes('aeroporto'));
+        ((lower === 'hotel' || lower === 'acomodação' || lower === 'acomodacao' || lower === 'hospedagem') && !lower.includes('aeroporto')));
 
       if (isAccMatch) {
         return {
@@ -1345,8 +1358,8 @@ export const MapView: React.FC = () => {
         const fallbackLat = 28.3700 + index * 0.012;
         const fallbackLng = -81.5200 - index * 0.008;
 
-        const finalLat = isAccItem && primaryHotelLocation ? primaryHotelLocation.lat : (matchedLoc ? matchedLoc.lat : fallbackLat);
-        const finalLng = isAccItem && primaryHotelLocation ? primaryHotelLocation.lng : (matchedLoc ? matchedLoc.lng : fallbackLng);
+        const finalLat = matchedLoc ? matchedLoc.lat : fallbackLat;
+        const finalLng = matchedLoc ? matchedLoc.lng : fallbackLng;
 
         let stopCat: CustomRouteStop['category'] = 'other';
         if (item.category === 'park') stopCat = 'park';
@@ -1363,9 +1376,7 @@ export const MapView: React.FC = () => {
         }
 
         const stopDisplayName = item.title || item.location || `Parada ${index + 1}`;
-        const stopLocation = isAccItem && primaryHotelLocation
-          ? primaryHotelLocation.address
-          : (item.location || (matchedLoc ? (matchedLoc.address || matchedLoc.name) : ''));
+        const stopLocation = item.location || (matchedLoc ? (matchedLoc.address || matchedLoc.name) : '');
         const stopNotes = item.notes || '';
 
         stops.push({
