@@ -90,6 +90,7 @@ export const FlightsView: React.FC = () => {
     : (settings.startDate ? getTripEndDate(settings.startDate, settings.durationDays) : '2027-01-10');
 
   const [copiedPnr, setCopiedPnr] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingFlight, setEditingFlight] = useState<FlightSegment | null>(null);
   const [flightToDelete, setFlightToDelete] = useState<FlightSegment | null>(null);
@@ -284,15 +285,23 @@ export const FlightsView: React.FC = () => {
       destinationCode: destCd,
     };
 
+    setSaveError(null);
     try {
+      let result;
       if (editingFlight) {
-        await updateFlight(editingFlight.id, dataToSave);
+        result = await updateFlight(editingFlight.id, dataToSave);
       } else {
-        await addFlight(dataToSave);
+        result = await addFlight(dataToSave);
       }
-      setModalOpen(false);
+      
+      if (result.success) {
+        setModalOpen(false);
+      } else {
+        setSaveError(result.error || 'Erro ao salvar voo');
+      }
     } catch (err) {
       console.error('Erro ao salvar voo:', err);
+      setSaveError('Erro inesperado ao salvar voo');
     } finally {
       setIsSaving(false);
     }
@@ -1600,6 +1609,12 @@ export const FlightsView: React.FC = () => {
               </div>
 
               {/* Modal Actions */}
+              {saveError && (
+                <div className="mx-4 sm:mx-5 mb-4 bg-red-50 text-red-700 text-xs font-bold p-3 rounded-xl border border-red-100 flex items-center gap-2">
+                  <AlertCircle size={14} className="shrink-0" />
+                  {saveError}
+                </div>
+              )}
               <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-3 shrink-0">
                 {editingFlight && (
                   <button

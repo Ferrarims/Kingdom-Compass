@@ -4465,6 +4465,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   const addFlight = async (flight: Omit<FlightSegment, 'id'>): Promise<{ success: boolean; error?: string }> => {
+    const prevFlights = [...flights];
+    const prevTrips = [...trips];
+    const prevRawDays = [...rawDays];
+    const prevExpenses = [...expenses];
+
     const newFlight: FlightSegment = {
       ...flight,
       id: generateUUID(),
@@ -4492,11 +4497,13 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         coverTheme: settings.coverTheme,
         travelers: settings.travelers || [],
       };
-      try {
-        await SupabaseService.saveFlight(activeTripId, newFlight, fallbackTrip);
-      } catch (e: any) {
-        console.error('Falha ao salvar voo no Supabase:', e);
-        return { success: false, error: e.message || 'Falha ao salvar voo' };
+      const result = await SupabaseService.saveFlight(activeTripId, newFlight, fallbackTrip);
+      if (!result.success) {
+        setFlights(prevFlights);
+        setTrips(prevTrips);
+        setRawDays(prevRawDays);
+        setExpenses(prevExpenses);
+        return result;
       }
     }
 
@@ -4554,6 +4561,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   const updateFlight = async (id: string, updates: Partial<FlightSegment>): Promise<{ success: boolean; error?: string }> => {
+    const prevFlights = [...flights];
+    const prevTrips = [...trips];
+    const prevRawDays = [...rawDays];
+    const prevExpenses = [...expenses];
+
     let savedUpdated: FlightSegment | null = null;
     const nextFlights = flights.map((f) => {
       if (f.id === id) {
@@ -4585,11 +4597,13 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           coverTheme: settings.coverTheme,
           travelers: settings.travelers || [],
         };
-        try {
-          await SupabaseService.saveFlight(activeTripId, savedUpdated, fallbackTrip);
-        } catch (e: any) {
-          console.error('Falha ao atualizar voo no Supabase:', e);
-          return { success: false, error: e.message || 'Falha ao atualizar voo' };
+        const result = await SupabaseService.saveFlight(activeTripId, savedUpdated, fallbackTrip);
+        if (!result.success) {
+          setFlights(prevFlights);
+          setTrips(prevTrips);
+          setRawDays(prevRawDays);
+          setExpenses(prevExpenses);
+          return result;
         }
       }
     }

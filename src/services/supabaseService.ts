@@ -22,6 +22,7 @@ import {
   PhotoPackageItem,
   SettlementPayment,
   TravelerAttractionSelection,
+  BaggageAllowance,
 } from '../types';
 
 /**
