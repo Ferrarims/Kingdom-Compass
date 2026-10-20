@@ -1,16 +1,10 @@
 import { ExchangeRateData } from '../types';
 
 export const fetchLiveExchangeRate = async (): Promise<ExchangeRateData> => {
-  // Safe default exchange rate
-  const fallbackData: ExchangeRateData = {
-    rate: 5.75,
-    bid: 5.74,
-    ask: 5.76,
-    high: 5.78,
-    low: 5.72,
-    pctChange: 0.20,
-    lastUpdated: new Date().toLocaleTimeString('pt-BR'),
-    source: 'Cotação Comercial Estimada',
+  // Helper to validate rate value
+  const isValidRate = (val: any): boolean => {
+    const num = typeof val === 'number' ? val : parseFloat(val);
+    return !isNaN(num) && isFinite(num) && num > 0;
   };
 
   // Safe fetch helper that ignores network/cors errors
@@ -28,8 +22,11 @@ export const fetchLiveExchangeRate = async (): Promise<ExchangeRateData> => {
 
   // Primary: Server-side proxy route (bypasses CORS and network issues)
   const serverJson = await safeFetch('/api/exchange-rate');
-  if (serverJson && serverJson.success && serverJson.data) {
-    return serverJson.data;
+  if (serverJson && serverJson.success && serverJson.data && isValidRate(serverJson.data.rate)) {
+    return {
+      ...serverJson.data,
+      isEstimate: false,
+    };
   }
 
   // Fallback 1: Direct AwesomeAPI (Dólar Comercial Oficial Brasil)
@@ -38,33 +35,46 @@ export const fetchLiveExchangeRate = async (): Promise<ExchangeRateData> => {
   });
   if (awesomeJson && awesomeJson.USDBRL) {
     const item = awesomeJson.USDBRL;
-    const rate = parseFloat(item.bid || item.ask || '5.75');
-    return {
-      rate,
-      bid: item.bid ? parseFloat(item.bid) : undefined,
-      ask: item.ask ? parseFloat(item.ask) : undefined,
-      high: item.high ? parseFloat(item.high) : undefined,
-      low: item.low ? parseFloat(item.low) : undefined,
-      pctChange: item.pctChange ? parseFloat(item.pctChange) : undefined,
-      varBid: item.varBid ? parseFloat(item.varBid) : undefined,
-      lastUpdated: item.create_date || new Date().toLocaleTimeString('pt-BR'),
-      source: 'AwesomeAPI (Dólar Comercial Oficial)',
-    };
+    const bidVal = item.bid ? parseFloat(item.bid) : NaN;
+    const askVal = item.ask ? parseFloat(item.ask) : NaN;
+    const rateVal = isValidRate(bidVal) ? bidVal : (isValidRate(askVal) ? askVal : NaN);
+
+    if (isValidRate(rateVal)) {
+      return {
+        rate: rateVal,
+        bid: isValidRate(bidVal) ? bidVal : undefined,
+        ask: isValidRate(askVal) ? askVal : undefined,
+        high: isValidRate(item.high) ? parseFloat(item.high) : undefined,
+        low: isValidRate(item.low) ? parseFloat(item.low) : undefined,
+        pctChange: isValidRate(item.pctChange) ? parseFloat(item.pctChange) : undefined,
+        varBid: isValidRate(item.varBid) ? parseFloat(item.varBid) : undefined,
+        lastUpdated: item.create_date || new Date().toLocaleTimeString('pt-BR'),
+        source: 'AwesomeAPI (Dólar Comercial Oficial)',
+        isEstimate: false,
+      };
+    }
   }
 
   // Fallback 2: Open ER API
   const erJson = await safeFetch('https://open.er-api.com/v6/latest/USD', {
     cache: 'no-store',
   });
-  if (erJson && erJson.rates && erJson.rates.BRL) {
-    const rate = parseFloat(erJson.rates.BRL);
+  if (erJson && erJson.rates && isValidRate(erJson.rates.BRL)) {
+    const rateVal = parseFloat(erJson.rates.BRL);
     return {
-      rate,
+      rate: rateVal,
       lastUpdated: new Date().toLocaleTimeString('pt-BR'),
       source: 'ExchangeRate API Global',
+      isEstimate: false,
     };
   }
 
-  // Fallback 3: Safe default exchange rate
-  return fallbackData;
+  // Fallback 3: Fixed estimation when all sources fail / return invalid data
+  // Clearly identified as estimation, NOT consulted, no fictitious high/low/buy/sell values.
+  return {
+    rate: 5.75,
+    lastUpdated: new Date().toLocaleTimeString('pt-BR'),
+    source: 'Estimativa Fixa (Cotação não consultada com sucesso)',
+    isEstimate: true,
+  };
 };

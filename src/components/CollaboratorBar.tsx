@@ -102,18 +102,28 @@ export const CollaboratorBar: React.FC<CollaboratorBarProps> = ({ onToggleMobile
                   <span className="text-[10px] uppercase tracking-tighter text-slate-500 font-bold">
                     Cotação do Dia
                   </span>
-                  {liveExchangeRate && (
+                  {isFetchingExchangeRate ? (
+                    <span className="inline-flex items-center px-1.5 py-0.2 rounded-full text-[8px] sm:text-[9px] font-bold bg-amber-50 text-amber-700 border border-amber-200/60 leading-none">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1 animate-spin" />
+                      Consultando...
+                    </span>
+                  ) : liveExchangeRate?.isEstimate ? (
+                    <span className="inline-flex items-center px-1.5 py-0.2 rounded-full text-[8px] sm:text-[9px] font-bold bg-amber-50 text-amber-800 border border-amber-200/60 leading-none" title="Cotação não consultada (Estimativa fixa)">
+                      <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1" />
+                      Estimativa
+                    </span>
+                  ) : liveExchangeRate ? (
                     <span className="inline-flex items-center px-1.5 py-0.2 rounded-full text-[8px] sm:text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200/60 leading-none">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1 animate-pulse" />
                       Ao Vivo
                     </span>
-                  )}
+                  ) : null}
                 </div>
                 <div className="flex items-baseline gap-1 sm:gap-1.5">
                   <span className="text-xs sm:text-sm font-bold text-[#1A2B4C] whitespace-nowrap group-hover:text-[#D4AF37] transition-colors">
                     R$ {displayRate.toFixed(2).replace('.', ',')}
                   </span>
-                  {liveExchangeRate?.pctChange !== undefined && (
+                  {!liveExchangeRate?.isEstimate && liveExchangeRate?.pctChange !== undefined && (
                     <span
                       className={`text-[9px] sm:text-[10px] font-bold inline-flex items-center ${
                         liveExchangeRate.pctChange >= 0 ? 'text-emerald-600' : 'text-rose-600'
@@ -132,13 +142,13 @@ export const CollaboratorBar: React.FC<CollaboratorBarProps> = ({ onToggleMobile
                 <div className="absolute left-0 mt-2 w-72 sm:w-80 bg-white rounded-xl shadow-2xl border border-slate-200 p-4 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
                   <div className="flex items-center justify-between pb-2 border-b border-slate-100 mb-3">
                     <div className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      <span className={`w-2 h-2 rounded-full ${liveExchangeRate?.isEstimate ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse'}`} />
                       <span className="text-xs font-bold text-[#1A2B4C] uppercase tracking-wide">
-                        Cotação Comercial do Dia
+                        {liveExchangeRate?.isEstimate ? 'Cotação Estimada (Não Consultada)' : 'Cotação Comercial do Dia'}
                       </span>
                     </div>
                     <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
-                      {liveExchangeRate?.source || 'AwesomeAPI Oficial'}
+                      {liveExchangeRate?.source || 'Cotação Comercial'}
                     </span>
                   </div>
 
@@ -150,7 +160,7 @@ export const CollaboratorBar: React.FC<CollaboratorBarProps> = ({ onToggleMobile
                       </span>
                     </div>
 
-                    {liveExchangeRate && (
+                    {liveExchangeRate && !liveExchangeRate.isEstimate && (
                       <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-200 text-[11px] text-slate-600">
                         <div>
                           <span className="text-slate-400 block text-[9px] uppercase">Máxima Hoje</span>
@@ -169,10 +179,28 @@ export const CollaboratorBar: React.FC<CollaboratorBarProps> = ({ onToggleMobile
                   </div>
 
                   <div className="space-y-2 pt-2 border-t border-slate-100">
-                    <div className="flex items-center gap-1.5 text-emerald-700 text-[11px] font-semibold">
-                      <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                      <span>Cotação sincronizada em tempo real</span>
-                    </div>
+                    {liveExchangeRate?.isEstimate ? (
+                      <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-[11px] space-y-2">
+                        <span className="font-semibold block">⚠️ Cotação não consultada (Estimativa). Não aplicada automaticamente.</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (window.confirm('Deseja realmente aplicar esta taxa estimada à viagem após confirmação?')) {
+                              applyLiveRateToTrip(true);
+                              setRateDropdownOpen(false);
+                            }
+                          }}
+                          className="w-full py-1 px-2 rounded bg-amber-600 hover:bg-amber-700 text-white font-bold text-[10px] cursor-pointer"
+                        >
+                          Confirmar e Aplicar Taxa Estimada
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5 text-emerald-700 text-[11px] font-semibold">
+                        <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span>Cotação sincronizada em tempo real</span>
+                      </div>
+                    )}
 
                     <div className="flex items-center gap-2 pt-1">
                       <button

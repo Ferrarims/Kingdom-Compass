@@ -502,6 +502,7 @@ export interface ExchangeRateData {
   varBid?: number;
   lastUpdated: string;
   source: string;
+  isEstimate?: boolean;
 }
 
 export interface SyncNotification {

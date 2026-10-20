@@ -555,7 +555,7 @@ interface PlannerContextType {
   liveExchangeRate: ExchangeRateData | null;
   isFetchingExchangeRate: boolean;
   refreshLiveExchangeRate: (autoApplyToTrip?: boolean) => Promise<void>;
-  applyLiveRateToTrip: () => void;
+  applyLiveRateToTrip: (forceEstimateConfirmation?: boolean) => void;
   financialSummary: {
     totalEstimatedBRL: number;
     totalEstimatedUSD: number;
@@ -929,7 +929,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     try {
       const data = await fetchLiveExchangeRate();
       setLiveExchangeRate(data);
-      if (autoApplyToTrip && data && data.rate > 0) {
+      // NEVER apply estimates automatically to the trip (only fetched quotations with !data.isEstimate)
+      if (autoApplyToTrip && data && data.rate > 0 && !data.isEstimate) {
         setSettings((prev) => ({
           ...prev,
           dollarRate: data.rate,
@@ -951,9 +952,14 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     return () => clearInterval(interval);
   }, [refreshLiveExchangeRate]);
 
-  const applyLiveRateToTrip = useCallback(() => {
+  const applyLiveRateToTrip = useCallback((forceEstimateConfirmation: boolean = false) => {
     if (liveExchangeRate && liveExchangeRate.rate > 0) {
+      if (liveExchangeRate.isEstimate && !forceEstimateConfirmation) {
+        console.warn('Tentativa de aplicar cotação estimada sem confirmação explícita.');
+        return;
+      }
       const newRate = liveExchangeRate.rate;
+      const isEst = !!liveExchangeRate.isEstimate;
       setSettings((prev) => ({
         ...prev,
         dollarRate: newRate,
@@ -962,7 +968,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         {
           id: `rate-${Date.now()}`,
           travelerName: currentUser.name || 'Viajante',
-          action: `💵 Atualizou o câmbio oficial da viagem para R$ ${newRate.toFixed(2).replace('.', ',')}`,
+          action: isEst
+            ? `⚠️ Aplicou taxa estimada de R$ ${newRate.toFixed(2).replace('.', ',')} após confirmação explícita`
+            : `💵 Atualizou o câmbio oficial da viagem para R$ ${newRate.toFixed(2).replace('.', ',')}`,
           timestamp: 'Agora',
         },
         ...prev,
