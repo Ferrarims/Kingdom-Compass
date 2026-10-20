@@ -1166,7 +1166,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
               if (trip.id === targetTripId && trip.rawDays) {
                 const day1 = trip.rawDays.find(d => d.dayNumber === 1);
                 if (day1) {
-                  await reconcileItineraryDay(trip, day1);
+                  const success = await reconcileItineraryDay(trip, day1);
+                  if (!success) {
+                    throw new Error(`Falha ao persistir alterações automáticas no Dia 1 da viagem ${targetTripId}.`);
+                  }
                   // Update local object to reflect the change
                   day1.hourlySchedule = deduplicateHourlySchedule(syncAllEventsToHourlySchedule(day1, trip));
                 }
@@ -6073,7 +6076,17 @@ export const usePlanner = () => {
 
 export async function reconcileItineraryDay(trip: Trip, day: ItineraryDay): Promise<boolean> {
   const originalSchedule = JSON.stringify(day.hourlySchedule || []);
-  const reconciledSchedule = syncAllEventsToHourlySchedule(day, trip);
+  let reconciledSchedule = syncAllEventsToHourlySchedule(day, trip);
+  
+  // Garantir evento de fim de dia no Dia 1
+  if (day.dayNumber === 1) {
+    const hasNightEvent = reconciledSchedule.some(i => i.title.includes('Fim do dia na acomodação'));
+    if (!hasNightEvent) {
+        // Forçar a regeneração do cronograma para este dia específico
+        reconciledSchedule = syncAllEventsToHourlySchedule(day, trip);
+    }
+  }
+
   const newSchedule = deduplicateHourlySchedule(reconciledSchedule);
   
   if (JSON.stringify(newSchedule) !== originalSchedule) {
@@ -6082,6 +6095,15 @@ export async function reconcileItineraryDay(trip: Trip, day: ItineraryDay): Prom
     if (!res.success) {
       console.error(`Falha ao persistir Dia ${day.dayNumber}:`, res.error);
       return false;
+    }
+    
+    // Verificação de persistência
+    await new Promise(resolve => setTimeout(resolve, 1000)); // Delay para propagação
+    const updatedDay = await SupabaseService.fetchItineraryDayById(res.resolvedDayId || day.id);
+    const persistedNightEvent = updatedDay?.hourlySchedule?.find(i => i.title.includes('Fim do dia na acomodação'));
+    if (!persistedNightEvent) {
+        console.error(`Falha na verificação: Evento de fim de dia não encontrado após persistência no Dia ${day.dayNumber}.`);
+        return false;
     }
     return true;
   }

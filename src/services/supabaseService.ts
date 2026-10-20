@@ -2129,6 +2129,31 @@ export const SupabaseService = {
     }
   },
 
+  async fetchItineraryDayById(id: string): Promise<ItineraryDay | null> {
+    try {
+      const { data: dayData, error: dayErr } = await supabase
+        .from('itinerary_days')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle();
+      if (dayErr || !dayData) return null;
+
+      const { data: hourlyData, error: hourlyErr } = await supabase
+        .from('hourly_schedules')
+        .select('*')
+        .eq('itinerary_day_id', id)
+        .order('time', { ascending: true });
+
+      const day = mapDbToItineraryDay(dayData);
+      if (hourlyData) {
+        day.hourlySchedule = hourlyData.map(mapDbToHourlySchedule);
+      }
+      return day;
+    } catch {
+      return null;
+    }
+  },
+
   /**
    * Delete Accommodation
    */
