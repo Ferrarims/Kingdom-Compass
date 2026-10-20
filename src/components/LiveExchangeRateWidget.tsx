@@ -76,8 +76,13 @@ export const LiveExchangeRateWidget: React.FC = () => {
 
   const handleManualRefresh = async () => {
     await refreshLiveExchangeRate(true);
-    setSuccessMsg('Atualização manual concluída.');
-    setTimeout(() => setSuccessMsg(null), 3000);
+    // Only show success message when a real valid quotation has been consulted and applied
+    if (liveExchangeRate && !liveExchangeRate.isEstimate) {
+      setSuccessMsg('Cotação real consultada e aplicada com sucesso.');
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } else {
+      setSuccessMsg(null);
+    }
   };
 
   return (

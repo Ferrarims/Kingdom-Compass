@@ -938,6 +938,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
     } catch (e) {
       console.warn('Erro ao consultar cotação do dia:', e);
+      setLiveExchangeRate(null);
     } finally {
       setIsFetchingExchangeRate(false);
     }

@@ -1,18 +1,24 @@
 import { ExchangeRateData } from '../types';
 
 export const fetchLiveExchangeRate = async (): Promise<ExchangeRateData> => {
-  // Strict numeric parser: accepts numbers and strict numeric strings, rejects partial like "5.75abc"
+  // Strict positive rate parser (> 0)
   const parseStrictRate = (val: any): number | null => {
+    const num = parseFiniteNumber(val);
+    return (num !== null && num > 0) ? num : null;
+  };
+
+  // Finite number parser for pctChange / varBid (can be positive, zero, or negative)
+  const parseFiniteNumber = (val: any): number | null => {
     if (val === null || val === undefined) return null;
     if (typeof val === 'number') {
-      return (!isNaN(val) && isFinite(val) && val > 0) ? val : null;
+      return (!isNaN(val) && isFinite(val)) ? val : null;
     }
     if (typeof val === 'string') {
       const trimmed = val.trim();
       if (!trimmed) return null;
       const num = Number(trimmed);
       const parsed = parseFloat(trimmed);
-      if (!isNaN(parsed) && parsed > 0 && !isNaN(num) && num === parsed) {
+      if (!isNaN(parsed) && isFinite(parsed) && !isNaN(num) && num === parsed) {
         return parsed;
       }
     }
@@ -40,6 +46,8 @@ export const fetchLiveExchangeRate = async (): Promise<ExchangeRateData> => {
       return {
         ...serverJson.data,
         rate: rateVal,
+        pctChange: parseFiniteNumber(serverJson.data.pctChange) ?? undefined,
+        varBid: parseFiniteNumber(serverJson.data.varBid) ?? undefined,
         isEstimate: false,
       };
     }
@@ -62,8 +70,8 @@ export const fetchLiveExchangeRate = async (): Promise<ExchangeRateData> => {
         ask: askVal !== null ? askVal : undefined,
         high: parseStrictRate(item.high) !== null ? parseStrictRate(item.high)! : undefined,
         low: parseStrictRate(item.low) !== null ? parseStrictRate(item.low)! : undefined,
-        pctChange: parseStrictRate(item.pctChange) !== null ? parseStrictRate(item.pctChange)! : undefined,
-        varBid: parseStrictRate(item.varBid) !== null ? parseStrictRate(item.varBid)! : undefined,
+        pctChange: parseFiniteNumber(item.pctChange) !== null ? parseFiniteNumber(item.pctChange)! : undefined,
+        varBid: parseFiniteNumber(item.varBid) !== null ? parseFiniteNumber(item.varBid)! : undefined,
         lastUpdated: item.create_date || new Date().toLocaleTimeString('pt-BR'),
         source: 'AwesomeAPI (Dólar Comercial Oficial)',
         isEstimate: false,
