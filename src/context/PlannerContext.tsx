@@ -554,7 +554,7 @@ interface PlannerContextType {
   setCurrencyView: (currency: 'BRL' | 'USD') => void;
   liveExchangeRate: ExchangeRateData | null;
   isFetchingExchangeRate: boolean;
-  refreshLiveExchangeRate: (autoApplyToTrip?: boolean) => Promise<void>;
+  refreshLiveExchangeRate: (autoApplyToTrip?: boolean) => Promise<{ success: boolean; isEstimate: boolean; data: ExchangeRateData | null }>;
   applyLiveRateToTrip: (forceEstimateConfirmation?: boolean) => void;
   financialSummary: {
     totalEstimatedBRL: number;
@@ -924,21 +924,26 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   const [liveExchangeRate, setLiveExchangeRate] = useState<ExchangeRateData | null>(null);
   const [isFetchingExchangeRate, setIsFetchingExchangeRate] = useState<boolean>(false);
 
-  const refreshLiveExchangeRate = useCallback(async (autoApplyToTrip: boolean = true) => {
+  const refreshLiveExchangeRate = useCallback(async (autoApplyToTrip: boolean = true): Promise<{ success: boolean; isEstimate: boolean; data: ExchangeRateData | null }> => {
     setIsFetchingExchangeRate(true);
     try {
       const data = await fetchLiveExchangeRate();
       setLiveExchangeRate(data);
-      // NEVER apply estimates automatically to the trip (only fetched quotations with !data.isEstimate)
+      if (data && data.isEstimate) {
+        return { success: false, isEstimate: true, data };
+      }
       if (autoApplyToTrip && data && data.rate > 0 && !data.isEstimate) {
         setSettings((prev) => ({
           ...prev,
           dollarRate: data.rate,
         }));
+        return { success: true, isEstimate: false, data };
       }
+      return { success: true, isEstimate: false, data };
     } catch (e) {
       console.warn('Erro ao consultar cotação do dia:', e);
       setLiveExchangeRate(null);
+      return { success: false, isEstimate: false, data: null };
     } finally {
       setIsFetchingExchangeRate(false);
     }
