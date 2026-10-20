@@ -112,12 +112,16 @@ export const CollaboratorBar: React.FC<CollaboratorBarProps> = ({ onToggleMobile
                       <span className="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1" />
                       Estimativa
                     </span>
-                  ) : liveExchangeRate ? (
+                  ) : liveExchangeRate && !liveExchangeRate.isEstimate ? (
                     <span className="inline-flex items-center px-1.5 py-0.2 rounded-full text-[8px] sm:text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200/60 leading-none">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1 animate-pulse" />
                       Ao Vivo
                     </span>
-                  ) : null}
+                  ) : (
+                    <span className="inline-flex items-center px-1.5 py-0.2 rounded-full text-[8px] sm:text-[9px] font-bold bg-slate-100 text-slate-600 border border-slate-200 leading-none">
+                      Indisponível
+                    </span>
+                  )}
                 </div>
                 <div className="flex items-baseline gap-1 sm:gap-1.5">
                   <span className="text-xs sm:text-sm font-bold text-[#1A2B4C] whitespace-nowrap group-hover:text-[#D4AF37] transition-colors">
@@ -142,13 +146,19 @@ export const CollaboratorBar: React.FC<CollaboratorBarProps> = ({ onToggleMobile
                 <div className="absolute left-0 mt-2 w-72 sm:w-80 bg-white rounded-xl shadow-2xl border border-slate-200 p-4 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
                   <div className="flex items-center justify-between pb-2 border-b border-slate-100 mb-3">
                     <div className="flex items-center gap-2">
-                      <span className={`w-2 h-2 rounded-full ${liveExchangeRate?.isEstimate ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse'}`} />
+                      <span className={`w-2 h-2 rounded-full ${
+                        isFetchingExchangeRate ? 'bg-amber-500 animate-spin' :
+                        liveExchangeRate?.isEstimate ? 'bg-amber-500' :
+                        liveExchangeRate ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
+                      }`} />
                       <span className="text-xs font-bold text-[#1A2B4C] uppercase tracking-wide">
-                        {liveExchangeRate?.isEstimate ? 'Cotação Estimada (Não Consultada)' : 'Cotação Comercial do Dia'}
+                        {isFetchingExchangeRate ? 'Consultando Câmbio...' :
+                         liveExchangeRate?.isEstimate ? 'Cotação Estimada (Não Consultada)' :
+                         liveExchangeRate ? 'Cotação Comercial do Dia' : 'Cotação Indisponível'}
                       </span>
                     </div>
                     <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
-                      {liveExchangeRate?.source || 'Cotação Comercial'}
+                      {liveExchangeRate?.source || (isFetchingExchangeRate ? 'Buscando...' : 'Indisponível')}
                     </span>
                   </div>
 
@@ -179,7 +189,12 @@ export const CollaboratorBar: React.FC<CollaboratorBarProps> = ({ onToggleMobile
                   </div>
 
                   <div className="space-y-2 pt-2 border-t border-slate-100">
-                    {liveExchangeRate?.isEstimate ? (
+                    {isFetchingExchangeRate ? (
+                      <div className="flex items-center gap-1.5 text-amber-700 text-[11px] font-semibold">
+                        <span className="w-2 h-2 rounded-full bg-amber-500 animate-spin shrink-0" />
+                        <span>Consulta em andamento...</span>
+                      </div>
+                    ) : liveExchangeRate?.isEstimate ? (
                       <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-[11px] space-y-2">
                         <span className="font-semibold block">⚠️ Cotação não consultada (Estimativa). Não aplicada automaticamente.</span>
                         <button
@@ -195,10 +210,15 @@ export const CollaboratorBar: React.FC<CollaboratorBarProps> = ({ onToggleMobile
                           Confirmar e Aplicar Taxa Estimada
                         </button>
                       </div>
-                    ) : (
+                    ) : liveExchangeRate && !liveExchangeRate.isEstimate ? (
                       <div className="flex items-center gap-1.5 text-emerald-700 text-[11px] font-semibold">
                         <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                         <span>Cotação sincronizada em tempo real</span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5 text-slate-500 text-[11px] font-medium">
+                        <span className="w-2 h-2 rounded-full bg-slate-400 shrink-0" />
+                        <span>Cotação indisponível</span>
                       </div>
                     )}
 
