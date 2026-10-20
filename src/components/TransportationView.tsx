@@ -35,6 +35,7 @@ import {
   Train,
   Ticket,
   Eye,
+  RefreshCw,
 } from 'lucide-react';
 
 export const TransportationView: React.FC = () => {
@@ -197,19 +198,29 @@ export const TransportationView: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const handleSubmitModal = (e: React.FormEvent) => {
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleSubmitModal = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanedData = {
-      ...formData,
-      pickupLocation: cleanAddressString(formData.pickupLocation),
-      dropoffLocation: cleanAddressString(formData.dropoffLocation),
-    };
-    if (editingRental) {
-      updateCarRental(editingRental.id, cleanedData);
-    } else {
-      addCarRental(cleanedData);
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      const cleanedData = {
+        ...formData,
+        pickupLocation: cleanAddressString(formData.pickupLocation),
+        dropoffLocation: cleanAddressString(formData.dropoffLocation),
+      };
+      if (editingRental) {
+        await updateCarRental(editingRental.id, cleanedData);
+      } else {
+        await addCarRental(cleanedData);
+      }
+      setIsModalOpen(false);
+    } catch (err) {
+      // handle error
+    } finally {
+      setIsSaving(false);
     }
-    setIsModalOpen(false);
   };
 
   const handleAddAttachment = (e: React.FormEvent) => {
@@ -1553,10 +1564,20 @@ export const TransportationView: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white font-bold text-xs shadow-md hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer"
+                  disabled={isSaving}
+                  className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white font-bold text-xs shadow-md hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
-                  <span>Salvar</span>
+                  {isSaving ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 text-[#D4AF37] animate-spin" />
+                      <span>Salvando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
+                      <span>Salvar</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

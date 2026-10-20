@@ -225,49 +225,59 @@ export const AccommodationsView: React.FC = () => {
     }
   };
 
+  const [isSaving, setIsSaving] = useState(false);
+
   const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
-    const accName = formData.name.trim() || 'Nova Hospedagem';
-    const dataToSave = { ...formData, name: accName };
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      const accName = formData.name.trim() || 'Nova Hospedagem';
+      const dataToSave = { ...formData, name: accName };
 
-    // Validate check-in and check-out dates based on fixed vs flexible trip settings
-    const isFlexible = !!settings.isFlexibleDates;
-    let minDate: string;
-    let maxDate: string;
+      // Validate check-in and check-out dates based on fixed vs flexible trip settings
+      const isFlexible = !!settings.isFlexibleDates;
+      let minDate: string;
+      let maxDate: string;
 
-    if (isFlexible) {
-      minDate = settings.flexibleOutboundStart || settings.startDate || '2026-12-30';
-      maxDate = settings.flexibleInboundEnd || (settings.startDate ? calculateDateOffset(settings.startDate, settings.durationDays) : '2027-01-11');
-    } else {
-      minDate = settings.startDate || '2026-12-30';
-      maxDate = settings.startDate ? calculateDateOffset(settings.startDate, settings.durationDays) : '2027-01-11';
+      if (isFlexible) {
+        minDate = settings.flexibleOutboundStart || settings.startDate || '2026-12-30';
+        maxDate = settings.flexibleInboundEnd || (settings.startDate ? calculateDateOffset(settings.startDate, settings.durationDays) : '2027-01-11');
+      } else {
+        minDate = settings.startDate || '2026-12-30';
+        maxDate = settings.startDate ? calculateDateOffset(settings.startDate, settings.durationDays) : '2027-01-11';
+      }
+
+      if (dataToSave.checkInDate < minDate || dataToSave.checkInDate > maxDate) {
+        dataToSave.checkInDate = minDate;
+      }
+      if (dataToSave.checkOutDate < minDate || dataToSave.checkOutDate > maxDate) {
+        dataToSave.checkOutDate = maxDate;
+      }
+      if (dataToSave.checkOutDate < dataToSave.checkInDate) {
+        dataToSave.checkOutDate = dataToSave.checkInDate;
+      }
+
+      setValidationError(null);
+
+      let res: { success: boolean; error?: string };
+      if (editingAcc) {
+        res = await updateAccommodation(editingAcc.id, dataToSave);
+      } else {
+        res = await addAccommodation(dataToSave);
+      }
+
+      if (res && res.success === false) {
+        setValidationError(res.error || 'Erro ao salvar hospedagem no Supabase.');
+        return;
+      }
+
+      setIsModalOpen(false);
+    } catch (err: any) {
+      setValidationError(err?.message || 'Erro inesperado ao salvar hospedagem.');
+    } finally {
+      setIsSaving(false);
     }
-
-    if (dataToSave.checkInDate < minDate || dataToSave.checkInDate > maxDate) {
-      dataToSave.checkInDate = minDate;
-    }
-    if (dataToSave.checkOutDate < minDate || dataToSave.checkOutDate > maxDate) {
-      dataToSave.checkOutDate = maxDate;
-    }
-    if (dataToSave.checkOutDate < dataToSave.checkInDate) {
-      dataToSave.checkOutDate = dataToSave.checkInDate;
-    }
-
-    setValidationError(null);
-
-    let res: { success: boolean; error?: string };
-    if (editingAcc) {
-      res = await updateAccommodation(editingAcc.id, dataToSave);
-    } else {
-      res = await addAccommodation(dataToSave);
-    }
-
-    if (res && res.success === false) {
-      setValidationError(res.error || 'Erro ao salvar hospedagem no Supabase.');
-      return;
-    }
-
-    setIsModalOpen(false);
   };
 
   const handleCopyCode = (id: string, code: string) => {
@@ -1442,10 +1452,20 @@ export const AccommodationsView: React.FC = () => {
                   </button>
                   <button
                     type="submit"
-                    className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md"
+                    disabled={isSaving}
+                    className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
-                    <span>Salvar</span>
+                    {isSaving ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 text-[#D4AF37] animate-spin" />
+                        <span>Salvando...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
+                        <span>Salvar</span>
+                      </>
+                    )}
                   </button>
                 </div>
               </div>
