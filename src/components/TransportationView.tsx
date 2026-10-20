@@ -199,10 +199,15 @@ export const TransportationView: React.FC = () => {
 
   const handleSubmitModal = (e: React.FormEvent) => {
     e.preventDefault();
+    const cleanedData = {
+      ...formData,
+      pickupLocation: cleanAddressString(formData.pickupLocation),
+      dropoffLocation: cleanAddressString(formData.dropoffLocation),
+    };
     if (editingRental) {
-      updateCarRental(editingRental.id, formData);
+      updateCarRental(editingRental.id, cleanedData);
     } else {
-      addCarRental(formData);
+      addCarRental(cleanedData);
     }
     setIsModalOpen(false);
   };
@@ -1437,22 +1442,6 @@ export const TransportationView: React.FC = () => {
                         }}
                         className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono font-bold text-[#1A2B4C] shadow-2xs focus:outline-none focus:ring-2 focus:ring-[#1A2B4C]/50"
                       />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] font-bold text-slate-700 block flex items-center justify-between">
-                        Status do Pagamento
-                        <span className="opacity-0 text-[9px] font-mono">_</span>
-                      </label>
-                      <select
-                        value={formData.status}
-                        onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#1A2B4C]/50 h-[36px]"
-                      >
-                        <option value="Reservado / Confirmado">✅ Reservado / Confirmado</option>
-                        <option value="Pago">💰 Pago / Emitido</option>
-                        <option value="Pendente">⏳ Pagamento Pendente</option>
-                        <option value="Falta Pagar">⚠️ Falta Pagar</option>
-                      </select>
                     </div>
                   </div>
                   <div className="space-y-1.5">

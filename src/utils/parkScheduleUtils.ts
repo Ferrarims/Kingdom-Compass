@@ -3349,8 +3349,8 @@ export function syncAllEventsToHourlySchedule(
           const driveNotes = isIdenticalAddr
             ? `⚠️ Divergência no cadastro (Endereço não validado): O endereço cadastrado para ${fromName} (${fromAddr}) é idêntico ao do ${toName}.`
             : isMiamiToKissimmee
-            ? `Deslocamento Miami ➔ Kissimmee. Estimativa registrada/manual de referência: ${conservativeMins} min (${durationFormatted}) sem tráfego ao vivo (cálculo interno por distância e velocidade média, sem consulta atual de OSRM ou Google Maps). Partida às ${departureTime} prevê chegada estimada às ${arrivalTimeEst}, deixando uma margem de ${marginMins} minutos até o check-in das ${officialCheckIn}. Para sincronizar este evento e o endereço real no banco sem duplicatas, clique em 'Salvar' no roteiro do Dia 3 pela interface. Origem: ${fromName} (${fromAddr}). Destino: ${toName} (${toAddr}).`
-            : `Trajeto de carro estimado (cálculo interno por distância e velocidade média): ~${conservativeMins} min. Destino: ${toAddr || toName}. Para sincronizar, clique em 'Salvar' no roteiro.`;
+            ? `Deslocamento Miami ➔ Kissimmee. Estimativa registrada/manual de referência: ${conservativeMins} min (${durationFormatted}) sem tráfego ao vivo (cálculo interno por distância e velocidade média, sem consulta atual de OSRM ou Google Maps). Partida às ${departureTime} prevê chegada estimada às ${arrivalTimeEst}, deixando uma margem de ${marginMins} minutos até o check-in das ${officialCheckIn}. Origem: ${fromName} (${fromAddr}). Destino: ${toName} (${toAddr}).`
+            : `Trajeto de carro estimado (cálculo interno por distância e velocidade média): ~${conservativeMins} min. Destino: ${toAddr || toName}.`;
 
           const splitDriveItem: HourlyScheduleItem = {
             id: `auto-acc-split-drive-${day.date}`,
