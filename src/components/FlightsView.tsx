@@ -229,7 +229,7 @@ export const FlightsView: React.FC = () => {
       terminalOrigin: flight.terminalOrigin || '',
       terminalDestination: flight.terminalDestination || '',
       gate: flight.gate || '',
-      baggageAllowance: flight.baggageAllowance || '',
+      baggageAllowance: flight.baggageAllowance || { personalItem: true, carryOnQty: 1, checkedQty: 1, notes: '' },
       status: flight.status,
       ticketCostUSD: flight.ticketCostUSD || 0,
       ticketCostBRL: flight.ticketCostBRL || 0,

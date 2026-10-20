@@ -2611,9 +2611,25 @@ export function clearParkReferencesFromDay(
     if (!hasNightEnd) {
       const nightTitle = `🌙 Fim do dia na acomodação (${hotelTitle})`;
 
+      // Procura evento de check-in no cronograma para basear o fim do dia
+      const checkInItem = cleanedHourly.find((item) => 
+        (item.title.toLowerCase().includes('check-in') || item.title.toLowerCase().includes('checkin'))
+      );
+
+      let nightTime = '23:30'; // Fallback padrão caso não encontre check-in
+      if (checkInItem && checkInItem.time) {
+        nightTime = addMinutesToTimeString(checkInItem.time, 90);
+      } else {
+        // Fallback para check-in contratual da acomodação
+        const acc = tripContext?.accommodations?.find((a: any) => a.name === hotelTitle);
+        if (acc && acc.checkInTime) {
+          nightTime = addMinutesToTimeString(acc.checkInTime, 90);
+        }
+      }
+
       cleanedHourly.push({
         id: `auto-retorno-${dayKey}`,
-        time: '22:30',
+        time: nightTime,
         title: nightTitle,
         location: effectiveAccLoc,
         category: 'hotel',

@@ -628,6 +628,17 @@ export function mapFlightToDb(f: FlightSegment, tripId: string): Record<string, 
 }
 
 export function mapDbToFlight(row: any): FlightSegment {
+  let baggageAllowance: BaggageAllowance = {};
+  if (typeof row.baggage_allowance === 'string') {
+    try {
+      baggageAllowance = JSON.parse(row.baggage_allowance);
+    } catch {
+      baggageAllowance = { notes: row.baggage_allowance };
+    }
+  } else if (row.baggage_allowance && typeof row.baggage_allowance === 'object') {
+    baggageAllowance = row.baggage_allowance;
+  }
+
   return {
     id: row.id,
     type: row.type,
@@ -655,7 +666,7 @@ export function mapDbToFlight(row: any): FlightSegment {
     terminalOrigin: row.terminal_origin,
     terminalDestination: row.terminal_destination,
     gate: row.gate,
-    baggageAllowance: typeof row.baggage_allowance === 'string' ? row.baggage_allowance : (row.baggage_allowance ? JSON.stringify(row.baggage_allowance) : ''),
+    baggageAllowance,
     status: row.status,
     ticketCostUSD: row.ticket_cost_usd ? Number(row.ticket_cost_usd) : undefined,
     ticketCostBRL: row.ticket_cost_brl ? Number(row.ticket_cost_brl) : undefined,

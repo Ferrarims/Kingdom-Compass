@@ -354,6 +354,13 @@ export interface ParkInfo {
   parkType?: 'Temático' | 'Aquático' | 'Experiência Imersiva' | 'Ciência & Espaço';
 }
 
+export interface BaggageAllowance {
+  personalItem?: boolean;
+  carryOnQty?: number;
+  checkedQty?: number;
+  notes?: string;
+}
+
 export interface FlightSegment {
   id: string;
   type: 'outbound' | 'inbound' | 'internal' | 'connection';
@@ -388,7 +395,7 @@ export interface FlightSegment {
   terminalOrigin?: string;
   terminalDestination?: string;
   gate?: string;
-  baggageAllowance?: string | { personalItem?: boolean; carryOnQty?: number; checkedQty?: number; notes?: string };
+  baggageAllowance?: BaggageAllowance;
 }
 
 export interface CarRentalBooking {
