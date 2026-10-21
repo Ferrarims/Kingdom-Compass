@@ -34,6 +34,7 @@ import { parseInputToNumber, formatInputDisplay } from '../utils/currency';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
 import { MoneyInput } from './MoneyInput';
 import { LogisticsCardHeader } from './LogisticsCardHeader';
+import { PaymentSection } from './PaymentSection';
 
 const getCheckInUrl = (airlineName: string) => {
   const name = (airlineName || '').toLowerCase();
@@ -77,6 +78,7 @@ export const FlightsView: React.FC = () => {
     currencyView,
     settings,
     openOverviewModal,
+    addNotification,
   } = usePlanner();
 
   // Determine min and max allowed dates for the active trip
@@ -322,6 +324,9 @@ export const FlightsView: React.FC = () => {
       
       if (result.success) {
         setModalOpen(false);
+        if (result.warning) {
+          addNotification(`⚠️ ${result.warning}`);
+        }
       } else {
         setSaveError(result.error || 'Erro ao salvar voo');
       }
@@ -1598,10 +1603,10 @@ export const FlightsView: React.FC = () => {
                   </div>
                 </div>
 
-                {/* 6. BAGAGEM, CUSTOS & PAGAMENTO */}
+                {/* 6. BAGAGEM */}
                 <div className="space-y-2">
                   <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 block">
-                    6. BAGAGEM, CUSTOS & PAGAMENTO
+                    6. BAGAGEM
                   </span>
                   <div className="bg-slate-50/80 border border-slate-200/90 rounded-xl p-4 sm:p-5 space-y-4">
                     {/* Franquia de bagagem (2 colunas para campos relacionados) */}
@@ -1625,6 +1630,9 @@ export const FlightsView: React.FC = () => {
                           }
                           className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] transition-all"
                         />
+                        <span className="text-[10px] text-slate-400 block mt-1">
+                          Bagagem acomodada no bagageiro superior da cabine
+                        </span>
                       </div>
 
                       <div>
@@ -1646,143 +1654,102 @@ export const FlightsView: React.FC = () => {
                           }
                           className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] transition-all"
                         />
+                        <span className="text-[10px] text-slate-400 block mt-1">
+                          Bagagem despachada no balcão de check-in
+                        </span>
                       </div>
                     </div>
 
-                    {/* Custos e Status do Pagamento (3 colunas para campos curtos) */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-slate-200/70">
-                      <div>
-                        <div className="flex items-center justify-between mb-1.5">
-                          <label className="text-xs font-semibold text-slate-600">
-                            Valor por Passageiro (US$)
-                          </label>
-                          <span className="text-[10px] text-slate-400 font-mono">USD/pessoa</span>
-                        </div>
-                        <MoneyInput
-                          currency="USD"
-                          value={unitCostUSD}
-                          className="!bg-white !border-slate-200 !rounded-lg !text-slate-800 !h-10 !text-xs !font-medium focus:!ring-[#D4AF37]/50 focus:!border-[#D4AF37]"
-                          onChange={(val) => {
-                            setUnitCostUSD(val);
-                            const rate = settings.dollarRate || 5.75;
-                            const brl = val !== null ? Math.round(val * rate * 100) / 100 : null;
-                            setUnitCostBRL(brl);
-                            
-                            const travelers = settings.travelers || [];
-                            const q = (formData.travelerIds?.includes('all') ? travelers.length : formData.travelerIds?.length) || travelers.length || 1;
+                    {/* Observações da Franquia & Item Pessoal */}
+                    <div className="pt-3 border-t border-slate-200/70 space-y-3">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="flightPersonalItem"
+                          checked={formData.baggageAllowance.personalItem}
+                          onChange={(e) =>
                             setFormData({
                               ...formData,
-                              ticketCostUSD: val !== null ? val * q : null,
-                              ticketCostBRL: brl !== null ? brl * q : null
-                            });
-                          }}
+                              baggageAllowance: {
+                                ...formData.baggageAllowance,
+                                personalItem: e.target.checked,
+                              },
+                            })
+                          }
+                          className="w-4 h-4 rounded border-slate-300 text-[#1A2B4C] focus:ring-[#D4AF37] cursor-pointer"
                         />
-                        <span className="text-[10px] text-slate-400 block mt-1">
-                          Cotação: R$ {(settings.dollarRate || 5.75).toFixed(2)}
-                        </span>
-                      </div>
-
-                      <div>
-                        <div className="flex items-center justify-between mb-1.5">
-                          <label className="text-xs font-semibold text-slate-600">
-                            Valor por Passageiro (R$)
-                          </label>
-                          <span className="text-[10px] text-slate-400 font-mono">BRL/pessoa</span>
-                        </div>
-                        <MoneyInput
-                          currency="BRL"
-                          value={unitCostBRL}
-                          className="!bg-white !border-slate-200 !rounded-lg !text-slate-800 !h-10 !text-xs !font-medium focus:!ring-[#D4AF37]/50 focus:!border-[#D4AF37]"
-                          onChange={(val) => {
-                            setUnitCostBRL(val);
-                            const rate = settings.dollarRate || 5.75;
-                            const usd = val !== null && rate > 0 ? Math.round((val / rate) * 100) / 100 : null;
-                            setUnitCostUSD(usd);
-
-                            const travelers = settings.travelers || [];
-                            const q = (formData.travelerIds?.includes('all') ? travelers.length : formData.travelerIds?.length) || travelers.length || 1;
-                            setFormData({
-                              ...formData,
-                              ticketCostBRL: val !== null ? val * q : null,
-                              ticketCostUSD: usd !== null ? usd * q : null
-                            });
-                          }}
-                        />
-                        <span className="text-[10px] text-slate-400 block mt-1">
-                          Conversão automática
-                        </span>
+                        <label htmlFor="flightPersonalItem" className="text-xs font-medium text-slate-700 cursor-pointer select-none">
+                          Item pessoal incluído (mochila ou bolsa sob o assento à frente)
+                        </label>
                       </div>
 
                       <div>
                         <label className="block text-xs font-semibold text-slate-600 mb-1.5">
-                          Status do Pagamento
+                          Observações da Franquia de Bagagem
                         </label>
-                        <select
-                          value={formData.paymentStatus || 'Não informado'}
-                          onChange={(e) => setFormData({ ...formData, paymentStatus: e.target.value as FlightPaymentStatus })}
-                          className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] cursor-pointer transition-all"
-                        >
-                          <option value="Não informado">⚪ Não informado</option>
-                          <option value="Pendente">⏳ Pendente / Não pago</option>
-                          <option value="Pago">✅ Pago</option>
-                        </select>
-                        <span className="text-[10px] text-slate-400 block mt-1">
-                          Situação financeira do bilhete
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Resumo Financeiro & Pagador */}
-                    <div className="pt-4 border-t border-slate-200/70 space-y-3">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3 rounded-lg border border-slate-200/80">
-                        <div className="text-xs text-slate-600 font-medium flex items-center gap-2">
-                          <Users className="w-4 h-4 text-slate-400 shrink-0" />
-                          <span>
-                            Total calculado para <strong className="text-slate-800 font-semibold">{passengerCount}</strong> {passengerCount === 1 ? 'passageiro' : 'passageiros'}:
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2.5">
-                          <div className="bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 flex flex-col items-end min-w-[110px]">
-                            <span className="text-[10px] text-slate-500 uppercase font-semibold tracking-wider">Total USD</span>
-                            <span className="text-xs font-mono font-bold text-emerald-700">
-                              US$ {(formData.ticketCostUSD || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </span>
-                          </div>
-                          <div className="bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 flex flex-col items-end min-w-[110px]">
-                            <span className="text-[10px] text-slate-500 uppercase font-semibold tracking-wider">Total BRL</span>
-                            <span className="text-xs font-mono font-bold text-[#1A2B4C]">
-                              R$ {(formData.ticketCostBRL || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="pt-3 border-t border-slate-200/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                        <div className="flex items-center gap-2">
-                          <CreditCard className="w-4 h-4 text-slate-400 shrink-0" />
-                          <label className="text-xs font-semibold text-slate-700">
-                            Responsável pelo Pagamento
-                          </label>
-                        </div>
-                        <select
-                          value={formData.payerId || 'all'}
-                          onChange={(e) => setFormData({ ...formData, payerId: e.target.value })}
-                          className="h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] cursor-pointer min-w-[220px] transition-all"
-                        >
-                          <option value="all">👥 Dividido pelo grupo</option>
-                          {travelersList.map((t) => (
-                            <option key={t.id} value={t.id}>👤 {t.name}</option>
-                          ))}
-                        </select>
+                        <input
+                          type="text"
+                          value={formData.baggageAllowance.notes || ''}
+                          onChange={(e) =>
+                            setFormData({
+                              ...formData,
+                              baggageAllowance: {
+                                ...formData.baggageAllowance,
+                                notes: e.target.value,
+                              },
+                            })
+                          }
+                          placeholder="Ex: Franquia adicional concedida por categoria fidelidade ou cartão parceiro"
+                          className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] transition-all"
+                        />
                       </div>
                     </div>
                   </div>
                 </div>
 
-                {/* 7. OBSERVAÇÕES */}
+                {/* 7. CUSTOS & PAGAMENTO (Bloco Compartilhado Reutilizável) */}
+                <PaymentSection
+                  sectionNumber={7}
+                  sectionTitle="CUSTOS & PAGAMENTO"
+                  dollarRate={settings.dollarRate || 5.75}
+                  unitCostUSD={unitCostUSD}
+                  unitCostBRL={unitCostBRL}
+                  totalCostUSD={formData.ticketCostUSD ?? null}
+                  totalCostBRL={formData.ticketCostBRL ?? null}
+                  onChangeCosts={(unitUSD, unitBRL, totUSD, totBRL) => {
+                    setUnitCostUSD(unitUSD);
+                    setUnitCostBRL(unitBRL);
+                    setFormData({
+                      ...formData,
+                      ticketCostUSD: totUSD,
+                      ticketCostBRL: totBRL,
+                    });
+                  }}
+                  paymentStatus={formData.paymentStatus || 'Não informado'}
+                  onChangePaymentStatus={(status) => {
+                    setFormData({
+                      ...formData,
+                      paymentStatus: status,
+                    });
+                  }}
+                  payerId={formData.payerId || 'all'}
+                  onChangePayerId={(payerId) => {
+                    setFormData({
+                      ...formData,
+                      payerId,
+                    });
+                  }}
+                  travelers={travelersList}
+                  passengerCount={passengerCount}
+                  passengerLabel="passageiro"
+                  unitLabelUSD="Valor por Passageiro (US$)"
+                  unitLabelBRL="Valor por Passageiro (R$)"
+                />
+
+                {/* 8. OBSERVAÇÕES */}
                 <div className="space-y-2">
                   <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 block">
-                    7. OBSERVAÇÕES
+                    8. OBSERVAÇÕES
                   </span>
                   <div className="bg-slate-50/80 border border-slate-200/90 rounded-xl p-4 sm:p-5">
                     <label className="block text-xs font-semibold text-slate-600 mb-1.5">

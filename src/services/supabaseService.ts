@@ -2087,7 +2087,7 @@ export const SupabaseService = {
     tripId: string,
     flight: FlightSegment,
     fallbackTrip?: Partial<Trip>
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; error?: string; warning?: string }> {
     try {
       if (!tripId || !flight) {
         return { success: false, error: 'tripId ou dados do voo ausentes' };
@@ -2137,12 +2137,16 @@ export const SupabaseService = {
         .from('flight_segments')
         .upsert(dbRow, { onConflict: 'id' });
 
+      let paymentStatusNotPersisted = false;
       // Fallback gracioso se a coluna payment_status ainda não foi criada no Supabase via migração SQL
       if (error && (error.message?.includes('payment_status') || error.details?.includes('payment_status') || error.code === 'PGRST204')) {
         const fallbackRow = { ...dbRow };
         delete fallbackRow.payment_status;
         const retryRes = await supabase.from('flight_segments').upsert(fallbackRow, { onConflict: 'id' });
         error = retryRes.error;
+        if (!error) {
+          paymentStatusNotPersisted = true;
+        }
       }
 
       if (error) {
@@ -2164,6 +2168,13 @@ export const SupabaseService = {
         status: expenseStatus,
         notes: `Trecho: ${flight.originCity || flight.originAirport || 'Origem'} ➔ ${flight.destinationCity || flight.destinationAirport || 'Destino'}`
       }, fallbackTrip);
+
+      if (paymentStatusNotPersisted) {
+        return {
+          success: true,
+          warning: 'O voo foi salvo, mas o status de pagamento não pôde ser persistido porque a coluna "payment_status" ainda não existe no Supabase. Execute o script SQL de migração.'
+        };
+      }
 
       return { success: true };
     } catch (err: any) {

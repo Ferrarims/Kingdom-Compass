@@ -575,8 +575,8 @@ interface PlannerContextType {
 
   // Flights
   flights: FlightSegment[];
-  addFlight: (flight: Omit<FlightSegment, 'id'>) => Promise<{ success: boolean; error?: string }>;
-  updateFlight: (id: string, updates: Partial<FlightSegment>) => Promise<{ success: boolean; error?: string }>;
+  addFlight: (flight: Omit<FlightSegment, 'id'>) => Promise<{ success: boolean; error?: string; warning?: string }>;
+  updateFlight: (id: string, updates: Partial<FlightSegment>) => Promise<{ success: boolean; error?: string; warning?: string }>;
   deleteFlight: (id: string) => void;
 
   // Car Rentals & Transportation
@@ -4455,7 +4455,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     });
   };
 
-  const addFlight = async (flight: Omit<FlightSegment, 'id'>): Promise<{ success: boolean; error?: string }> => {
+  const addFlight = async (flight: Omit<FlightSegment, 'id'>): Promise<{ success: boolean; error?: string; warning?: string }> => {
     const prevFlights = [...flights];
     const prevTrips = [...trips];
     const prevRawDays = [...rawDays];
@@ -4473,6 +4473,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     syncFlightExpense(newFlight, settings.dollarRate || 5.75);
 
+    let saveWarning: string | undefined;
     if (activeTripId) {
       const fallbackTrip = activeTrip || {
         id: activeTripId,
@@ -4492,6 +4493,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         const result = await SupabaseService.saveFlight(activeTripId, newFlight, fallbackTrip);
         if (!result.success) {
           throw new Error(result.error || 'Erro desconhecido');
+        }
+        if (result.warning) {
+          saveWarning = result.warning;
+          addNotification(`⚠️ ${result.warning}`);
         }
       } catch (e: any) {
         setFlights(prevFlights);
@@ -4553,10 +4558,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     });
 
     addNotification(`Adicionou ${newFlight.typeLabel || 'voo'} (${newFlight.flightNumber}) e sincronizou no roteiro`);
-    return { success: true };
+    return { success: true, warning: saveWarning };
   };
 
-  const updateFlight = async (id: string, updates: Partial<FlightSegment>): Promise<{ success: boolean; error?: string }> => {
+  const updateFlight = async (id: string, updates: Partial<FlightSegment>): Promise<{ success: boolean; error?: string; warning?: string }> => {
     const prevFlights = [...flights];
     const prevTrips = [...trips];
     const prevRawDays = [...rawDays];
@@ -4576,6 +4581,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       prevTrips.map((t) => (t.id === activeTripId ? { ...t, flights: nextFlights } : t))
     );
 
+    let saveWarning: string | undefined;
     if (savedUpdated) {
       syncFlightExpense(savedUpdated, settings.dollarRate || 5.75);
       if (activeTripId) {
@@ -4600,6 +4606,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           setRawDays(prevRawDays);
           setExpenses(prevExpenses);
           return result;
+        }
+        if (result.warning) {
+          saveWarning = result.warning;
+          addNotification(`⚠️ ${result.warning}`);
         }
       }
     }
@@ -4655,7 +4665,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     });
 
     addNotification(`Atualizou informações do voo e sincronizou no roteiro`);
-    return { success: true };
+    return { success: true, warning: saveWarning };
   };
 
   const deleteFlight = (id: string) => {
