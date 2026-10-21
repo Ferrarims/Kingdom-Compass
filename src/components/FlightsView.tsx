@@ -31,7 +31,6 @@ import { usePlanner, formatDisplayDate, getTripEndDate } from '../context/Planne
 import { FlightSegment } from '../types';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { parseInputToNumber, formatInputDisplay } from '../utils/currency';
-import { TravelerSelector } from './TravelerSelector';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
 import { MoneyInput } from './MoneyInput';
 import { LogisticsCardHeader } from './LogisticsCardHeader';
@@ -313,6 +312,41 @@ export const FlightsView: React.FC = () => {
     onCancel: () => setModalOpen(false),
     onSave: () => handleSaveFlight({ preventDefault: () => {} } as React.FormEvent),
   });
+
+  const travelersList = settings.travelers || [];
+  const isAllTravelersSelected = !formData.travelerIds || formData.travelerIds.includes('all');
+  const passengerCount = (formData.travelerIds?.includes('all') ? travelersList.length : formData.travelerIds?.length) || travelersList.length || 1;
+
+  const handleToggleTraveler = (id: string) => {
+    let nextIds: string[];
+    if (id === 'all') {
+      nextIds = ['all'];
+    } else {
+      let current = (formData.travelerIds || ['all']).filter((sid) => sid !== 'all');
+      if (current.includes(id)) {
+        current = current.filter((sid) => sid !== id);
+        if (current.length === 0) current = ['all'];
+      } else {
+        current.push(id);
+      }
+      nextIds = current;
+    }
+    const passengers = nextIds.includes('all')
+      ? travelersList.map(t => t.name)
+      : travelersList.filter(t => nextIds.includes(t.id)).map(t => t.name);
+
+    const q = nextIds.includes('all') ? travelersList.length : nextIds.length;
+    const unitUSD = parseInputToNumber(unitCostUSD);
+    const unitBRL = parseInputToNumber(unitCostBRL);
+
+    setFormData({ 
+      ...formData, 
+      travelerIds: nextIds, 
+      passengers,
+      ticketCostUSD: unitUSD !== null ? unitUSD * q : null,
+      ticketCostBRL: unitBRL !== null ? unitBRL * q : null
+    });
+  };
 
   // Financial Summary for Flights
   const totalFlightsCostBRL = useMemo(() => {
@@ -1032,19 +1066,19 @@ export const FlightsView: React.FC = () => {
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-6xl overflow-hidden h-[90vh] max-h-[92vh] flex flex-col my-auto animate-in fade-in zoom-in-95 duration-150"
+            className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-4xl lg:max-w-5xl overflow-hidden h-[90vh] max-h-[92vh] flex flex-col my-auto animate-in fade-in zoom-in-95 duration-150"
           >
-            {/* Modal Header */}
-            <div className="bg-[#1A2B4C] text-white p-5 sm:p-6 flex items-center justify-between border-b border-[#D4AF37]/30 shrink-0">
+            {/* Cabeçalho fixo azul-marinho com ícone, categoria em dourado e título */}
+            <div className="bg-[#1A2B4C] text-white px-5 py-4 sm:px-6 sm:py-5 flex items-center justify-between border-b border-[#D4AF37]/30 shrink-0">
               <div className="flex items-center gap-3">
-                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-[#D4AF37]/20 border border-[#D4AF37]/40 flex items-center justify-center text-[#D4AF37] shrink-0">
-                  <Plane className="w-6 h-6" />
+                <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-[#D4AF37]/20 border border-[#D4AF37]/40 flex items-center justify-center text-[#D4AF37] shrink-0">
+                  <Plane className="w-5 h-5 sm:w-6 sm:h-6" />
                 </div>
                 <div>
-                  <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-[#D4AF37] block">
-                    {editingFlight ? 'Edição de Trecho Aéreo' : 'Novo Cadastro de Voo'} • {formData.typeLabel}
+                  <span className="text-[10px] sm:text-xs font-semibold uppercase tracking-wider text-[#D4AF37] block">
+                    {editingFlight ? 'Edição de Reserva Aérea' : 'Nova Reserva de Voo'} • {formData.typeLabel}
                   </span>
-                  <h2 className="text-base sm:text-xl font-bold font-serif text-white tracking-tight">
+                  <h2 className="text-base sm:text-lg font-bold font-serif text-white tracking-tight">
                     {editingFlight ? 'Editar Voo / Trecho' : 'Cadastrar Novo Voo / Trecho'}
                   </h2>
                 </div>
@@ -1053,587 +1087,674 @@ export const FlightsView: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setModalOpen(false)}
-                className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
+                className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-white/10 hover:bg-white/20 text-white/80 hover:text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
                 aria-label="Fechar"
               >
-                <X className="w-5 h-5" />
+                <X className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
             </div>
 
+            {/* Conteúdo branco, rolável e limitado à altura da tela */}
             <form onSubmit={handleSaveFlight} className="flex flex-col flex-1 min-h-0 overflow-hidden text-slate-700">
-              <div className="p-5 sm:p-6 space-y-6 flex-1 overflow-y-auto min-h-0 custom-scrollbar">
-              {/* 1. INFORMAÇÕES BÁSICAS */}
-              <div className="space-y-4">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-                  1. Informações Básicas do Voo (Tipo, Cia & PNR)
-                </label>
+              <div className="p-5 sm:p-6 space-y-5 flex-1 overflow-y-auto min-h-0 custom-scrollbar bg-white">
                 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                  {/* Type Label */}
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Tipo do Trecho</label>
-                    <select
-                      value={formData.typeLabel}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        let typeVal: 'outbound' | 'inbound' | 'connection' | 'extra' = 'outbound';
-                        if (val.includes('Volta')) typeVal = 'inbound';
-                        if (val.includes('Conexão')) typeVal = 'connection';
-                        if (val.includes('Interno')) typeVal = 'extra';
+                {/* 1. DADOS BÁSICOS & PNR */}
+                <div className="space-y-2">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 block">
+                    1. DADOS BÁSICOS & PNR
+                  </span>
+                  <div className="bg-slate-50/80 border border-slate-200/90 rounded-xl p-4 sm:p-5 space-y-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Tipo do Trecho */}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                          Tipo do Trecho
+                        </label>
+                        <select
+                          value={formData.typeLabel}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            let typeVal: 'outbound' | 'inbound' | 'connection' | 'extra' = 'outbound';
+                            if (val.includes('Volta')) typeVal = 'inbound';
+                            if (val.includes('Conexão')) typeVal = 'connection';
+                            if (val.includes('Interno')) typeVal = 'extra';
 
-                        setFormData({ ...formData, typeLabel: val, type: typeVal });
-                      }}
-                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 cursor-pointer"
-                    >
-                      <option value="Voo de Ida">Voo de Ida</option>
-                      <option value="Voo de Volta">Voo de Volta</option>
-                      <option value="Conexão / Escala">Conexão / Escala</option>
-                      <option value="Voo Interno / Extra">Voo Interno / Extra</option>
-                    </select>
-                  </div>
+                            setFormData({ ...formData, typeLabel: val, type: typeVal });
+                          }}
+                          className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] cursor-pointer transition-all"
+                        >
+                          <option value="Voo de Ida">Voo de Ida</option>
+                          <option value="Voo de Volta">Voo de Volta</option>
+                          <option value="Conexão / Escala">Conexão / Escala</option>
+                          <option value="Voo Interno / Extra">Voo Interno / Extra</option>
+                        </select>
+                      </div>
 
-                  {/* Airline */}
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Companhia Aérea</label>
-                    <input
-                      type="text"
-                      value={formData.airline}
-                      onChange={(e) => setFormData({ ...formData, airline: e.target.value })}
-                      placeholder="Ex: LATAM Airlines, Azul, American Airlines"
-                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                      required
-                    />
-                  </div>
+                      {/* Companhia Aérea */}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                          Companhia Aérea
+                        </label>
+                        <input
+                          type="text"
+                          value={formData.airline}
+                          onChange={(e) => setFormData({ ...formData, airline: e.target.value })}
+                          placeholder="Ex: LATAM Airlines, Azul, American Airlines"
+                          className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] transition-all"
+                          required
+                        />
+                      </div>
+                    </div>
 
-                  {/* Flight Number */}
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Número do Voo</label>
-                    <input
-                      type="text"
-                      value={formData.flightNumber}
-                      onChange={(e) => setFormData({ ...formData, flightNumber: e.target.value.toUpperCase() })}
-                      placeholder="Ex: LA8126"
-                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                      required
-                    />
-                  </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Número do Voo */}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                          Número do Voo
+                        </label>
+                        <input
+                          type="text"
+                          value={formData.flightNumber}
+                          onChange={(e) => setFormData({ ...formData, flightNumber: e.target.value.toUpperCase() })}
+                          placeholder="Ex: LA8126"
+                          className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono font-semibold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] transition-all"
+                          required
+                        />
+                      </div>
 
-                  {/* PNR Locator */}
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Localizador de Reserva (PNR)</label>
-                    <input
-                      type="text"
-                      value={formData.pnrLocator}
-                      onChange={(e) => setFormData({ ...formData, pnrLocator: e.target.value.toUpperCase() })}
-                      placeholder="Ex: K9X2PZ"
-                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                    />
+                      {/* Localizador de Reserva (PNR) */}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                          Localizador de Reserva (PNR)
+                        </label>
+                        <input
+                          type="text"
+                          value={formData.pnrLocator}
+                          onChange={(e) => setFormData({ ...formData, pnrLocator: e.target.value.toUpperCase() })}
+                          placeholder="Ex: K9X2PZ"
+                          className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono font-semibold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] transition-all"
+                        />
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
 
-              {/* 2. ROTA: ORIGEM & DESTINO */}
-              <div className="space-y-4">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-                  2. Rota: Origem & Destino (Aeroportos)
-                </label>
+                {/* 2. ORIGEM & DESTINO */}
+                <div className="space-y-2">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 block">
+                    2. ORIGEM & DESTINO
+                  </span>
+                  <div className="bg-slate-50/80 border border-slate-200/90 rounded-xl p-4 sm:p-5">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      {/* Aeroporto de Origem */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-xs font-semibold text-slate-600">
+                            Aeroporto de Origem
+                          </label>
+                          {formData.originAirport && (
+                            <button
+                              type="button"
+                              onClick={() => setFormData({ ...formData, originAirport: '', originCity: '', originCode: '' })}
+                              className="text-[11px] text-rose-600 hover:underline cursor-pointer font-medium"
+                            >
+                              Limpar
+                            </button>
+                          )}
+                        </div>
+                        <input
+                          type="text"
+                          value={formData.originAirport}
+                          onChange={(e) => setFormData({ ...formData, originAirport: e.target.value })}
+                          placeholder="Ex: São Paulo - Guarulhos (GRU)"
+                          className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] transition-all"
+                          required
+                        />
+                        {/* Origin Quick Presets */}
+                        <div className="flex flex-wrap gap-1.5 mt-2">
+                          {(formData.type === 'inbound'
+                            ? [
+                                { label: '✈️ Orlando (MCO)', airport: 'Orlando International Airport (MCO)', city: 'Orlando', code: 'MCO', isFlorida: true },
+                                { label: '✈️ Miami (MIA)', airport: 'Miami International Airport (MIA)', city: 'Miami', code: 'MIA', isFlorida: true },
+                                { label: '✈️ Tampa (TPA)', airport: 'Tampa International Airport (TPA)', city: 'Tampa', code: 'TPA', isFlorida: true },
+                                { label: '✈️ Fort Lauderdale (FLL)', airport: 'Fort Lauderdale-Hollywood Int (FLL)', city: 'Fort Lauderdale', code: 'FLL', isFlorida: true },
+                              ]
+                            : [
+                                { label: 'GRU (Guarulhos)', airport: 'São Paulo - Guarulhos (GRU)', city: 'São Paulo', code: 'GRU', isFlorida: false },
+                                { label: 'VCP (Viracopos)', airport: 'Campinas - Viracopos (VCP)', city: 'Campinas', code: 'VCP', isFlorida: false },
+                                { label: 'GIG (Galeão)', airport: 'Rio de Janeiro - Galeão (GIG)', city: 'Rio de Janeiro', code: 'GIG', isFlorida: false },
+                                { label: 'BSB (Brasília)', airport: 'Brasília (BSB)', city: 'Brasília', code: 'BSB', isFlorida: false },
+                              ]
+                          ).map((item) => {
+                            const isSelected = formData.originCode === item.code || formData.originAirport.includes(item.code);
+                            const btnClass = item.isFlorida
+                              ? (isSelected 
+                                  ? 'bg-[#D4AF37] text-[#1A2B4C] font-semibold ring-1 ring-[#1A2B4C]/20' 
+                                  : 'bg-amber-50 hover:bg-[#1A2B4C] hover:text-white text-amber-900 border border-amber-200/80 font-medium')
+                              : (isSelected
+                                  ? 'bg-[#1A2B4C] text-white font-semibold ring-1 ring-[#D4AF37]/40'
+                                  : 'bg-white hover:bg-[#1A2B4C] hover:text-white text-slate-600 border border-slate-200 font-medium');
+                            return (
+                              <button
+                                key={item.code}
+                                type="button"
+                                onClick={() => {
+                                  if (isSelected) {
+                                    setFormData({
+                                      ...formData,
+                                      originAirport: '',
+                                      originCity: '',
+                                      originCode: '',
+                                    });
+                                  } else {
+                                    setFormData({
+                                      ...formData,
+                                      originAirport: item.airport,
+                                      originCity: item.city,
+                                      originCode: item.code,
+                                    });
+                                  }
+                                }}
+                                className={`px-2 py-1 rounded-md text-[10px] transition-all cursor-pointer ${btnClass}`}
+                                title={isSelected ? "Clique para desmarcar" : "Clique para selecionar"}
+                              >
+                                {item.label} {isSelected && '✕'}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="block text-[11px] font-bold text-slate-600">Aeroporto de Origem</label>
-                      {formData.originAirport && (
-                        <button
-                          type="button"
-                          onClick={() => setFormData({ ...formData, originAirport: '', originCity: '', originCode: '' })}
-                          className="text-[10px] text-rose-600 hover:underline cursor-pointer font-semibold"
-                        >
-                          Limpar
-                        </button>
-                      )}
+                      {/* Aeroporto de Destino */}
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-xs font-semibold text-slate-600">
+                            Aeroporto de Destino (Chegada)
+                          </label>
+                          {formData.destinationAirport && (
+                            <button
+                              type="button"
+                              onClick={() => setFormData({ ...formData, destinationAirport: '', destinationCity: '', destinationCode: '' })}
+                              className="text-[11px] text-rose-600 hover:underline cursor-pointer font-medium"
+                            >
+                              Limpar
+                            </button>
+                          )}
+                        </div>
+                        <input
+                          type="text"
+                          value={formData.destinationAirport}
+                          onChange={(e) => setFormData({ ...formData, destinationAirport: e.target.value })}
+                          placeholder="Ex: Orlando International (MCO), Miami (MIA) ou Tampa (TPA)"
+                          className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] transition-all"
+                          required
+                        />
+                        {/* Destination Airport Presets */}
+                        <div className="flex flex-wrap gap-1.5 mt-2">
+                          {(formData.type === 'inbound'
+                            ? [
+                                { label: 'GRU (Guarulhos)', airport: 'São Paulo - Guarulhos (GRU)', city: 'São Paulo', code: 'GRU', isFlorida: false },
+                                { label: 'VCP (Viracopos)', airport: 'Campinas - Viracopos (VCP)', city: 'Campinas', code: 'VCP', isFlorida: false },
+                                { label: 'GIG (Galeão)', airport: 'Rio de Janeiro - Galeão (GIG)', city: 'Rio de Janeiro', code: 'GIG', isFlorida: false },
+                                { label: 'BSB (Brasília)', airport: 'Brasília (BSB)', city: 'Brasília', code: 'BSB', isFlorida: false },
+                              ]
+                            : [
+                                { label: '✈️ Orlando (MCO)', airport: 'Orlando International Airport (MCO)', city: 'Orlando', code: 'MCO', isFlorida: true },
+                                { label: '✈️ Miami (MIA)', airport: 'Miami International Airport (MIA)', city: 'Miami', code: 'MIA', isFlorida: true },
+                                { label: '✈️ Tampa (TPA)', airport: 'Tampa International Airport (TPA)', city: 'Tampa', code: 'TPA', isFlorida: true },
+                                { label: '✈️ Fort Lauderdale (FLL)', airport: 'Fort Lauderdale-Hollywood Int (FLL)', city: 'Fort Lauderdale', code: 'FLL', isFlorida: true },
+                              ]
+                          ).map((item) => {
+                            const isSelected = formData.destinationCode === item.code || formData.destinationAirport.includes(item.code);
+                            const btnClass = item.isFlorida
+                              ? (isSelected 
+                                  ? 'bg-[#D4AF37] text-[#1A2B4C] font-semibold ring-1 ring-[#1A2B4C]/20' 
+                                  : 'bg-amber-50 hover:bg-[#1A2B4C] hover:text-white text-amber-900 border border-amber-200/80 font-medium')
+                              : (isSelected
+                                  ? 'bg-[#1A2B4C] text-white font-semibold ring-1 ring-[#D4AF37]/40'
+                                  : 'bg-white hover:bg-[#1A2B4C] hover:text-white text-slate-600 border border-slate-200 font-medium');
+                            return (
+                              <button
+                                key={item.code}
+                                type="button"
+                                onClick={() => {
+                                  if (isSelected) {
+                                    setFormData({
+                                      ...formData,
+                                      destinationAirport: '',
+                                      destinationCity: '',
+                                      destinationCode: '',
+                                    });
+                                  } else {
+                                    setFormData({
+                                      ...formData,
+                                      destinationAirport: item.airport,
+                                      destinationCity: item.city,
+                                      destinationCode: item.code,
+                                    });
+                                  }
+                                }}
+                                className={`px-2 py-1 rounded-md text-[10px] transition-all cursor-pointer ${btnClass}`}
+                                title={isSelected ? "Clique para desmarcar" : "Clique para selecionar"}
+                              >
+                                {item.label} {isSelected && '✕'}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
                     </div>
-                    <input
-                      type="text"
-                      value={formData.originAirport}
-                      onChange={(e) => setFormData({ ...formData, originAirport: e.target.value })}
-                      placeholder="Ex: São Paulo - Guarulhos (GRU)"
-                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                      required
-                    />
-                    {/* Origin Quick Presets */}
-                    <div className="flex flex-wrap gap-1 mt-1.5">
-                      {(formData.type === 'inbound'
-                        ? [
-                            { label: '✈️ Orlando (MCO)', airport: 'Orlando International Airport (MCO)', city: 'Orlando', code: 'MCO', isFlorida: true },
-                            { label: '✈️ Miami (MIA)', airport: 'Miami International Airport (MIA)', city: 'Miami', code: 'MIA', isFlorida: true },
-                            { label: '✈️ Tampa (TPA)', airport: 'Tampa International Airport (TPA)', city: 'Tampa', code: 'TPA', isFlorida: true },
-                            { label: '✈️ Fort Lauderdale (FLL)', airport: 'Fort Lauderdale-Hollywood Int (FLL)', city: 'Fort Lauderdale', code: 'FLL', isFlorida: true },
-                          ]
-                        : [
-                            { label: 'GRU (Guarulhos)', airport: 'São Paulo - Guarulhos (GRU)', city: 'São Paulo', code: 'GRU', isFlorida: false },
-                            { label: 'VCP (Viracopos)', airport: 'Campinas - Viracopos (VCP)', city: 'Campinas', code: 'VCP', isFlorida: false },
-                            { label: 'GIG (Galeão)', airport: 'Rio de Janeiro - Galeão (GIG)', city: 'Rio de Janeiro', code: 'GIG', isFlorida: false },
-                            { label: 'BSB (Brasília)', airport: 'Brasília (BSB)', city: 'Brasília', code: 'BSB', isFlorida: false },
-                          ]
-                      ).map((item) => {
-                        const isSelected = formData.originCode === item.code || formData.originAirport.includes(item.code);
-                        const btnClass = item.isFlorida
-                          ? (isSelected 
-                              ? 'bg-[#D4AF37] text-[#1A2B4C] font-bold ring-2 ring-[#1A2B4C]/20' 
-                              : 'bg-amber-50 hover:bg-[#1A2B4C] hover:text-white text-amber-900 border border-amber-200 font-bold')
-                          : (isSelected
-                              ? 'bg-[#1A2B4C] text-white font-semibold ring-2 ring-[#D4AF37]/40'
-                              : 'bg-slate-100 hover:bg-[#1A2B4C] hover:text-white text-slate-700 font-semibold');
+                  </div>
+                </div>
+
+                {/* 3. DATAS & HORÁRIOS */}
+                <div className="space-y-2">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 block">
+                    3. DATAS & HORÁRIOS
+                  </span>
+                  <div className="bg-slate-50/80 border border-slate-200/90 rounded-xl p-4 sm:p-5">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      {/* Partida */}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                          Data & Horário de Partida
+                        </label>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <input
+                            type="date"
+                            value={formData.departureDate}
+                            onChange={(e) => setFormData({ ...formData, departureDate: e.target.value })}
+                            min={tripMinDate}
+                            max={tripMaxDate}
+                            className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] transition-all"
+                          />
+                          <input
+                            type="time"
+                            value={formData.departureTime}
+                            onChange={(e) => setFormData({ ...formData, departureTime: e.target.value })}
+                            className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] transition-all"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Chegada */}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                          Data & Horário de Chegada
+                        </label>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          <input
+                            type="date"
+                            value={formData.arrivalDate}
+                            onChange={(e) => setFormData({ ...formData, arrivalDate: e.target.value })}
+                            min={tripMinDate}
+                            max={tripMaxDate}
+                            className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] transition-all"
+                          />
+                          <input
+                            type="time"
+                            value={formData.arrivalTime}
+                            onChange={(e) => setFormData({ ...formData, arrivalTime: e.target.value })}
+                            className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] transition-all"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. CLASSE, ASSENTOS & CONEXÕES */}
+                <div className="space-y-2">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 block">
+                    4. CLASSE, ASSENTOS & CONEXÕES
+                  </span>
+                  <div className="bg-slate-50/80 border border-slate-200/90 rounded-xl p-4 sm:p-5">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      {/* Classe de Cabine */}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                          Classe de Cabine
+                        </label>
+                        <select
+                          value={formData.cabinClass}
+                          onChange={(e) => setFormData({ ...formData, cabinClass: e.target.value as any })}
+                          className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] cursor-pointer transition-all"
+                        >
+                          <option value="Econômica">Econômica</option>
+                          <option value="Premium Economy">Premium Economy</option>
+                          <option value="Executiva">Executiva</option>
+                          <option value="Primeira Classe">Primeira Classe</option>
+                        </select>
+                      </div>
+
+                      {/* Assentos do Grupo */}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                          Assentos do Grupo
+                        </label>
+                        <input
+                          type="text"
+                          value={formData.seats}
+                          onChange={(e) => setFormData({ ...formData, seats: e.target.value })}
+                          placeholder="Ex: 14A, 14B, 14C"
+                          className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] transition-all"
+                        />
+                      </div>
+
+                      {/* Escalas / Conexões */}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                          Escalas / Conexões
+                        </label>
+                        <input
+                          type="text"
+                          value={formData.stopovers}
+                          onChange={(e) => setFormData({ ...formData, stopovers: e.target.value })}
+                          placeholder="Ex: Voo Direto ou 1 parada em Miami"
+                          className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] transition-all"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 5. VIAJANTES */}
+                <div className="space-y-2">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 block">
+                    5. VIAJANTES
+                  </span>
+                  <div className="bg-slate-50/80 border border-slate-200/90 rounded-xl p-4 sm:p-5 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                      <label className="text-xs font-semibold text-slate-700">
+                        Viajantes Incluídos nesta Passagem ({passengerCount})
+                      </label>
+                      <span className="text-[11px] text-slate-400">
+                        Selecione quem viaja neste localizador de voo
+                      </span>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleTraveler('all')}
+                        className={`px-3 py-2 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
+                          isAllTravelersSelected
+                            ? 'bg-[#1A2B4C] text-white shadow-xs'
+                            : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                        }`}
+                      >
+                        <Users className={`w-3.5 h-3.5 ${isAllTravelersSelected ? 'text-[#D4AF37]' : 'text-slate-400'}`} />
+                        <span>Todos ({travelersList.length})</span>
+                      </button>
+
+                      {travelersList.map((trv) => {
+                        const isSelected = isAllTravelersSelected || (formData.travelerIds || []).includes(trv.id);
                         return (
                           <button
-                            key={item.code}
+                            key={trv.id}
                             type="button"
-                            onClick={() => {
-                              if (isSelected) {
-                                setFormData({
-                                  ...formData,
-                                  originAirport: '',
-                                  originCity: '',
-                                  originCode: '',
-                                });
-                              } else {
-                                setFormData({
-                                  ...formData,
-                                  originAirport: item.airport,
-                                  originCity: item.city,
-                                  originCode: item.code,
-                                });
-                              }
-                            }}
-                            className={`px-2 py-0.5 rounded text-[10px] transition-all cursor-pointer ${btnClass}`}
-                            title={isSelected ? "Clique para deselecionar" : "Clique para selecionar"}
+                            onClick={() => handleToggleTraveler(trv.id)}
+                            className={`px-3 py-2 rounded-lg text-xs font-medium transition-all flex items-center gap-2 cursor-pointer ${
+                              isSelected && !isAllTravelersSelected
+                                ? 'bg-[#1A2B4C] text-white shadow-xs'
+                                : isSelected && isAllTravelersSelected
+                                ? 'bg-slate-200/90 text-slate-700 border border-slate-300 font-semibold'
+                                : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                            }`}
                           >
-                            {item.label} {isSelected && '✕'}
+                            <span
+                              className="w-2.5 h-2.5 rounded-full shrink-0"
+                              style={{ backgroundColor: trv.color || '#3b82f6' }}
+                            />
+                            <span>{trv.name}</span>
+                            {isSelected && <Check className="w-3.5 h-3.5 text-emerald-400 ml-0.5 shrink-0" />}
                           </button>
                         );
                       })}
                     </div>
                   </div>
+                </div>
 
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="block text-[11px] font-bold text-slate-600">Aeroporto de Destino (Chegada)</label>
-                      {formData.destinationAirport && (
-                        <button
-                          type="button"
-                          onClick={() => setFormData({ ...formData, destinationAirport: '', destinationCity: '', destinationCode: '' })}
-                          className="text-[10px] text-rose-600 hover:underline cursor-pointer font-semibold"
+                {/* 6. BAGAGEM, CUSTOS & PAGAMENTO */}
+                <div className="space-y-2">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 block">
+                    6. BAGAGEM, CUSTOS & PAGAMENTO
+                  </span>
+                  <div className="bg-slate-50/80 border border-slate-200/90 rounded-xl p-4 sm:p-5 space-y-4">
+                    {/* Franquia de bagagem (2 colunas para campos relacionados) */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                          Malas de Mão (10kg por pessoa)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={formData.baggageAllowance.carryOnQty}
+                          onChange={(e) =>
+                            setFormData({
+                              ...formData,
+                              baggageAllowance: {
+                                ...formData.baggageAllowance,
+                                carryOnQty: parseInt(e.target.value, 10) || 0,
+                              },
+                            })
+                          }
+                          className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] transition-all"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                          Malas Despachadas (23kg por pessoa)
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          value={formData.baggageAllowance.checkedQty}
+                          onChange={(e) =>
+                            setFormData({
+                              ...formData,
+                              baggageAllowance: {
+                                ...formData.baggageAllowance,
+                                checkedQty: parseInt(e.target.value, 10) || 0,
+                              },
+                            })
+                          }
+                          className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Custos e Status (3 colunas para campos curtos) */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-slate-200/70">
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-xs font-semibold text-slate-600">
+                            Valor a Pagar (US$)
+                          </label>
+                          <span className="text-[10px] text-slate-400 font-mono">USD/pessoa</span>
+                        </div>
+                        <MoneyInput
+                          currency="USD"
+                          value={unitCostUSD}
+                          className="!bg-white !border-slate-200 !rounded-lg !text-slate-800 !h-10 !text-xs !font-medium focus:!ring-[#D4AF37]/50 focus:!border-[#D4AF37]"
+                          onChange={(val) => {
+                            setUnitCostUSD(val);
+                            const rate = settings.dollarRate || 5.75;
+                            const brl = val !== null ? Math.round(val * rate * 100) / 100 : null;
+                            setUnitCostBRL(brl);
+                            
+                            const travelers = settings.travelers || [];
+                            const q = (formData.travelerIds?.includes('all') ? travelers.length : formData.travelerIds?.length) || travelers.length || 1;
+                            setFormData({
+                              ...formData,
+                              ticketCostUSD: val !== null ? val * q : null,
+                              ticketCostBRL: brl !== null ? brl * q : null
+                            });
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="text-xs font-semibold text-slate-600">
+                            Valor a Pagar (R$)
+                          </label>
+                          <span className="text-[10px] text-slate-400 font-mono">BRL/pessoa</span>
+                        </div>
+                        <MoneyInput
+                          currency="BRL"
+                          value={unitCostBRL}
+                          className="!bg-white !border-slate-200 !rounded-lg !text-slate-800 !h-10 !text-xs !font-medium focus:!ring-[#D4AF37]/50 focus:!border-[#D4AF37]"
+                          onChange={(val) => {
+                            setUnitCostBRL(val);
+                            const rate = settings.dollarRate || 5.75;
+                            const usd = val !== null && rate > 0 ? Math.round((val / rate) * 100) / 100 : null;
+                            setUnitCostUSD(usd);
+
+                            const travelers = settings.travelers || [];
+                            const q = (formData.travelerIds?.includes('all') ? travelers.length : formData.travelerIds?.length) || travelers.length || 1;
+                            setFormData({
+                              ...formData,
+                              ticketCostBRL: val !== null ? val * q : null,
+                              ticketCostUSD: usd !== null ? usd * q : null
+                            });
+                          }}
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                          Status do Pagamento
+                        </label>
+                        <select
+                          value={formData.status}
+                          onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
+                          className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] cursor-pointer transition-all"
                         >
-                          Limpar
-                        </button>
-                      )}
-                    </div>
-                    <input
-                      type="text"
-                      value={formData.destinationAirport}
-                      onChange={(e) => setFormData({ ...formData, destinationAirport: e.target.value })}
-                      placeholder="Ex: Orlando International (MCO), Miami (MIA) ou Tampa (TPA)"
-                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                      required
-                    />
-                    {/* Destination Airport Presets */}
-                    <div className="flex flex-wrap gap-1 mt-1.5">
-                      {(formData.type === 'inbound'
-                        ? [
-                            { label: 'GRU (Guarulhos)', airport: 'São Paulo - Guarulhos (GRU)', city: 'São Paulo', code: 'GRU', isFlorida: false },
-                            { label: 'VCP (Viracopos)', airport: 'Campinas - Viracopos (VCP)', city: 'Campinas', code: 'VCP', isFlorida: false },
-                            { label: 'GIG (Galeão)', airport: 'Rio de Janeiro - Galeão (GIG)', city: 'Rio de Janeiro', code: 'GIG', isFlorida: false },
-                            { label: 'BSB (Brasília)', airport: 'Brasília (BSB)', city: 'Brasília', code: 'BSB', isFlorida: false },
-                          ]
-                        : [
-                            { label: '✈️ Orlando (MCO)', airport: 'Orlando International Airport (MCO)', city: 'Orlando', code: 'MCO', isFlorida: true },
-                            { label: '✈️ Miami (MIA)', airport: 'Miami International Airport (MIA)', city: 'Miami', code: 'MIA', isFlorida: true },
-                            { label: '✈️ Tampa (TPA)', airport: 'Tampa International Airport (TPA)', city: 'Tampa', code: 'TPA', isFlorida: true },
-                            { label: '✈️ Fort Lauderdale (FLL)', airport: 'Fort Lauderdale-Hollywood Int (FLL)', city: 'Fort Lauderdale', code: 'FLL', isFlorida: true },
-                          ]
-                      ).map((item) => {
-                        const isSelected = formData.destinationCode === item.code || formData.destinationAirport.includes(item.code);
-                        const btnClass = item.isFlorida
-                          ? (isSelected 
-                              ? 'bg-[#D4AF37] text-[#1A2B4C] font-bold ring-2 ring-[#1A2B4C]/20' 
-                              : 'bg-amber-50 hover:bg-[#1A2B4C] hover:text-white text-amber-900 border border-amber-200 font-bold')
-                          : (isSelected
-                              ? 'bg-[#1A2B4C] text-white font-semibold ring-2 ring-[#D4AF37]/40'
-                              : 'bg-slate-100 hover:bg-[#1A2B4C] hover:text-white text-slate-700 font-semibold');
-                        return (
-                          <button
-                            key={item.code}
-                            type="button"
-                            onClick={() => {
-                              if (isSelected) {
-                                setFormData({
-                                  ...formData,
-                                  destinationAirport: '',
-                                  destinationCity: '',
-                                  destinationCode: '',
-                                });
-                              } else {
-                                setFormData({
-                                  ...formData,
-                                  destinationAirport: item.airport,
-                                  destinationCity: item.city,
-                                  destinationCode: item.code,
-                                });
-                              }
-                            }}
-                            className={`px-2 py-0.5 rounded text-[10px] transition-all cursor-pointer ${btnClass}`}
-                            title={isSelected ? "Clique para deselecionar" : "Clique para selecionar"}
-                          >
-                            {item.label} {isSelected && '✕'}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* 3. DATAS & HORÁRIOS */}
-              <div className="space-y-4">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-                  3. Datas & Horários (Partida & Chegada)
-                </label>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Data & Hora de Partida</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <input
-                        type="date"
-                        value={formData.departureDate}
-                        onChange={(e) => setFormData({ ...formData, departureDate: e.target.value })}
-                        min={tripMinDate}
-                        max={tripMaxDate}
-                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                      />
-                      <input
-                        type="time"
-                        value={formData.departureTime}
-                        onChange={(e) => setFormData({ ...formData, departureTime: e.target.value })}
-                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Data & Hora de Chegada</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <input
-                        type="date"
-                        value={formData.arrivalDate}
-                        onChange={(e) => setFormData({ ...formData, arrivalDate: e.target.value })}
-                        min={tripMinDate}
-                        max={tripMaxDate}
-                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                      />
-                      <input
-                        type="time"
-                        value={formData.arrivalTime}
-                        onChange={(e) => setFormData({ ...formData, arrivalTime: e.target.value })}
-                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* 4. CLASSE, ASSENTOS & CONEXÕES */}
-              <div className="space-y-4">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-                  4. Classe, Assentos & Conexões
-                </label>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Classe de Cabine</label>
-                    <select
-                      value={formData.cabinClass}
-                      onChange={(e) => setFormData({ ...formData, cabinClass: e.target.value as any })}
-                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 cursor-pointer"
-                    >
-                      <option value="Econômica">Econômica</option>
-                      <option value="Premium Economy">Premium Economy</option>
-                      <option value="Executiva">Executiva</option>
-                      <option value="Primeira Classe">Primeira Classe</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Assentos do Grupo</label>
-                    <input
-                      type="text"
-                      value={formData.seats}
-                      onChange={(e) => setFormData({ ...formData, seats: e.target.value })}
-                      placeholder="Ex: 14A, 14B, 14C"
-                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Escalas / Conexões</label>
-                    <input
-                      type="text"
-                      value={formData.stopovers}
-                      onChange={(e) => setFormData({ ...formData, stopovers: e.target.value })}
-                      placeholder="Ex: Voo Direto ou 1 parada em Miami"
-                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* 5. VIAJANTES DO PACOTE */}
-              <TravelerSelector
-                label="5. Viajantes do Pacote & Passageiros"
-                travelers={settings.travelers || []}
-                selectedIds={formData.travelerIds || ['all']}
-                onChange={(ids) => {
-                  const travelers = settings.travelers || [];
-                  const passengers = ids.includes('all')
-                    ? travelers.map(t => t.name)
-                    : travelers.filter(t => ids.includes(t.id)).map(t => t.name);
-                  
-                  const q = ids.includes('all') ? travelers.length : ids.length;
-                  const unitUSD = parseInputToNumber(unitCostUSD);
-                  const unitBRL = parseInputToNumber(unitCostBRL);
-                  const rate = settings.dollarRate || 5.75;
-
-                  setFormData({ 
-                    ...formData, 
-                    travelerIds: ids, 
-                    passengers,
-                    ticketCostUSD: unitUSD * q,
-                    ticketCostBRL: unitBRL * q
-                  });
-                }}
-              />
-
-              {/* 6. FRANQUIA DE BAGAGEM & CUSTOS */}
-              <div className="space-y-4">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-                  6. Franquia de Bagagem & Custos
-                </label>
-
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-600 mb-1">Malas de Mão (10kg por pessoa)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        value={formData.baggageAllowance.carryOnQty}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            baggageAllowance: {
-                              ...formData.baggageAllowance,
-                              carryOnQty: parseInt(e.target.value, 10) || 0,
-                            },
-                          })
-                        }
-                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-600 mb-1">Malas Despachadas (23kg por pessoa)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        value={formData.baggageAllowance.checkedQty}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            baggageAllowance: {
-                              ...formData.baggageAllowance,
-                              checkedQty: parseInt(e.target.value, 10) || 0,
-                            },
-                          })
-                        }
-                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Unit Costs & Status */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 border-t border-slate-200 pt-4">
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-bold text-slate-600 flex items-center justify-between">
-                        Valor a Pagar (US$)
-                        <span className="text-[9px] text-slate-400 font-mono">USD/pessoa</span>
-                      </label>
-                      <MoneyInput
-                        currency="USD"
-                        value={unitCostUSD}
-                        onChange={(val) => {
-                          setUnitCostUSD(val);
-                          const rate = settings.dollarRate || 5.75;
-                          const brl = val !== null ? Math.round(val * rate * 100) / 100 : null;
-                          setUnitCostBRL(brl);
-                          
-                          const travelers = settings.travelers || [];
-                          const q = (formData.travelerIds?.includes('all') ? travelers.length : formData.travelerIds?.length) || travelers.length || 1;
-                          setFormData({
-                            ...formData,
-                            ticketCostUSD: val !== null ? val * q : null,
-                            ticketCostBRL: brl !== null ? brl * q : null
-                          });
-                        }}
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-bold text-slate-600 flex items-center justify-between">
-                        Valor a Pagar (R$)
-                        <span className="text-[9px] text-slate-400 font-mono">BRL/pessoa</span>
-                      </label>
-                      <MoneyInput
-                        currency="BRL"
-                        value={unitCostBRL}
-                        onChange={(val) => {
-                          setUnitCostBRL(val);
-                          const rate = settings.dollarRate || 5.75;
-                          const usd = val !== null && rate > 0 ? Math.round((val / rate) * 100) / 100 : null;
-                          setUnitCostUSD(usd);
-
-                          const travelers = settings.travelers || [];
-                          const q = (formData.travelerIds?.includes('all') ? travelers.length : formData.travelerIds?.length) || travelers.length || 1;
-                          setFormData({
-                            ...formData,
-                            ticketCostBRL: val !== null ? val * q : null,
-                            ticketCostUSD: usd !== null ? usd * q : null
-                          });
-                        }}
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-[11px] font-bold text-slate-600 flex items-center justify-between">
-                        Status do Pagamento
-                        <span className="opacity-0 text-[9px] font-mono">_</span>
-                      </label>
-                      <select
-                        value={formData.status}
-                        onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 cursor-pointer h-[38px]"
-                      >
-                        <option value="Emitido / Confirmado">✅ Emitido / Confirmado</option>
-                        <option value="Check-in Aberto">💡 Check-in Aberto</option>
-                        <option value="Check-in Realizado">✔️ Check-in Realizado</option>
-                        <option value="Embarcado">✈️ Embarcado</option>
-                        <option value="Concluído">🏁 Concluído</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {/* Summary Calculations & Payer */}
-                  <div className="pt-4 border-t border-slate-200/60 space-y-4">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div className="text-[11px] text-slate-500 font-medium flex items-center gap-1.5">
-                        <Users className="w-3.5 h-3.5 text-[#2A437E]" />
-                        <span>
-                          Subtotal para <strong className="text-slate-800">
-                            {(formData.travelerIds?.includes('all') ? settings.travelers?.length : formData.travelerIds?.length) || settings.travelers?.length || 1}
-                          </strong> {((formData.travelerIds?.includes('all') ? settings.travelers?.length : formData.travelerIds?.length) || settings.travelers?.length || 1) === 1 ? 'passagem' : 'passagens'}
-                        </span>
+                          <option value="Emitido / Confirmado">✅ Emitido / Confirmado</option>
+                          <option value="Check-in Aberto">💡 Check-in Aberto</option>
+                          <option value="Check-in Realizado">✔️ Check-in Realizado</option>
+                          <option value="Embarcado">✈️ Embarcado</option>
+                          <option value="Concluído">🏁 Concluído</option>
+                        </select>
                       </div>
-                      <div className="flex items-center gap-3">
-                        <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200 flex flex-col items-end min-w-[100px]">
-                          <span className="text-[9px] text-slate-400 uppercase font-bold tracking-tight">Total USD</span>
-                          <span className="text-xs font-mono font-bold text-emerald-700">
-                            US$ {(formData.ticketCostUSD || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                    </div>
+
+                    {/* Resumo Financeiro & Pagador */}
+                    <div className="pt-4 border-t border-slate-200/70 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="text-xs text-slate-500 font-medium flex items-center gap-2">
+                          <Users className="w-4 h-4 text-slate-400 shrink-0" />
+                          <span>
+                            Subtotal para <strong className="text-slate-800 font-semibold">{passengerCount}</strong> {passengerCount === 1 ? 'passagem' : 'passagens'}
                           </span>
                         </div>
-                        <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200 flex flex-col items-end min-w-[100px]">
-                          <span className="text-[9px] text-slate-400 uppercase font-bold tracking-tight">Total BRL</span>
-                          <span className="text-xs font-mono font-bold text-[#1A2B4C]">
-                            R$ {(formData.ticketCostBRL || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                          </span>
+                        <div className="flex items-center gap-2.5">
+                          <div className="bg-white px-3 py-1.5 rounded-lg border border-slate-200 flex flex-col items-end min-w-[105px]">
+                            <span className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Total USD</span>
+                            <span className="text-xs font-mono font-bold text-emerald-700">
+                              US$ {(formData.ticketCostUSD || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                          <div className="bg-white px-3 py-1.5 rounded-lg border border-slate-200 flex flex-col items-end min-w-[105px]">
+                            <span className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Total BRL</span>
+                            <span className="text-xs font-mono font-bold text-[#1A2B4C]">
+                              R$ {(formData.ticketCostBRL || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div className="flex items-center gap-2">
-                        <CreditCard className="w-4 h-4 text-[#D4AF37]" />
-                        <label className="text-[11px] font-bold text-slate-700">Responsável pelo Pagamento</label>
+                      <div className="pt-3 border-t border-slate-200/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <CreditCard className="w-4 h-4 text-slate-400 shrink-0" />
+                          <label className="text-xs font-semibold text-slate-700">
+                            Responsável pelo Pagamento
+                          </label>
+                        </div>
+                        <select
+                          value={formData.payerId || 'all'}
+                          onChange={(e) => setFormData({ ...formData, payerId: e.target.value })}
+                          className="h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] cursor-pointer min-w-[220px] transition-all"
+                        >
+                          <option value="all">👥 Dividido pelo grupo</option>
+                          {travelersList.map((t) => (
+                            <option key={t.id} value={t.id}>👤 {t.name}</option>
+                          ))}
+                        </select>
                       </div>
-                      <select
-                        value={formData.payerId || 'all'}
-                        onChange={(e) => setFormData({ ...formData, payerId: e.target.value })}
-                        className="bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-[11px] font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/30 min-w-[200px]"
-                      >
-                        <option value="all">👥 Dividido pelo grupo</option>
-                        {settings.travelers.map((t) => (
-                          <option key={t.id} value={t.id}>👤 {t.name}</option>
-                        ))}
-                      </select>
                     </div>
                   </div>
                 </div>
-              </div>
 
-              {/* 7. OBSERVAÇÕES */}
-              <div className="space-y-4">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-                  7. Observações & Dicas do Voo
-                </label>
-
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                  <textarea
-                    value={formData.notes}
-                    onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                    placeholder="Ex: Levar travesseiro de pescoço, fones de ouvido P2 para o entretenimento de bordo, passaportes na mochila."
-                    className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 h-24"
-                  />
+                {/* 7. OBSERVAÇÕES */}
+                <div className="space-y-2">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 block">
+                    7. OBSERVAÇÕES
+                  </span>
+                  <div className="bg-slate-50/80 border border-slate-200/90 rounded-xl p-4 sm:p-5">
+                    <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                      Notas & Lembretes do Voo
+                    </label>
+                    <textarea
+                      value={formData.notes}
+                      onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                      placeholder="Ex: Levar travesseiro de pescoço, fones de ouvido P2 para o entretenimento de bordo, passaportes na mochila."
+                      className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] h-24 resize-y leading-relaxed transition-all"
+                    />
+                  </div>
                 </div>
-              </div>
 
               </div>
 
-              {/* Modal Actions */}
+              {/* Erro de Salvamento */}
               {saveError && (
-                <div className="mx-4 sm:mx-5 mb-4 bg-red-50 text-red-700 text-xs font-bold p-3 rounded-xl border border-red-100 flex items-center gap-2">
-                  <AlertCircle size={14} className="shrink-0" />
-                  {saveError}
+                <div className="mx-5 sm:mx-6 my-2 bg-rose-50 text-rose-700 text-xs font-semibold p-3.5 rounded-lg border border-rose-200 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                  <span>{saveError}</span>
                 </div>
               )}
-              <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-3 shrink-0">
-                {editingFlight && (
+
+              {/* Rodapé fixo em cinza-claro com as ações */}
+              <div className="p-4 sm:p-5 bg-slate-100 border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
+                <div>
+                  {editingFlight ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = editingFlight;
+                        setModalOpen(false);
+                        setFlightToDelete(target);
+                      }}
+                      className="px-4 py-2.5 rounded-lg bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-700 font-semibold text-xs flex items-center gap-1.5 cursor-pointer transition-colors border border-rose-200/60"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      <span>Excluir</span>
+                    </button>
+                  ) : (
+                    <span />
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2.5">
                   <button
                     type="button"
-                    onClick={() => {
-                      const target = editingFlight;
-                      setModalOpen(false);
-                      setFlightToDelete(target);
-                    }}
-                    className="mr-auto px-4 py-2.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 hover:text-red-700 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                    onClick={() => setModalOpen(false)}
+                    className="px-5 py-2.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer shadow-xs"
                   >
-                    <Trash2 className="w-4 h-4" />
-                    <span>Excluir</span>
+                    Cancelar
                   </button>
-                )}
-                
-                <button
-                  type="button"
-                  onClick={() => setModalOpen(false)}
-                  className="px-5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSaving}
-                  className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md disabled:opacity-50"
-                >
-                  <CheckCircle2 className={`w-4 h-4 ${isSaving ? 'text-white' : 'text-[#D4AF37]'}`} />
-                  <span>{isSaving ? 'Salvando...' : 'Salvar'}</span>
-                </button>
+                  <button
+                    type="submit"
+                    disabled={isSaving}
+                    className="px-6 py-2.5 rounded-lg bg-[#1A2B4C] text-white text-xs font-semibold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <CheckCircle2 className={`w-4 h-4 ${isSaving ? 'text-white animate-spin' : 'text-[#D4AF37]'}`} />
+                    <span>{isSaving ? 'Salvando...' : 'Salvar'}</span>
+                  </button>
+                </div>
               </div>
             </form>
           </div>
