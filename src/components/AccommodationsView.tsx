@@ -5,6 +5,7 @@ import { AccommodationBooking } from '../types';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
 import { TravelerSelector } from './TravelerSelector';
+import { LogisticsCardHeader } from './LogisticsCardHeader';
 import {
   Building2,
   Home,
@@ -661,261 +662,211 @@ export const AccommodationsView: React.FC = () => {
             const badge = getTypeBadge(acc.type);
             const BadgeIcon = badge.icon;
             const nights = calculateNights(acc.checkInDate, acc.checkOutDate);
+            const costUsd = acc.costUSD || 0;
+            const costBrl = acc.costBRL || (costUsd ? costUsd * settings.dollarRate : 0);
 
             return (
               <div
                 key={`${acc.id}-${aIdx}`}
-                className="bg-white rounded-3xl border border-slate-200 shadow-2xs overflow-hidden hover:border-slate-300 transition-all space-y-0"
+                className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs hover:border-[#D4AF37]/50 hover:shadow-xs transition-all overflow-hidden space-y-0"
               >
-                {/* Header Card Bar */}
-                <div className="p-5 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <span className={`px-3 py-1 rounded-full text-xs font-bold border flex items-center gap-1.5 ${badge.bg}`}>
-                      <BadgeIcon className="w-3.5 h-3.5" />
-                      {badge.label}
+                {/* Standardized Logistics Header */}
+                <LogisticsCardHeader
+                  icon={<BadgeIcon className="w-5 h-5 text-[#D4AF37]" />}
+                  categoryLabel={badge.label}
+                  categoryBadgeColor="bg-[#D4AF37] text-[#1A2B4C]"
+                  status={acc.status}
+                  title={acc.name}
+                  subtitle={
+                    <span className="flex items-center gap-1.5 flex-wrap">
+                      <MapPin className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                      <span className="text-slate-200">{acc.address}</span>
+                      {acc.address && (
+                        <a
+                          href={`https://maps.google.com/?q=${encodeURIComponent(acc.address)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-[#D4AF37] font-bold hover:underline flex items-center gap-0.5 ml-1"
+                        >
+                          <span>Abrir Mapa</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      )}
                     </span>
-
-                    <span
-                      className={`px-2.5 py-0.5 rounded-md text-[11px] font-bold ${
-                        acc.status === 'Reservado / Confirmado' || acc.status === 'Pago' || acc.status === 'Concluído'
-                          ? 'bg-emerald-100 text-emerald-800'
-                          : 'bg-amber-100 text-amber-800'
-                      }`}
-                    >
-                      {acc.status}
-                    </span>
-
-                    {acc.payerId && acc.payerId !== 'all' && (
-                      <span className="px-2.5 py-0.5 rounded-md text-[11px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 flex items-center gap-1">
-                        <CreditCard className="w-3 h-3 text-indigo-500" />
+                  }
+                  confirmationCodes={acc.confirmationCode}
+                  codeLabel="Voucher"
+                  extraBadges={
+                    acc.payerId && acc.payerId !== 'all' ? (
+                      <span className="px-2.5 py-0.5 rounded-md text-[10px] sm:text-[11px] font-bold bg-white/10 text-indigo-200 border border-indigo-400/30 flex items-center gap-1">
+                        <CreditCard className="w-3 h-3 text-indigo-300" />
                         Pago por: {settings.travelers.find((t) => t.id === acc.payerId)?.name || 'Viajante'}
                       </span>
-                    )}
-                  </div>
-
-                  {/* Actions */}
-                  <div className="flex items-center gap-2 self-end sm:self-auto">
-                    <button
-                      type="button"
-                      onClick={() => handleOpenEditModal(acc)}
-                      className="px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-slate-700 hover:text-[#1A2B4C] hover:bg-slate-100 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
-                      title="Editar Reserva"
-                      aria-label={`Editar reserva de ${acc.name}`}
-                    >
-                      <Edit3 className="w-3.5 h-3.5 text-slate-500" />
-                      <span>Editar</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => setAccToDelete(acc)}
-                      className="px-3 py-1.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 hover:text-rose-800 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
-                      title="Excluir Reserva de Hotel"
-                      aria-label={`Excluir reserva de ${acc.name}`}
-                    >
-                      <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-                      <span>Excluir</span>
-                    </button>
-                  </div>
-                </div>
+                    ) : undefined
+                  }
+                  onEdit={() => handleOpenEditModal(acc)}
+                  editTitle={`Editar reserva de ${acc.name}`}
+                  onDelete={() => setAccToDelete(acc)}
+                  deleteTitle={`Excluir reserva de ${acc.name}`}
+                />
 
                 {/* Main Card Info Body */}
-                <div className="p-6 space-y-6">
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                    {/* Left 8 Cols: Hotel Info */}
-                    <div className="lg:col-span-8 space-y-4">
+                <div className="p-5 sm:p-6 space-y-5">
+                  {/* Check-in & Check-out Timeline Box */}
+                  <div className="p-4 sm:p-5 rounded-2xl bg-slate-50/80 border border-slate-200/80 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="space-y-1">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                        <Calendar className="w-3.5 h-3.5 text-[#D4AF37]" />
+                        Check-in (Entrada)
+                      </span>
+                      <strong className="text-base sm:text-lg font-bold text-slate-900 block font-mono">
+                        {formatDisplayDate(acc.checkInDate)}
+                      </strong>
+                      <span className="text-xs text-slate-500 font-medium flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-slate-400" />
+                        A partir das {acc.checkInTime || '15:00'}
+                      </span>
+                    </div>
+
+                    <div className="space-y-1 sm:border-l sm:border-slate-200 sm:pl-4">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                        <Calendar className="w-3.5 h-3.5 text-[#D4AF37]" />
+                        Check-out (Saída)
+                      </span>
+                      <strong className="text-base sm:text-lg font-bold text-slate-900 block font-mono">
+                        {formatDisplayDate(acc.checkOutDate)}
+                      </strong>
+                      <span className="text-xs text-slate-500 font-medium flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-slate-400" />
+                        Até às {acc.checkOutTime || '11:00'}
+                      </span>
+                    </div>
+
+                    <div className="sm:border-l sm:border-slate-200 sm:pl-4 flex flex-col justify-center">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                        Duração da Estadia
+                      </span>
+                      <span className="text-xl sm:text-2xl font-black font-mono text-[#1A2B4C] mt-0.5">
+                        {nights} {nights === 1 ? 'noite' : 'noites'}
+                      </span>
+                      <span className="text-[11px] text-slate-500 mt-0.5">
+                        Total da hospedagem no período
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 4-Column Balanced Grid: Room Type, Guests/Contact, Amenities, Financial */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 text-xs">
+                    {/* Room Type */}
+                    <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
                       <div>
-                        <h3 className="text-xl font-bold font-serif text-[#1A2B4C] flex items-center gap-2">
-                          {acc.name}
-                        </h3>
-                        <p className="text-xs text-slate-500 font-medium flex items-center gap-1 mt-1">
-                          <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-                          <span>{acc.address}</span>
-                          <a
-                            href={`https://maps.google.com/?q=${encodeURIComponent(acc.address)}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-xs text-indigo-600 font-bold hover:underline flex items-center gap-0.5 ml-1"
-                          >
-                            <span>Abrir Mapa</span>
-                            <ExternalLink className="w-3 h-3" />
-                          </a>
+                        <div className="flex items-center gap-1.5 text-slate-400 font-bold uppercase text-[10px] tracking-wider">
+                          <Hotel className="w-3.5 h-3.5 text-[#D4AF37]" />
+                          <span>Quarto / Acomodação</span>
+                        </div>
+                        <p className="font-bold text-slate-900 text-xs mt-1">
+                          {acc.roomType || 'Standard / A definir'}
                         </p>
                       </div>
-
-
-
-                      {/* Confirmation Code & Room */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 rounded-2xl bg-slate-50 border border-slate-150">
-                        <div>
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                            Código de Confirmação / Voucher
-                          </span>
-                          <div className="flex items-center gap-2 mt-0.5">
-                            <strong className="text-sm font-mono font-black text-[#1A2B4C]">
-                              {acc.confirmationCode || 'Não informado'}
-                            </strong>
-                            {acc.confirmationCode && (
-                              <button
-                                type="button"
-                                onClick={() => handleCopyCode(acc.id, acc.confirmationCode)}
-                                className="p-1 rounded text-slate-400 hover:text-slate-700 hover:bg-slate-200 cursor-pointer"
-                                title="Copiar código"
-                              >
-                                {copiedCodeId === acc.id ? (
-                                  <Check className="w-3.5 h-3.5 text-emerald-600" />
-                                ) : (
-                                  <Copy className="w-3.5 h-3.5" />
-                                )}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        <div>
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                            Categoria do Quarto / Acomodação
-                          </span>
-                          <strong className="text-xs font-semibold text-slate-700 block mt-0.5">
-                            {acc.roomType || 'Não especificado'}
-                          </strong>
-                        </div>
-                      </div>
-
-                      {/* Check-in & Check-out Timeline Box */}
-                      <div className="p-4 rounded-2xl bg-indigo-50/60 border border-indigo-150 grid grid-cols-1 sm:grid-cols-3 gap-4">
-                        <div>
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-900 flex items-center gap-1">
-                            <Calendar className="w-3 h-3 text-indigo-600" />
-                            Check-in
-                          </span>
-                          <strong className="text-sm font-bold text-slate-900 block mt-0.5">
-                            {acc.checkInDate}
-                          </strong>
-                          <span className="text-xs text-slate-500 font-medium flex items-center gap-1 mt-0.5">
-                            <Clock className="w-3 h-3 text-slate-400" />
-                            {acc.checkInTime}
-                          </span>
-                        </div>
-
-                        <div>
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-900 flex items-center gap-1">
-                            <Calendar className="w-3 h-3 text-indigo-600" />
-                            Check-out
-                          </span>
-                          <strong className="text-sm font-bold text-slate-900 block mt-0.5">
-                            {acc.checkOutDate}
-                          </strong>
-                          <span className="text-xs text-slate-500 font-medium flex items-center gap-1 mt-0.5">
-                            <Clock className="w-3 h-3 text-slate-400" />
-                            {acc.checkOutTime}
-                          </span>
-                        </div>
-
-                        <div className="sm:border-l sm:border-indigo-200 sm:pl-4 flex flex-col justify-center">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-900 block">
-                            Duração da Estadia
-                          </span>
-                          <span className="text-base font-black font-mono text-[#1A2B4C] mt-0.5">
-                            {nights} {nights === 1 ? 'noite' : 'noites'}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Amenities Chips */}
-                      {acc.amenities && acc.amenities.length > 0 && (
-                        <div className="space-y-1.5">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                            Comodidades & Benefícios Inclusos
-                          </span>
-                          <div className="flex flex-wrap gap-1.5">
-                            {acc.amenities.map((item, idx) => (
-                              <span
-                                key={idx}
-                                className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 text-xs font-semibold flex items-center gap-1 border border-slate-200"
-                              >
-                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                {item}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                  </div>
-                  {/* Right 4 Cols: Guests & Financials */}
-                  <div className="lg:col-span-4 space-y-4 lg:border-l lg:border-slate-200 lg:pl-6">
-                    {/* Financial Box */}
-                    <div className="p-4 rounded-2xl bg-[#1A2B4C] text-white space-y-2">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#D4AF37] block">
-                        Investimento da Reserva
-                      </span>
-                      <div className="space-y-1">
-                        <div className="flex items-baseline justify-between">
-                          <span className="text-xs text-slate-300">Valor USD:</span>
-                          <span className="text-lg font-black font-mono text-emerald-300">
-                            US$ {(acc.costUSD || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                          </span>
-                        </div>
-
-                        <div className="flex items-baseline justify-between pt-1 border-t border-white/10">
-                          <span className="text-xs text-slate-300">Valor em BRL:</span>
-                          <span className="text-sm font-bold font-mono text-white">
-                            R${' '}
-                            {(
-                              acc.costBRL || (acc.costUSD ? acc.costUSD * settings.dollarRate : 0)
-                            ).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                          </span>
-                        </div>
-
-                        <div className="flex items-center justify-between pt-1 border-t border-white/10 text-xs">
-                          <span className="text-slate-300">Responsável:</span>
-                          <span className="font-bold text-amber-300">
-                            {acc.payerId && acc.payerId !== 'all'
-                              ? settings.travelers.find((t) => t.id === acc.payerId)?.name || 'Viajante'
-                              : 'Dividido pelo grupo'}
-                          </span>
-                        </div>
-                      </div>
+                      <p className="text-slate-500 text-[11px] pt-1.5 border-t border-slate-200/70">
+                        {badge.label}
+                      </p>
                     </div>
 
                     {/* Guests & Contact */}
-                    <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-2 text-xs">
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-500 font-semibold flex items-center gap-1">
-                          <Users className="w-3.5 h-3.5 text-slate-400" />
-                          Total de Hóspedes:
-                        </span>
-                        <strong className="text-slate-800 font-bold">
-                          {acc.totalGuests || 1} { (acc.totalGuests || 1) === 1 ? 'pessoa' : 'pessoas' }
-                        </strong>
+                    <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
+                      <div>
+                        <div className="flex items-center gap-1.5 text-slate-400 font-bold uppercase text-[10px] tracking-wider">
+                          <Users className="w-3.5 h-3.5 text-[#D4AF37]" />
+                          <span>Hóspedes & Contato</span>
+                        </div>
+                        <p className="font-bold text-slate-900 text-xs mt-1">
+                          {acc.totalGuests || 1} {(acc.totalGuests || 1) === 1 ? 'Hóspede' : 'Hóspedes'}
+                        </p>
                       </div>
-
-                      {acc.contactPhone && (
-                        <div className="flex items-center justify-between pt-2 border-t border-slate-200">
-                          <span className="text-slate-500 font-semibold">Contato / Recepção:</span>
+                      <div className="text-[11px] pt-1.5 border-t border-slate-200/70">
+                        {acc.contactPhone ? (
                           <a
                             href={`tel:${acc.contactPhone}`}
-                            className="text-indigo-600 font-bold hover:underline font-mono"
+                            className="text-[#1A2B4C] font-bold hover:underline font-mono"
                           >
-                            {acc.contactPhone}
+                            📞 {acc.contactPhone}
                           </a>
+                        ) : (
+                          <span className="text-slate-400 italic">Contato via app</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Amenities & Benefits */}
+                    <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
+                      <div>
+                        <div className="flex items-center gap-1.5 text-slate-400 font-bold uppercase text-[10px] tracking-wider">
+                          <Sparkles className="w-3.5 h-3.5 text-[#D4AF37]" />
+                          <span>Comodidades ({acc.amenities?.length || 0})</span>
                         </div>
-                      )}
+                        {acc.amenities && acc.amenities.length > 0 ? (
+                          <div className="flex flex-wrap gap-1 mt-1 max-h-14 overflow-y-auto custom-scrollbar">
+                            {acc.amenities.slice(0, 3).map((item, idx) => (
+                              <span
+                                key={idx}
+                                className="px-2 py-0.5 rounded-md bg-white text-slate-700 text-[10px] font-semibold border border-slate-200"
+                              >
+                                {item}
+                              </span>
+                            ))}
+                            {acc.amenities.length > 3 && (
+                              <span className="text-[10px] font-bold text-slate-500 self-center">
+                                +{acc.amenities.length - 3} mais
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-slate-400 italic mt-1">
+                            Nenhum benefício extra
+                          </p>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-slate-400 pt-1.5 border-t border-slate-200/70 block">
+                        Benefícios inclusos
+                      </span>
+                    </div>
+
+                    {/* Financial Investment */}
+                    <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
+                      <div>
+                        <div className="flex items-center gap-1.5 text-slate-400 font-bold uppercase text-[10px] tracking-wider">
+                          <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Investimento Total</span>
+                        </div>
+                        <div className="mt-1">
+                          <div className="text-sm sm:text-base font-bold text-[#1A2B4C] font-mono tabular-nums">
+                            US$ {costUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                          </div>
+                          <span className="text-[11px] text-slate-500 font-mono tabular-nums block">
+                            R$ {costBrl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="text-[10px] text-amber-800 font-bold bg-amber-100/70 px-2 py-0.5 rounded-md border border-amber-200 w-fit">
+                        {acc.payerId && acc.payerId !== 'all'
+                          ? `Pago: ${settings.travelers.find((t) => t.id === acc.payerId)?.name || 'Viajante'}`
+                          : 'Rateio do Grupo'}
+                      </span>
                     </div>
                   </div>
+
+                  {/* Observações & Instruções de Check-in */}
+                  {acc.notes && (
+                    <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200/80 text-xs text-amber-900 flex items-start gap-2.5">
+                      <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div className="space-y-0.5">
+                        <span className="font-bold block text-amber-950">Observações & Instruções de Check-in:</span>
+                        <p className="leading-relaxed">{acc.notes}</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                {/* Notes / Instructions - Now Full Width */}
-                {acc.notes && (
-                  <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200/90 text-xs text-amber-900 flex items-start gap-2.5">
-                    <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                    <div className="space-y-0.5">
-                      <span className="font-bold block text-amber-950">Observações & Instruções de Check-in:</span>
-                      <p className="leading-relaxed">{acc.notes}</p>
-                    </div>
-                  </div>
-                )}
-              </div>
               </div>
             );
           })}

@@ -34,6 +34,7 @@ import { parseInputToNumber, formatInputDisplay } from '../utils/currency';
 import { TravelerSelector } from './TravelerSelector';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
 import { MoneyInput } from './MoneyInput';
+import { LogisticsCardHeader } from './LogisticsCardHeader';
 
 const getCheckInUrl = (airlineName: string) => {
   const name = (airlineName || '').toLowerCase();
@@ -472,235 +473,222 @@ export const FlightsView: React.FC = () => {
                 const dateB = b.departureDate || '9999-12-31';
                 if (dateA !== dateB) return dateA.localeCompare(dateB);
                 return (a.departureTime || '').localeCompare(b.departureTime || '');
-              }).map((flight, fIdx) => (
-                <div
-                  key={`${flight.id}-${fIdx}`}
-                  className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden transition-all hover:border-[#D4AF37]/50"
-                >
-                  {/* Flight Header */}
-                  <div className="bg-[#1A2B4C] text-white p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#D4AF37]/30">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-lg bg-white/10 border border-white/20 flex items-center justify-center text-xl shrink-0">
-                        ✈️
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="px-2 py-0.5 rounded-xs bg-[#D4AF37] text-[#1A2B4C] font-bold text-[10px] uppercase tracking-wider">
-                            {flight.typeLabel}
+              }).map((flight, fIdx) => {
+                const costUsd = flight.ticketCostUSD || 0;
+                const costBrl = flight.ticketCostBRL || (costUsd ? costUsd * (settings.dollarRate || 5.75) : 0);
+                const passengersList = flight.passengers && flight.passengers.length > 0
+                  ? flight.passengers
+                  : (settings.travelers || []).map((t) => t.name);
+
+                return (
+                  <div
+                    key={`${flight.id}-${fIdx}`}
+                    className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs hover:border-[#D4AF37]/50 hover:shadow-xs transition-all overflow-hidden space-y-0"
+                  >
+                    {/* Standardized Logistics Header */}
+                    <LogisticsCardHeader
+                      icon={<Plane className="w-5 h-5 text-[#D4AF37]" />}
+                      categoryLabel={flight.typeLabel || (flight.type === 'outbound' ? 'Voo de Ida' : flight.type === 'inbound' ? 'Voo de Volta' : 'Trecho Aéreo')}
+                      categoryBadgeColor="bg-[#D4AF37] text-[#1A2B4C]"
+                      status={flight.status || 'Emitido / Confirmado'}
+                      title={formatFlightRoute(flight)}
+                      subtitle={
+                        <>
+                          <span className="font-semibold text-slate-200">
+                            {flight.airline} ({flight.flightNumber})
                           </span>
-                          <span className="text-xs text-slate-300 font-semibold flex items-center gap-2 flex-wrap">
-                            <span>{flight.airline} ({flight.flightNumber})</span>
-                            <a
-                              href={getCheckInUrl(flight.airline)}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm bg-[#D4AF37]/25 hover:bg-[#D4AF37]/45 border border-[#D4AF37]/40 text-[#D4AF37] hover:text-[#f3d36b] transition-colors text-[10px] font-bold uppercase tracking-wider cursor-pointer ml-1"
-                              title="Fazer Check-in online na companhia aérea"
-                            >
-                              <span>Check-in</span>
-                              <ExternalLink className="w-2.5 h-2.5 text-[#D4AF37]" />
-                            </a>
+                          <a
+                            href={getCheckInUrl(flight.airline)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#D4AF37]/25 hover:bg-[#D4AF37]/45 border border-[#D4AF37]/40 text-[#D4AF37] hover:text-[#f3d36b] transition-colors text-[10px] font-bold uppercase tracking-wider cursor-pointer ml-1"
+                            title="Fazer Check-in online na companhia aérea"
+                          >
+                            <span>Check-in</span>
+                            <ExternalLink className="w-2.5 h-2.5 text-[#D4AF37]" />
+                          </a>
+                        </>
+                      }
+                      confirmationCodes={flight.pnrLocator}
+                      codeLabel="PNR"
+                      onEdit={() => handleOpenEditModal(flight)}
+                      editTitle="Editar Voo"
+                      onDelete={() => setFlightToDelete(flight)}
+                      deleteTitle="Excluir Voo"
+                    />
+
+                    {/* Flight Body Content */}
+                    <div className="p-5 sm:p-6 space-y-5">
+                      {/* Flight Boarding Route Details */}
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center bg-slate-50/80 rounded-2xl p-5 border border-slate-200/80">
+                        {/* Departure */}
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                            Partida (Embarque)
                           </span>
-                        </div>
-                        <h3 className="text-lg font-bold font-serif text-white mt-0.5">
-                          {formatFlightRoute(flight)}
-                        </h3>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-3 shrink-0">
-                      {/* PNR Code Pill */}
-                      <div className="bg-white/10 p-2 rounded-xl border border-white/15 flex flex-col gap-1 min-w-[140px]">
-                        <span className="text-[9px] uppercase text-slate-300 font-bold tracking-wider">
-                          Localizador(es) PNR:
-                        </span>
-                        <div className="flex flex-col gap-1">
-                          {(() => {
-                            const flightPnrs = (flight.pnrLocator || '')
-                              .split(/[,/•;\s]+/)
-                              .map((p) => p.trim().toUpperCase())
-                              .filter((p) => Boolean(p && p !== 'N/A' && p !== 'N/D'));
-                            if (flightPnrs.length === 0) {
-                              return <span className="font-mono font-bold text-xs text-[#D4AF37]">N/A</span>;
-                            }
-                            return flightPnrs.map((pnrCode, pIdx) => (
-                              <div
-                                key={pIdx}
-                                className="flex items-center justify-between gap-2 bg-white/10 px-2 py-0.5 rounded-md border border-white/10 hover:bg-white/15 transition-colors"
-                              >
-                                <span className="font-mono font-bold text-xs text-[#D4AF37]">{pnrCode}</span>
-                                <button
-                                  type="button"
-                                  onClick={() => handleCopyPnr(pnrCode)}
-                                  className="p-1 text-slate-300 hover:text-white transition-colors cursor-pointer"
-                                  title={`Copiar ${pnrCode}`}
-                                >
-                                  {copiedPnr === pnrCode ? (
-                                    <Check className="w-3.5 h-3.5 text-emerald-400" />
-                                  ) : (
-                                    <Copy className="w-3.5 h-3.5" />
-                                  )}
-                                </button>
-                              </div>
-                            ));
-                          })()}
-                        </div>
-                      </div>
-
-                      {/* Edit / Delete actions */}
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenEditModal(flight)}
-                          className="px-2.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-slate-200 transition-colors cursor-pointer flex items-center gap-1.5 text-[11px] font-bold"
-                          title="Editar Voo"
-                        >
-                          <Edit3 className="w-3.5 h-3.5" />
-                          <span>Editar</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setFlightToDelete(flight)}
-                          className="px-2.5 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-600 text-red-200 hover:text-white transition-colors cursor-pointer flex items-center gap-1.5 text-[11px] font-bold"
-                          title="Excluir Voo"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                          <span>Excluir</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Flight Boarding Route Details */}
-                  <div className="p-6 space-y-6">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-center bg-slate-50 rounded-xl p-5 border border-slate-200">
-                      {/* Departure */}
-                      <div className="space-y-1">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                          Partida
-                        </span>
-                        <div className="text-2xl font-bold font-serif text-[#1A2B4C]">
-                          {flight.departureTime}
-                        </div>
-                        <p className="text-xs font-bold text-slate-800">
-                          {flight.originAirport}
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          📅 {formatDisplayDate(flight.departureDate)}
-                        </p>
-                        {flight.terminalOrigin && (
-                          <span className="inline-block px-2 py-0.5 rounded-xs bg-slate-200 text-slate-700 text-[10px] font-semibold mt-1">
-                            {flight.terminalOrigin}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Flight Path / Duration */}
-                      <div className="flex flex-col items-center justify-center text-center space-y-1">
-                        <span className="text-[11px] font-semibold text-slate-500">
-                          ⏱ {flight.duration}
-                        </span>
-                        <div className="w-full flex items-center justify-center gap-2">
-                          <div className="h-0.5 flex-1 bg-slate-300"></div>
-                          <div className="p-1.5 rounded-full bg-[#1A2B4C] text-white">
-                            <Plane className="w-3.5 h-3.5" />
+                          <div className="text-2xl font-bold font-serif text-[#1A2B4C] font-mono tabular-nums">
+                            {flight.departureTime}
                           </div>
-                          <div className="h-0.5 flex-1 bg-slate-300"></div>
-                        </div>
-                        <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200/80">
-                          {flight.stopovers}
-                        </span>
-                      </div>
-
-                      {/* Arrival */}
-                      <div className="space-y-1 md:text-right">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                          Chegada
-                        </span>
-                        <div className="text-2xl font-bold font-serif text-[#1A2B4C]">
-                          {flight.arrivalTime}
-                        </div>
-                        <p className="text-xs font-bold text-slate-800">
-                          {flight.destinationAirport}
-                        </p>
-                        <p className="text-xs text-slate-500">
-                          📅 {formatDisplayDate(flight.arrivalDate)}
-                        </p>
-                        {flight.terminalDestination && (
-                          <span className="inline-block px-2 py-0.5 rounded-xs bg-slate-200 text-slate-700 text-[10px] font-semibold mt-1">
-                            {flight.terminalDestination}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Cabin, Seats, Passengers & Baggage grid */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-                      {/* Class & Seats */}
-                      <div className="p-4 rounded-xl bg-white border border-slate-200 space-y-1.5">
-                        <div className="flex items-center gap-2 text-slate-500 font-bold uppercase text-[10px]">
-                          <Ticket className="w-3.5 h-3.5 text-[#D4AF37]" />
-                          <span>Classe & Assentos</span>
-                        </div>
-                        <p className="font-bold text-slate-800 text-xs">
-                          {flight.cabinClass}
-                        </p>
-                        <p className="text-slate-600">
-                          <strong>Assentos:</strong> {flight.seats || 'A atribuir no check-in'}
-                        </p>
-                      </div>
-
-                      {/* Baggage Allowance */}
-                      <div className="p-4 rounded-xl bg-white border border-slate-200 space-y-1.5">
-                        <div className="flex items-center gap-2 text-slate-500 font-bold uppercase text-[10px]">
-                          <Luggage className="w-3.5 h-3.5 text-[#D4AF37]" />
-                          <span>Franquia de Bagagem</span>
-                        </div>
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="px-2 py-0.5 rounded-xs bg-emerald-50 text-emerald-800 font-bold text-[10px] border border-emerald-200">
-                            ✓ Item Pessoal (Mochila)
-                          </span>
-                          <span className="px-2 py-0.5 rounded-xs bg-blue-50 text-blue-800 font-bold text-[10px] border border-blue-200">
-                            {flight.baggageAllowance.carryOnQty}x Mão (10kg)
-                          </span>
-                          <span className="px-2 py-0.5 rounded-xs bg-purple-50 text-purple-800 font-bold text-[10px] border border-purple-200">
-                            {flight.baggageAllowance.checkedQty}x Despachada (23kg)
-                          </span>
-                        </div>
-                        {flight.baggageAllowance.notes && (
-                          <p className="text-[11px] text-slate-500 leading-tight">
-                            {flight.baggageAllowance.notes}
+                          <p className="text-xs font-bold text-slate-800">
+                            {flight.originAirport}
                           </p>
-                        )}
+                          <p className="text-xs text-slate-500 font-medium flex items-center gap-1">
+                            <Calendar className="w-3.5 h-3.5 text-[#D4AF37]" />
+                            {formatDisplayDate(flight.departureDate)}
+                          </p>
+                          {flight.terminalOrigin && (
+                            <span className="inline-block px-2 py-0.5 rounded-md bg-slate-200 text-slate-700 text-[10px] font-semibold mt-1">
+                              {flight.terminalOrigin}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Flight Path / Duration */}
+                        <div className="flex flex-col items-center justify-center text-center space-y-1.5 py-2">
+                          <span className="text-[11px] font-semibold text-slate-500 flex items-center gap-1">
+                            <Clock className="w-3.5 h-3.5 text-slate-400" />
+                            {flight.duration || 'Voo direto'}
+                          </span>
+                          <div className="w-full flex items-center justify-center gap-2">
+                            <div className="h-0.5 flex-1 bg-slate-300"></div>
+                            <div className="p-2 rounded-full bg-[#1A2B4C] text-[#D4AF37] shadow-2xs">
+                              <Plane className="w-4 h-4" />
+                            </div>
+                            <div className="h-0.5 flex-1 bg-slate-300"></div>
+                          </div>
+                          <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                            {flight.stopovers || 'Voo Direto'}
+                          </span>
+                        </div>
+
+                        {/* Arrival */}
+                        <div className="space-y-1 md:text-right">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                            Chegada (Desembarque)
+                          </span>
+                          <div className="text-2xl font-bold font-serif text-[#1A2B4C] font-mono tabular-nums">
+                            {flight.arrivalTime}
+                          </div>
+                          <p className="text-xs font-bold text-slate-800">
+                            {flight.destinationAirport}
+                          </p>
+                          <p className="text-xs text-slate-500 font-medium flex items-center gap-1 md:justify-end">
+                            <Calendar className="w-3.5 h-3.5 text-[#D4AF37]" />
+                            {formatDisplayDate(flight.arrivalDate)}
+                          </p>
+                          {flight.terminalDestination && (
+                            <span className="inline-block px-2 py-0.5 rounded-md bg-slate-200 text-slate-700 text-[10px] font-semibold mt-1">
+                              {flight.terminalDestination}
+                            </span>
+                          )}
+                        </div>
                       </div>
 
-                      {/* Passengers */}
-                      <div className="p-4 rounded-xl bg-white border border-slate-200 space-y-1.5">
-                        <div className="flex items-center gap-2 text-slate-500 font-bold uppercase text-[10px]">
-                          <Users className="w-3.5 h-3.5 text-[#D4AF37]" />
-                          <span>Passageiros ({flight.passengers?.length || 0})</span>
+                      {/* 4-Column Balanced Grid: Class/Seats, Baggage, Passengers, Investment */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 text-xs">
+                        {/* Class & Seats */}
+                        <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-center gap-1.5 text-slate-400 font-bold uppercase text-[10px] tracking-wider">
+                              <Ticket className="w-3.5 h-3.5 text-[#D4AF37]" />
+                              <span>Classe & Assentos</span>
+                            </div>
+                            <p className="font-bold text-slate-900 text-xs mt-1">
+                              {flight.cabinClass || 'Econômica'}
+                            </p>
+                          </div>
+                          <p className="text-slate-600 text-[11px] pt-1.5 border-t border-slate-200/70">
+                            <strong>Assentos:</strong> {flight.seats || 'A definir no check-in'}
+                          </p>
                         </div>
-                        <p className="text-slate-700 font-medium leading-relaxed">
-                          {flight.passengers?.join(', ') || 'Todos os viajantes'}
-                        </p>
+
+                        {/* Baggage Allowance */}
+                        <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-center gap-1.5 text-slate-400 font-bold uppercase text-[10px] tracking-wider">
+                              <Luggage className="w-3.5 h-3.5 text-[#D4AF37]" />
+                              <span>Franquia de Bagagem</span>
+                            </div>
+                            <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                              <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 font-bold text-[10px] border border-emerald-200">
+                                ✓ Mochila
+                              </span>
+                              <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-800 font-bold text-[10px] border border-blue-200">
+                                {flight.baggageAllowance?.carryOnQty ?? 1}x Mão (10kg)
+                              </span>
+                              <span className="px-2 py-0.5 rounded-md bg-purple-50 text-purple-800 font-bold text-[10px] border border-purple-200">
+                                {flight.baggageAllowance?.checkedQty ?? 0}x Desp. (23kg)
+                              </span>
+                            </div>
+                          </div>
+                          {flight.baggageAllowance?.notes ? (
+                            <p className="text-[10px] text-slate-500 leading-tight pt-1 border-t border-slate-200/70 truncate">
+                              {flight.baggageAllowance.notes}
+                            </p>
+                          ) : (
+                            <p className="text-[10px] text-slate-400 italic pt-1 border-t border-slate-200/70">
+                              Regulamento TSA padrão
+                            </p>
+                          )}
+                        </div>
+
+                        {/* Passengers */}
+                        <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-center gap-1.5 text-slate-400 font-bold uppercase text-[10px] tracking-wider">
+                              <Users className="w-3.5 h-3.5 text-[#D4AF37]" />
+                              <span>Passageiros ({passengersList.length})</span>
+                            </div>
+                            <p className="text-slate-800 font-medium text-xs mt-1 leading-snug line-clamp-2">
+                              {passengersList.join(', ')}
+                            </p>
+                          </div>
+                          <span className="text-[10px] text-slate-400 pt-1.5 border-t border-slate-200/70 block">
+                            Documentação vinculada
+                          </span>
+                        </div>
+
+                        {/* Cost & Investment */}
+                        <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
+                          <div>
+                            <div className="flex items-center gap-1.5 text-slate-400 font-bold uppercase text-[10px] tracking-wider">
+                              <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Investimento da Passagem</span>
+                            </div>
+                            <div className="mt-1">
+                              <div className="text-sm sm:text-base font-bold text-[#1A2B4C] font-mono tabular-nums">
+                                {currencyView === 'BRL'
+                                  ? `R$ ${costBrl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+                                  : `US$ ${costUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+                              </div>
+                              <span className="text-[11px] text-slate-500 font-mono tabular-nums block">
+                                {currencyView === 'BRL'
+                                  ? `(US$ ${costUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })})`
+                                  : `(R$ ${costBrl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })})`}
+                              </span>
+                            </div>
+                          </div>
+                          <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100/70 px-2 py-0.5 rounded-md border border-emerald-200 w-fit">
+                            ⚡ No Financeiro
+                          </span>
+                        </div>
                       </div>
+
+                      {/* Flight Notes / Observations */}
+                      {flight.notes && (
+                        <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200/80 text-xs text-amber-900 flex items-start gap-2.5">
+                          <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                          <div className="space-y-0.5">
+                            <strong className="font-bold block text-amber-950">Observações do Voo:</strong>
+                            <p className="leading-relaxed">{flight.notes}</p>
+                          </div>
+                        </div>
+                      )}
                     </div>
-
-                    {/* Flight Notes */}
-                    {flight.notes && (
-                      <div className="p-3.5 rounded-xl bg-amber-50/80 border border-amber-200 text-xs text-amber-900 flex items-start gap-2.5">
-                        <Info className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                        <div className="space-y-0.5">
-                          <strong className="font-bold block">Observações do Voo:</strong>
-                          <p className="leading-relaxed">{flight.notes}</p>
-                        </div>
-                      </div>
-                    )}
-
-
                   </div>
-                </div>
-              ))}
+                );
+              })}
+
             </div>
           )}
         </div>

@@ -46,6 +46,7 @@ import { usePlanner, formatDisplayDate } from '../context/PlannerContext';
 import { ParkBookingModal } from './ParkBookingModal';
 import { ParkTicketModal } from './ParkTicketModal';
 import { SwapParkDayModal } from './SwapParkDayModal';
+import { LogisticsCardHeader } from './LogisticsCardHeader';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
 import { isAttractionMatch, normalizeAttractionName } from '../utils/attractionUtils';
 import { AttractionComparisonModal } from './AttractionComparisonModal';
@@ -612,83 +613,61 @@ export const ParksGuideView: React.FC = () => {
                       key={day.id}
                       className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden hover:shadow-md transition-all group"
                     >
-                      {/* Park Card Header */}
-                      <div className="bg-gradient-to-r from-slate-900 via-[#1A2B4C] to-[#2A437E] text-white p-5 sm:p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                        <div className="flex items-center gap-3 sm:gap-4">
-                          <div className="w-12 h-12 rounded-xl bg-[#D4AF37]/20 border border-[#D4AF37]/40 flex flex-col items-center justify-center shrink-0">
-                            <span className="text-[10px] font-bold uppercase text-[#D4AF37]">DIA</span>
-                            <span className="text-lg font-black text-white leading-none font-mono">
+                      {/* Park Card Header Standardized */}
+                      <LogisticsCardHeader
+                        icon={
+                          <div className="w-11 h-11 rounded-xl bg-[#D4AF37]/20 border border-[#D4AF37]/40 flex flex-col items-center justify-center shrink-0">
+                            <span className="text-[9px] font-bold uppercase text-[#D4AF37]">DIA</span>
+                            <span className="text-base font-black text-white leading-none font-mono">
                               {day.dayNumber}
                             </span>
                           </div>
-                          <div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="text-xs font-bold text-[#D4AF37]">
-                                {formatDisplayDate(day.date)}
+                        }
+                        categoryLabel={`DIA ${day.dayNumber} • ${guideInfo?.resort || 'Parque Temático'}`}
+                        status={pb?.parkPassStatus || 'Confirmado no App'}
+                        title={day.park}
+                        subtitle={
+                          <span className="flex items-center gap-2 flex-wrap">
+                            <span>{formatDisplayDate(day.date)}</span>
+                            {pb?.ticketType && (
+                              <span className="text-[#D4AF37] font-semibold text-[11px]">
+                                • {getTicketPackageName(pb.ticketType)}
                               </span>
-                              {guideInfo && (
-                                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-white/10 text-slate-200">
-                                  {guideInfo.resort}
-                                </span>
-                              )}
-                              {pb?.parkPassStatus && (
-                                <span
-                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full border flex items-center gap-1 ${
-                                    pb.parkPassStatus.includes('Previsão')
-                                      ? 'bg-amber-400/20 text-amber-300 border-amber-400/40'
-                                      : pb.parkPassStatus === 'Pendente'
-                                      ? 'bg-rose-500/20 text-rose-300 border-rose-500/40'
-                                      : 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
-                                  }`}
-                                >
-                                  <ShieldCheck className="w-3 h-3" />
-                                  {pb.parkPassStatus}
-                                </span>
-                              )}
-                              {(pb?.hasPhotoPackage || pb?.photoPackage) && (
-                                <span
-                                  onClick={() => handleOpenRegisterModal(day, day.park, 'photos')}
-                                  className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-purple-500/30 text-purple-200 border border-purple-400/40 flex items-center gap-1 cursor-pointer hover:bg-purple-500/50 transition-colors"
-                                  title="Clique para gerenciar o Pacote de Fotos"
-                                >
-                                  <Camera className="w-3 h-3 text-purple-300" />
-                                  <span>PhotoPass / Fotos</span>
-                                </span>
-                              )}
-                            </div>
-                            <h3 className="text-lg sm:text-xl font-bold font-serif text-white tracking-tight mt-0.5">
-                              {day.park}
-                            </h3>
-                          </div>
-                        </div>
-
-                        {/* Card Top Actions */}
-                        <div className="flex items-center gap-2 self-end sm:self-auto flex-wrap">
+                            )}
+                          </span>
+                        }
+                        confirmationCodes={pb?.confirmationCode}
+                        codeLabel="Voucher / Confirmação"
+                        extraBadges={
+                          (pb?.hasPhotoPackage || pb?.photoPackage) ? (
+                            <span
+                              onClick={() => handleOpenRegisterModal(day, day.park, 'photos')}
+                              className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-purple-500/30 text-purple-200 border border-purple-400/40 flex items-center gap-1 cursor-pointer hover:bg-purple-500/50 transition-colors"
+                              title="Clique para gerenciar o Pacote de Fotos"
+                            >
+                              <Camera className="w-3 h-3 text-purple-300" />
+                              <span>PhotoPass / Fotos</span>
+                            </span>
+                          ) : undefined
+                        }
+                        extraActions={
                           <button
                             type="button"
                             onClick={() => handleOpenSwapModal(day)}
-                            className="px-3.5 py-1.5 rounded-lg bg-[#D4AF37] hover:bg-[#b8952b] text-[#1A2B4C] text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs active:scale-95"
+                            className="px-3 py-1.5 rounded-lg bg-[#D4AF37] hover:bg-[#b8952b] text-[#1A2B4C] text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs active:scale-95"
                             title="Trocar parque de dia ou permutar com outro dia"
                           >
                             <ArrowLeftRight className="w-3.5 h-3.5 text-[#1A2B4C]" />
                             <span>Trocar Dia</span>
                           </button>
-                          <button
-                            onClick={() => handleOpenRegisterModal(day, day.park)}
-                            className="px-3.5 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-bold transition-colors cursor-pointer flex items-center gap-1.5"
-                          >
-                            <Edit3 className="w-3.5 h-3.5 text-[#D4AF37]" />
-                            <span>Editar Reservas</span>
-                          </button>
-                          <button
-                            onClick={() => handleUnlinkParkFromDay(day.id, day.dayNumber, day.park)}
-                            className="p-1.5 rounded-lg bg-white/10 hover:bg-rose-500/30 text-slate-300 hover:text-rose-200 transition-colors cursor-pointer"
-                            title="Desvincular parque deste dia"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
+                        }
+                        onEdit={() => handleOpenRegisterModal(day, day.park)}
+                        editLabel="Editar Reservas"
+                        editTitle="Editar reservas deste parque"
+                        onDelete={() => handleUnlinkParkFromDay(day.id, day.dayNumber, day.park)}
+                        deleteLabel="Desvincular"
+                        deleteTitle="Desvincular parque deste dia"
+                      />
 
                       {/* Card Body - 4 Functional Blocks */}
                       <div className="p-5 sm:p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-xs text-slate-700 bg-slate-50/50">
@@ -995,35 +974,22 @@ export const ParksGuideView: React.FC = () => {
                         )}
                       </div>
 
-                      {/* Frame: Observações Gerais embaixo do card */}
-                      <div className="px-5 sm:px-6 pb-5 sm:pb-6 pt-0 bg-slate-50/50">
-                        <div className="bg-white rounded-xl border border-slate-200/90 p-4 space-y-2 shadow-2xs">
-                          <div className="flex items-center gap-2 text-slate-900 font-bold text-xs flex-wrap border-b border-slate-100 pb-2">
-                            <FileText className="w-4 h-4 text-[#1A2B4C]" />
-                            <span>Observações Gerais</span>
-                            {pb?.confirmationCode && (
-                              <span className="font-mono text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
-                                Voucher / Confirmação: #{pb.confirmationCode}
+                      {/* Observações Gerais embaixo do card */}
+                      {(pb?.notes || day.generalNotes) ? (
+                        <div className="px-5 sm:px-6 pb-5 sm:pb-6 pt-0 bg-slate-50/50">
+                          <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200/80 text-xs text-amber-900 flex items-start gap-2.5">
+                            <FileText className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                            <div className="space-y-0.5 flex-1 min-w-0">
+                              <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 block">
+                                Observações & Estratégia do Dia:
                               </span>
-                            )}
-                            {pb?.ticketType && (
-                              <span className="font-sans text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
-                                {getTicketPackageName(pb.ticketType)}
-                              </span>
-                            )}
+                              <p className="text-xs text-amber-950 leading-relaxed whitespace-pre-line font-medium">
+                                {pb?.notes || day.generalNotes}
+                              </p>
+                            </div>
                           </div>
-
-                          {(pb?.notes || day.generalNotes) ? (
-                            <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-line font-medium">
-                              {pb?.notes || day.generalNotes}
-                            </p>
-                          ) : (
-                            <p className="text-[11px] text-slate-400 italic py-1">
-                              Nenhuma observação geral cadastrada para este dia.
-                            </p>
-                          )}
                         </div>
-                      </div>
+                      ) : null}
                     </div>
                   );
                 })}
@@ -1146,74 +1112,44 @@ export const ParksGuideView: React.FC = () => {
                 return (
                   <div
                     key={ticket.id}
-                    className="bg-white rounded-2xl border border-slate-200 shadow-2xs hover:shadow-md transition-all overflow-hidden flex flex-col justify-between"
+                    className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-md transition-all overflow-hidden flex flex-col justify-between group"
                   >
                     <div>
-                      {/* Top Header of Ticket Card */}
-                      <div className="p-4 sm:p-5 bg-gradient-to-r from-slate-50 via-slate-100 to-slate-50 border-b border-slate-200/80 flex items-start justify-between gap-3">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span
-                              className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
-                                ticket.complex === 'Disney'
-                                  ? 'bg-blue-100 text-blue-800'
-                                  : ticket.complex === 'Universal'
-                                  ? 'bg-indigo-100 text-indigo-800'
-                                  : ticket.complex === 'SeaWorld'
-                                  ? 'bg-teal-100 text-teal-800'
-                                  : 'bg-slate-100 text-slate-800'
-                              }`}
-                            >
-                              {ticket.complex}
-                            </span>
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">
-                              {ticket.type === 'combo' ? 'Combo Multi-Parques' : 'Individual'}
-                            </span>
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200">
-                              📦 {ticket.quantity || 1} { (ticket.quantity || 1) === 1 ? 'Pacote' : 'Pacotes' }
-                            </span>
-                            <span
-                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                                ticket.paymentStatus === 'Pago'
-                                  ? 'bg-emerald-100 text-emerald-800'
-                                  : ticket.paymentStatus?.includes('Previsão')
-                                  ? 'bg-amber-100 text-amber-800 border border-amber-300'
-                                  : ticket.paymentStatus === 'Pendente'
-                                  ? 'bg-rose-100 text-rose-800'
-                                  : 'bg-slate-100 text-slate-700'
-                              }`}
-                            >
-                              {ticket.paymentStatus === 'Pago'
-                                ? '✅ Quitado'
-                                : ticket.paymentStatus?.includes('Previsão')
-                                ? '💡 Apenas Previsão'
-                                : '⏳ ' + ticket.paymentStatus}
-                            </span>
+                      {/* Standardized Header */}
+                      <LogisticsCardHeader
+                        icon={
+                          <div className="w-10 h-10 rounded-xl bg-[#D4AF37]/20 border border-[#D4AF37]/40 flex items-center justify-center shrink-0">
+                            <Ticket className="w-5 h-5 text-[#D4AF37]" />
                           </div>
-
-                          <h3 className="text-base font-bold font-serif text-[#1A2B4C] leading-snug">
-                            {ticket.title}
-                          </h3>
-                        </div>
-
-                        {/* Action buttons */}
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            onClick={() => handleOpenEditTicketModal(ticket)}
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-[#1A2B4C] hover:bg-white transition-colors cursor-pointer"
-                            title="Editar ingresso"
-                          >
-                            <Edit3 className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => setTicketToDelete(ticket)}
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                            title="Excluir ingresso"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
+                        }
+                        categoryLabel={`${ticket.complex || 'Ingresso'} • ${ticket.type === 'combo' ? 'Combo Multi-Parques' : 'Individual'}`}
+                        status={
+                          ticket.paymentStatus === 'Pago'
+                            ? 'Quitado'
+                            : ticket.paymentStatus?.includes('Previsão')
+                            ? 'Apenas Previsão'
+                            : ticket.paymentStatus || 'Confirmado'
+                        }
+                        title={ticket.title}
+                        subtitle={
+                          <div className="flex items-center gap-2 flex-wrap text-xs text-slate-300">
+                            <span className="font-semibold text-amber-300">
+                              📦 {ticket.quantity || 1} {(ticket.quantity || 1) === 1 ? 'Pacote / Ingresso' : 'Pacotes / Ingressos'}
+                            </span>
+                            {ticket.seller && (
+                              <span>
+                                • Emitido por: <strong className="text-white font-medium">{ticket.seller}</strong>
+                              </span>
+                            )}
+                          </div>
+                        }
+                        confirmationCodes={ticket.confirmationCode}
+                        codeLabel="Código / Voucher"
+                        onEdit={() => handleOpenEditTicketModal(ticket)}
+                        editTitle="Editar dados do ingresso"
+                        onDelete={() => setTicketToDelete(ticket)}
+                        deleteTitle="Excluir ingresso"
+                      />
 
                       {/* Ticket Body Content */}
                       <div className="p-4 sm:p-5 space-y-3.5 text-xs text-slate-700">
@@ -1226,7 +1162,7 @@ export const ParksGuideView: React.FC = () => {
                             {(ticket.parksIncluded || []).map((pName) => (
                               <span
                                 key={pName}
-                                className="px-2 py-0.5 bg-slate-100 text-slate-800 rounded-md text-[11px] font-medium border border-slate-200"
+                                className="px-2.5 py-1 bg-slate-100 text-slate-800 rounded-lg text-[11px] font-medium border border-slate-200/80 shadow-2xs"
                               >
                                 🎡 {pName}
                               </span>
@@ -1262,68 +1198,49 @@ export const ParksGuideView: React.FC = () => {
                         {/* Modalidade / Opção & Dias */}
                         <div className="grid grid-cols-2 gap-2 pt-2.5 border-t border-slate-100 text-[11px]">
                           <div>
-                            <span className="text-slate-400 block text-[10px]">Duração:</span>
+                            <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Duração</span>
                             <span className="font-bold text-slate-800">
                               {ticket.daysCount} {ticket.daysCount === 1 ? 'Dia de Parque' : 'Dias de Parques'}
                             </span>
                           </div>
                           <div>
-                            <span className="text-slate-400 block text-[10px]">Modalidade:</span>
+                            <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Modalidade</span>
                             <span className="font-bold text-slate-800 truncate block">
                               {ticket.ticketOption || 'Padrão'}
                             </span>
                           </div>
                         </div>
 
-                        {/* Confirmation Code & Seller */}
-                        {(ticket.confirmationCode || ticket.seller) && (
-                          <div className="grid grid-cols-2 gap-2 text-[11px] bg-slate-50 p-2.5 rounded-xl border border-slate-200/80">
-                            {ticket.confirmationCode && (
-                              <div>
-                                <span className="text-slate-400 block text-[10px]">Código / Voucher:</span>
-                                <span className="font-mono font-bold text-slate-900">
-                                  {ticket.confirmationCode}
-                                </span>
-                              </div>
-                            )}
-                            {ticket.seller && (
-                              <div>
-                                <span className="text-slate-400 block text-[10px]">Emitido por:</span>
-                                <span className="font-bold text-slate-800 truncate block">
-                                  {ticket.seller}
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        )}
-
                         {/* Notes if present */}
                         {ticket.notes && (
-                          <p className="text-[11px] text-slate-500 italic bg-amber-50/50 p-2 rounded-lg border border-amber-100/80">
-                            "{ticket.notes}"
-                          </p>
+                          <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-200/80 text-xs text-amber-900 flex items-start gap-2">
+                            <FileText className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                            <p className="text-[11px] leading-relaxed italic text-amber-950">
+                              "{ticket.notes}"
+                            </p>
+                          </div>
                         )}
                       </div>
                     </div>
 
                     {/* Bottom Footer of Card: Financial details & Sync Badge */}
-                    <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between text-xs">
+                    <div className="p-4 bg-slate-50 border-t border-slate-200/90 flex items-center justify-between text-xs">
                       <div>
                         <span className="text-[10px] text-slate-400 block font-medium">
                           Valor Total ({ticket.quantity || 1} {ticket.quantity === 1 ? 'ingresso' : 'ingressos'})
                         </span>
                         <div className="flex items-baseline gap-1.5">
-                          <span className="text-base font-bold text-[#1A2B4C] font-mono">
+                          <span className="text-base font-bold text-[#1A2B4C] font-mono tabular-nums">
                             R$ {costBrl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                           </span>
-                          <span className="text-[11px] text-slate-500 font-mono">
+                          <span className="text-[11px] text-slate-500 font-mono tabular-nums">
                             (US$ {costUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })})
                           </span>
                         </div>
                       </div>
 
                       <div className="text-right">
-                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-full border border-emerald-200">
+                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100/80 px-2.5 py-1 rounded-full border border-emerald-200">
                           ⚡ No Financeiro
                         </span>
                       </div>

@@ -5,6 +5,7 @@ import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { parseInputToNumber, formatInputDisplay } from '../utils/currency';
 import { TravelerSelector } from './TravelerSelector';
 import { MoneyInput } from './MoneyInput';
+import { LogisticsCardHeader } from './LogisticsCardHeader';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
 import {
   Car,
@@ -616,164 +617,180 @@ export const TransportationView: React.FC = () => {
               {carRentals.map((rental, rIdx) => {
                 const costBRLCalculated =
                   rental.costBRL || (rental.costUSD || 0) * (settings.dollarRate || 5.75);
+                const costUsd = rental.costUSD || 0;
 
                 return (
                   <div
                     key={`${rental.id}-${rIdx}`}
-                    className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden transition-all hover:border-[#D4AF37]/50"
+                    className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs hover:border-[#D4AF37]/50 hover:shadow-xs transition-all overflow-hidden space-y-0"
                   >
-                    {/* Top Header Bar */}
-                    <div className="p-5 sm:p-6 bg-gradient-to-r from-slate-900 to-[#1A2B4C] text-white flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 rounded-xl bg-[#D4AF37] text-[#1A2B4C] font-black flex items-center justify-center text-xl shrink-0 shadow-sm">
-                          <Car className="w-6 h-6" />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-[#D4AF37] uppercase tracking-wider">
-                              {rental.company}
-                            </span>
-                            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                              {rental.status}
-                            </span>
-                          </div>
-                          <h3 className="text-lg font-bold text-white font-serif mt-0.5">
-                            {rental.category}
-                          </h3>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-3 self-end sm:self-auto">
-                        <div className="text-right">
-                          <div className="text-xs text-slate-300">Código de Reserva</div>
-                          <div className="text-sm font-bold text-[#D4AF37] font-mono">
-                            {rental.confirmationCode || 'PNR Não Informado'}
-                          </div>
-                        </div>
-
-                        <div className="flex items-center gap-1.5 pl-3 border-l border-white/10">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditModal(rental)}
-                            className="p-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
-                            title="Editar Veículo"
-                          >
-                            <Edit3 className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setRentalToDelete(rental)}
-                            className="p-2 rounded-lg bg-rose-500/20 hover:bg-rose-500/40 text-rose-300 transition-colors cursor-pointer"
-                            title="Excluir Veículo"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
+                    {/* Standardized Logistics Header */}
+                    <LogisticsCardHeader
+                      icon={<Car className="w-5 h-5 text-[#D4AF37]" />}
+                      categoryLabel={rental.company || 'Aluguel de Carro'}
+                      categoryBadgeColor="bg-[#D4AF37] text-[#1A2B4C]"
+                      status={rental.status || 'Reservado / Confirmado'}
+                      title={rental.category}
+                      subtitle={
+                        <span className="flex items-center gap-2 flex-wrap text-slate-200">
+                          <span>
+                            Condutor: <strong>{rental.driverName || 'Não Informado'}</strong>
+                          </span>
+                          <span>•</span>
+                          <span>
+                            Pedágio: <strong>{rental.tollOption || 'Visitor Toll Pass'}</strong>
+                          </span>
+                        </span>
+                      }
+                      confirmationCodes={rental.confirmationCode}
+                      codeLabel="Reserva"
+                      onEdit={() => handleOpenEditModal(rental)}
+                      editTitle="Editar Veículo"
+                      onDelete={() => setRentalToDelete(rental)}
+                      deleteTitle="Excluir Veículo"
+                    />
 
                     {/* Content Details */}
-                    <div className="p-5 sm:p-6 space-y-6">
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="p-5 sm:p-6 space-y-5">
+                      {/* Pick-up & Drop-off Timeline Box */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 sm:p-5 rounded-2xl bg-slate-50/80 border border-slate-200/80">
                         {/* Pickup */}
-                        <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
-                          <div className="text-[10px] text-slate-700 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                        <div className="space-y-1">
+                          <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
                             <MapPin className="w-3.5 h-3.5 text-[#D4AF37]" />
                             <span>Retirada (Pick-up)</span>
                           </div>
                           <p className="text-xs font-bold text-[#1A2B4C] leading-snug">
                             {cleanAddressString(rental.pickupLocation)}
                           </p>
-                          <p className="text-xs text-slate-700 font-semibold pt-1">
-                            📅 {formatDateBR(rental.pickupDate)} • A partir de {rental.pickupTime || '14:30'}
+                          <p className="text-xs text-slate-600 font-medium flex items-center gap-1 pt-1">
+                            <Calendar className="w-3.5 h-3.5 text-[#D4AF37]" />
+                            <span>{formatDateBR(rental.pickupDate)}</span>
+                            <span>•</span>
+                            <Clock className="w-3.5 h-3.5 text-slate-400" />
+                            <span>A partir de {rental.pickupTime || '14:30'}</span>
                           </p>
                         </div>
 
                         {/* Dropoff */}
-                        <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
-                          <div className="text-[10px] text-slate-700 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                        <div className="space-y-1 md:border-l md:border-slate-200 md:pl-4">
+                          <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
                             <MapPin className="w-3.5 h-3.5 text-[#D4AF37]" />
                             <span>Devolução (Drop-off)</span>
                           </div>
                           <p className="text-xs font-bold text-[#1A2B4C] leading-snug">
                             {cleanAddressString(rental.dropoffLocation)}
                           </p>
-                          <p className="text-xs text-slate-700 font-semibold pt-1">
-                            📅 {formatDateBR(rental.dropoffDate)} • Até {rental.dropoffTime || '12:00'}
+                          <p className="text-xs text-slate-600 font-medium flex items-center gap-1 pt-1">
+                            <Calendar className="w-3.5 h-3.5 text-[#D4AF37]" />
+                            <span>{formatDateBR(rental.dropoffDate)}</span>
+                            <span>•</span>
+                            <Clock className="w-3.5 h-3.5 text-slate-400" />
+                            <span>Até às {rental.dropoffTime || '12:00'}</span>
                           </p>
                         </div>
+                      </div>
 
-                        {/* Driver & Tolls */}
-                        <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                      {/* 4-Column Balanced Grid: Driver, Tolls, Insurances, Investment */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 text-xs">
+                        {/* Driver */}
+                        <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
                           <div>
-                            <div className="text-[10px] text-slate-700 font-bold uppercase tracking-wider flex items-center gap-1">
+                            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
                               <KeyRound className="w-3.5 h-3.5 text-[#D4AF37]" />
                               <span>Condutor Principal</span>
                             </div>
-                            <p className="text-xs font-bold text-slate-800">
+                            <p className="font-bold text-slate-900 text-xs mt-1">
                               {rental.driverName || 'Não Informado'}
                             </p>
                           </div>
+                          <span className="text-[10px] text-slate-400 pt-1.5 border-t border-slate-200/70 block">
+                            CNH válida exigida
+                          </span>
+                        </div>
 
-                          <div className="pt-1 border-t border-slate-200">
-                            <div className="text-[10px] text-slate-700 font-bold uppercase tracking-wider flex items-center gap-1">
+                        {/* Toll Option */}
+                        <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
+                          <div>
+                            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
                               <CreditCard className="w-3.5 h-3.5 text-[#D4AF37]" />
                               <span>Opção de Pedágio</span>
                             </div>
-                            <p className="text-xs font-bold text-amber-900">
+                            <p className="font-bold text-amber-900 text-xs mt-1">
                               {rental.tollOption || 'Visitor Toll Pass'}
                             </p>
                           </div>
+                          <span className="text-[10px] text-emerald-700 font-semibold pt-1.5 border-t border-slate-200/70 block">
+                            ✓ Isento de taxas abusivas
+                          </span>
                         </div>
 
-                        {/* Cost Breakdown */}
-                        <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
-                          <div className="text-[10px] text-slate-700 font-bold uppercase tracking-wider flex items-center gap-1.5">
-                            <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>Valor do Aluguel</span>
-                          </div>
-                          <p className="text-base font-bold text-[#1A2B4C]">
-                            US$ {(rental.costUSD || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                          </p>
-                          <p className="text-xs font-semibold text-emerald-700">
-                            R$ {costBRLCalculated.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Insurances & Notes */}
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-                        <div className="p-4 rounded-xl bg-emerald-50/50 border border-emerald-200 space-y-2">
-                          <div className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
-                            <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                            <span>Coberturas & Seguros Incluídos</span>
-                          </div>
-                          <ul className="space-y-1 text-xs text-emerald-950">
+                        {/* Insurances & Coverage */}
+                        <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
+                          <div>
+                            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Seguros & Coberturas ({rental.includedInsurances?.length || 0})</span>
+                            </div>
                             {rental.includedInsurances && rental.includedInsurances.length > 0 ? (
-                              rental.includedInsurances.map((ins, idx) => (
-                                <li key={idx} className="flex items-center gap-2">
-                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                  <span>{ins}</span>
-                                </li>
-                              ))
+                              <div className="flex flex-wrap gap-1 mt-1">
+                                {rental.includedInsurances.slice(0, 2).map((ins, idx) => (
+                                  <span
+                                    key={idx}
+                                    className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 text-[10px] font-semibold border border-emerald-200 truncate max-w-[140px]"
+                                  >
+                                    ✓ {ins}
+                                  </span>
+                                ))}
+                                {rental.includedInsurances.length > 2 && (
+                                  <span className="text-[10px] font-bold text-slate-500 self-center">
+                                    +{rental.includedInsurances.length - 2} mais
+                                  </span>
+                                )}
+                              </div>
                             ) : (
-                              <li className="text-slate-500">Nenhum seguro especificado</li>
+                              <p className="text-[11px] text-slate-400 italic mt-1">
+                                Seguro CDW/LDW padrão
+                              </p>
                             )}
-                          </ul>
+                          </div>
+                          <span className="text-[10px] text-slate-400 pt-1.5 border-t border-slate-200/70 block">
+                            Proteção contratada
+                          </span>
                         </div>
 
-                        <div className="p-4 rounded-xl bg-amber-50/50 border border-amber-200 space-y-2">
-                          <div className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
-                            <Info className="w-4 h-4 text-amber-600" />
-                            <span>Instruções & Dicas da Locadora</span>
+                        {/* Cost & Investment */}
+                        <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
+                          <div>
+                            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                              <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Investimento da Locação</span>
+                            </div>
+                            <div className="mt-1">
+                              <div className="text-sm sm:text-base font-bold text-[#1A2B4C] font-mono tabular-nums">
+                                US$ {costUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                              </div>
+                              <span className="text-[11px] text-slate-500 font-mono tabular-nums block">
+                                R$ {costBRLCalculated.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              </span>
+                            </div>
                           </div>
-                          <p className="text-xs text-amber-950 leading-relaxed">
-                            {rental.notes || 'Apresentar CNH física brasileira original + passaporte no balcão de atendimento.'}
-                          </p>
+                          <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100/70 px-2 py-0.5 rounded-md border border-emerald-200 w-fit">
+                            ⚡ No Financeiro
+                          </span>
                         </div>
                       </div>
 
-
+                      {/* Observações & Dicas da Locadora */}
+                      {rental.notes && (
+                        <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200/80 text-xs text-amber-900 flex items-start gap-2.5">
+                          <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                          <div className="space-y-0.5">
+                            <span className="font-bold block text-amber-950">Instruções & Dicas da Locadora:</span>
+                            <p className="leading-relaxed">{rental.notes}</p>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 );
