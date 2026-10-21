@@ -361,6 +361,17 @@ export interface BaggageAllowance {
   notes?: string;
 }
 
+export type FlightOperationalStatus =
+  | 'Emitido / Confirmado'
+  | 'Check-in Aberto'
+  | 'Check-in Realizado'
+  | 'Embarcado'
+  | 'Concluído'
+  | 'Reservado / Confirmado'
+  | string;
+
+export type FlightPaymentStatus = 'Pago' | 'Pendente' | 'Não informado';
+
 export interface FlightSegment {
   id: string;
   type: 'outbound' | 'inbound' | 'internal' | 'connection';
@@ -377,7 +388,8 @@ export interface FlightSegment {
   pnrLocator?: string;
   ticketCostUSD?: number;
   ticketCostBRL?: number;
-  status: 'Reservado / Confirmado' | 'Pago' | 'Pendente' | 'Concluído' | 'Emitido / Confirmado' | 'Check-in Realizado' | 'Embarcado';
+  status: FlightOperationalStatus;
+  paymentStatus?: FlightPaymentStatus;
   payerId?: string;
   travelerIds?: string[];
   notes?: string;

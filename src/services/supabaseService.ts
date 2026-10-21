@@ -611,7 +611,8 @@ export function mapFlightToDb(f: FlightSegment, tripId: string): Record<string, 
     terminal_destination: f.terminalDestination || null,
     gate: f.gate || null,
     baggage_allowance: f.baggageAllowance || { personalItem: true, carryOnQty: 1, checkedQty: 1, notes: '' },
-    status: f.status || 'Emitido / Confirmado',
+    status: f.status && f.status !== 'Pago' && f.status !== 'Pendente' ? f.status : 'Emitido / Confirmado',
+    payment_status: f.paymentStatus && f.paymentStatus !== 'Não informado' ? f.paymentStatus : null,
     ticket_cost_usd: f.ticketCostUSD ? Number(f.ticketCostUSD) : null,
     ticket_cost_brl: f.ticketCostBRL ? Number(f.ticketCostBRL) : null,
     payer_id: sanitizeTravelerForeignKey(f.payerId),
@@ -638,6 +639,27 @@ export function mapDbToFlight(row: any): FlightSegment {
     }
   } else if (row.baggage_allowance && typeof row.baggage_allowance === 'object') {
     baggageAllowance = row.baggage_allowance;
+  }
+
+  // Identificar status operacional do voo e status de pagamento
+  let operationalStatus: string = row.status || 'Emitido / Confirmado';
+  let paymentStatus: 'Pago' | 'Pendente' | 'Não informado' = 'Não informado';
+
+  if (row.payment_status) {
+    if (row.payment_status === 'Pago') paymentStatus = 'Pago';
+    else if (row.payment_status === 'Pendente') paymentStatus = 'Pendente';
+    else paymentStatus = 'Não informado';
+  } else if (row.status === 'Pago') {
+    // Valor legado inequivocamente de pagamento
+    paymentStatus = 'Pago';
+    operationalStatus = 'Emitido / Confirmado';
+  } else if (row.status === 'Pendente') {
+    // Valor legado inequivocamente de pagamento
+    paymentStatus = 'Pendente';
+    operationalStatus = 'Emitido / Confirmado';
+  } else {
+    // Para registros antigos sem status de pagamento identificável, exibe 'Não informado'
+    paymentStatus = 'Não informado';
   }
 
   return {
@@ -668,7 +690,8 @@ export function mapDbToFlight(row: any): FlightSegment {
     terminalDestination: row.terminal_destination,
     gate: row.gate,
     baggageAllowance,
-    status: row.status,
+    status: operationalStatus,
+    paymentStatus,
     ticketCostUSD: row.ticket_cost_usd ? Number(row.ticket_cost_usd) : undefined,
     ticketCostBRL: row.ticket_cost_brl ? Number(row.ticket_cost_brl) : undefined,
     payerId: row.payer_id || 'all',
@@ -1550,7 +1573,16 @@ export const SupabaseService = {
           }
 
           if (dbRows.length > 0) {
-            const { error: upErr } = await supabase.from(tableName).upsert(dbRows, { onConflict: 'id' });
+            let { error: upErr } = await supabase.from(tableName).upsert(dbRows, { onConflict: 'id' });
+            if (upErr && tableName === 'flight_segments' && (upErr.message?.includes('payment_status') || upErr.details?.includes('payment_status') || upErr.code === 'PGRST204')) {
+              const fallbackRows = dbRows.map((r) => {
+                const copy = { ...r };
+                delete copy.payment_status;
+                return copy;
+              });
+              const retryRes = await supabase.from(tableName).upsert(fallbackRows, { onConflict: 'id' });
+              upErr = retryRes.error;
+            }
             if (upErr) {
               tableErrors.push({ table: tableName, operation: 'UPSERT', error: upErr.message });
             }
@@ -2101,9 +2133,17 @@ export const SupabaseService = {
 
       // 2. Upsert flight_segments
       const dbRow = mapFlightToDb(flight, tripId);
-      const { error } = await supabase
+      let { error } = await supabase
         .from('flight_segments')
         .upsert(dbRow, { onConflict: 'id' });
+
+      // Fallback gracioso se a coluna payment_status ainda não foi criada no Supabase via migração SQL
+      if (error && (error.message?.includes('payment_status') || error.details?.includes('payment_status') || error.code === 'PGRST204')) {
+        const fallbackRow = { ...dbRow };
+        delete fallbackRow.payment_status;
+        const retryRes = await supabase.from('flight_segments').upsert(fallbackRow, { onConflict: 'id' });
+        error = retryRes.error;
+      }
 
       if (error) {
         if (isSupabaseMissingTableError(error)) {
@@ -2112,7 +2152,8 @@ export const SupabaseService = {
         return { success: false, error: error.message };
       }
 
-      // 3. Sincronizar com a tabela de expenses
+      // 3. Sincronizar com a tabela de expenses usando o status de pagamento real
+      const expenseStatus = flight.paymentStatus === 'Pago' ? 'Pago' : 'Pendente';
       await syncToExpenses(tripId, 'flight', flight.id, {
         title: `Passagem: ${flight.airline || 'Voo'} (${flight.typeLabel || 'Voo'}${flight.flightNumber ? ' ' + flight.flightNumber : ''})`,
         category: 'Passagens',
@@ -2120,7 +2161,7 @@ export const SupabaseService = {
         brl: flight.ticketCostBRL || 0,
         payerId: flight.payerId || 'all',
         travelerIds: flight.travelerIds || ['all'],
-        status: (flight.status === 'Emitido / Confirmado' || flight.status === 'Check-in Realizado' || flight.status === 'Embarcado' || flight.status === 'Concluído') ? 'Pago' : 'Pendente',
+        status: expenseStatus,
         notes: `Trecho: ${flight.originCity || flight.originAirport || 'Origem'} ➔ ${flight.destinationCity || flight.destinationAirport || 'Destino'}`
       }, fallbackTrip);
 

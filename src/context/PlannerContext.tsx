@@ -4173,16 +4173,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     const brl = Number(flight.ticketCostBRL) || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
     const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
 
-    const statusLower = (flight.status || '').toLowerCase();
-    const isPaid =
-      statusLower.includes('emitido') ||
-      statusLower.includes('confirmado') ||
-      statusLower.includes('check-in') ||
-      statusLower.includes('checkin') ||
-      statusLower.includes('embarcado') ||
-      statusLower.includes('concluído') ||
-      statusLower.includes('concluido') ||
-      statusLower === 'pago';
+    const isPaid = flight.paymentStatus === 'Pago';
 
     const flightTitle = `Passagem: ${flight.airline || 'Voo'} (${flight.typeLabel || 'Voo'}${flight.flightNumber ? ' ' + flight.flightNumber : ''})`.trim();
     const flightNotes = `Trecho: ${flight.originCity || flight.originAirport || 'Origem'} ➔ ${flight.destinationCity || flight.destinationAirport || 'Destino'}${flight.departureDate ? ' (' + flight.departureDate + ')' : ''}`;

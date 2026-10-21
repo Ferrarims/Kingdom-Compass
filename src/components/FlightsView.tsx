@@ -28,7 +28,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { usePlanner, formatDisplayDate, getTripEndDate } from '../context/PlannerContext';
-import { FlightSegment } from '../types';
+import { FlightSegment, FlightPaymentStatus, FlightOperationalStatus } from '../types';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { parseInputToNumber, formatInputDisplay } from '../utils/currency';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
@@ -146,6 +146,7 @@ export const FlightsView: React.FC = () => {
       notes: '',
     },
     status: 'Emitido / Confirmado',
+    paymentStatus: 'Não informado',
     ticketCostUSD: 0,
     ticketCostBRL: 0,
     notes: '',
@@ -193,6 +194,7 @@ export const FlightsView: React.FC = () => {
         notes: '',
       },
       status: 'Emitido / Confirmado',
+      paymentStatus: 'Não informado',
       ticketCostUSD: 0,
       ticketCostBRL: 0,
       notes: '',
@@ -206,6 +208,28 @@ export const FlightsView: React.FC = () => {
 
   const handleOpenEditModal = (flight: FlightSegment) => {
     setEditingFlight(flight);
+
+    // Safeguard legacy data: operational status must only be valid flight status options
+    const validOperationalStatuses: FlightOperationalStatus[] = [
+      'Emitido / Confirmado',
+      'Check-in Aberto',
+      'Check-in Realizado',
+      'Embarcado',
+      'Concluído',
+    ];
+    const operationalStatus: FlightOperationalStatus = validOperationalStatuses.includes(flight.status as any)
+      ? (flight.status as FlightOperationalStatus)
+      : 'Emitido / Confirmado';
+
+    // Safely infer legacy payment status: only 'Pago' or 'Pendente' if previously set in status; otherwise 'Não informado'
+    const resolvedPaymentStatus: FlightPaymentStatus = flight.paymentStatus
+      ? flight.paymentStatus
+      : (flight.status as any) === 'Pago'
+      ? 'Pago'
+      : (flight.status as any) === 'Pendente'
+      ? 'Pendente'
+      : 'Não informado';
+
     setFormData({
       type: flight.type,
       typeLabel: flight.typeLabel,
@@ -231,12 +255,14 @@ export const FlightsView: React.FC = () => {
       terminalDestination: flight.terminalDestination || '',
       gate: flight.gate || '',
       baggageAllowance: flight.baggageAllowance || { personalItem: true, carryOnQty: 1, checkedQty: 1, notes: '' },
-      status: flight.status,
+      status: operationalStatus,
+      paymentStatus: resolvedPaymentStatus,
       ticketCostUSD: flight.ticketCostUSD || 0,
       ticketCostBRL: flight.ticketCostBRL || 0,
       notes: flight.notes || '',
       travelerIds: flight.travelerIds || ['all'],
       passengers: flight.passengers || (settings.travelers || []).map((t) => t?.name || 'Viajante'),
+      payerId: flight.payerId || 'all',
     });
 
     const travelers = settings.travelers || [];
@@ -543,6 +569,28 @@ export const FlightsView: React.FC = () => {
                           </a>
                         </>
                       }
+                      extraBadges={
+                        flight.paymentStatus ? (
+                          <span
+                            className={`px-2.5 py-0.5 rounded-md font-bold text-[10px] sm:text-[11px] flex items-center gap-1 shrink-0 ${
+                              flight.paymentStatus === 'Pago'
+                                ? 'bg-emerald-500/25 text-emerald-300 border border-emerald-400/35'
+                                : flight.paymentStatus === 'Pendente'
+                                ? 'bg-amber-400/25 text-amber-300 border border-amber-300/35'
+                                : 'bg-white/10 text-slate-300 border border-white/15'
+                            }`}
+                          >
+                            <DollarSign className="w-3 h-3 shrink-0" />
+                            <span>
+                              {flight.paymentStatus === 'Não informado'
+                                ? 'Pagamento: Não informado'
+                                : flight.paymentStatus === 'Pago'
+                                ? 'Pago'
+                                : 'Pagamento Pendente'}
+                            </span>
+                          </span>
+                        ) : null
+                      }
                       confirmationCodes={flight.pnrLocator}
                       codeLabel="PNR"
                       onEdit={() => handleOpenEditModal(flight)}
@@ -702,9 +750,26 @@ export const FlightsView: React.FC = () => {
                               </span>
                             </div>
                           </div>
-                          <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100/70 px-2 py-0.5 rounded-md border border-emerald-200 w-fit">
-                            ⚡ No Financeiro
-                          </span>
+                          <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                            <span
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-md border w-fit ${
+                                flight.paymentStatus === 'Pago'
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                  : flight.paymentStatus === 'Pendente'
+                                  ? 'bg-amber-100 text-amber-800 border-amber-300'
+                                  : 'bg-slate-100 text-slate-600 border-slate-300'
+                              }`}
+                            >
+                              {flight.paymentStatus === 'Pago'
+                                ? '✓ Pago'
+                                : flight.paymentStatus === 'Pendente'
+                                ? '⏳ Pagamento Pendente'
+                                : '⚪ Pagamento: Não informado'}
+                            </span>
+                            <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100/70 px-2 py-0.5 rounded-md border border-emerald-200 w-fit">
+                              ⚡ No Financeiro
+                            </span>
+                          </div>
                         </div>
                       </div>
 
@@ -1146,7 +1211,7 @@ export const FlightsView: React.FC = () => {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                       {/* Número do Voo */}
                       <div>
                         <label className="block text-xs font-semibold text-slate-600 mb-1.5">
@@ -1174,6 +1239,24 @@ export const FlightsView: React.FC = () => {
                           placeholder="Ex: K9X2PZ"
                           className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono font-semibold text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] transition-all"
                         />
+                      </div>
+
+                      {/* Status Operacional do Voo */}
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-600 mb-1.5">
+                          Status do Voo
+                        </label>
+                        <select
+                          value={formData.status}
+                          onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
+                          className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] cursor-pointer transition-all"
+                        >
+                          <option value="Emitido / Confirmado">✅ Emitido / Confirmado</option>
+                          <option value="Check-in Aberto">💡 Check-in Aberto</option>
+                          <option value="Check-in Realizado">✔️ Check-in Realizado</option>
+                          <option value="Embarcado">✈️ Embarcado</option>
+                          <option value="Concluído">🏁 Concluído</option>
+                        </select>
                       </div>
                     </div>
                   </div>
@@ -1566,12 +1649,12 @@ export const FlightsView: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Custos e Status (3 colunas para campos curtos) */}
+                    {/* Custos e Status do Pagamento (3 colunas para campos curtos) */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 border-t border-slate-200/70">
                       <div>
                         <div className="flex items-center justify-between mb-1.5">
                           <label className="text-xs font-semibold text-slate-600">
-                            Valor a Pagar (US$)
+                            Valor por Passageiro (US$)
                           </label>
                           <span className="text-[10px] text-slate-400 font-mono">USD/pessoa</span>
                         </div>
@@ -1594,12 +1677,15 @@ export const FlightsView: React.FC = () => {
                             });
                           }}
                         />
+                        <span className="text-[10px] text-slate-400 block mt-1">
+                          Cotação: R$ {(settings.dollarRate || 5.75).toFixed(2)}
+                        </span>
                       </div>
 
                       <div>
                         <div className="flex items-center justify-between mb-1.5">
                           <label className="text-xs font-semibold text-slate-600">
-                            Valor a Pagar (R$)
+                            Valor por Passageiro (R$)
                           </label>
                           <span className="text-[10px] text-slate-400 font-mono">BRL/pessoa</span>
                         </div>
@@ -1622,6 +1708,9 @@ export const FlightsView: React.FC = () => {
                             });
                           }}
                         />
+                        <span className="text-[10px] text-slate-400 block mt-1">
+                          Conversão automática
+                        </span>
                       </div>
 
                       <div>
@@ -1629,37 +1718,38 @@ export const FlightsView: React.FC = () => {
                           Status do Pagamento
                         </label>
                         <select
-                          value={formData.status}
-                          onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
+                          value={formData.paymentStatus || 'Não informado'}
+                          onChange={(e) => setFormData({ ...formData, paymentStatus: e.target.value as FlightPaymentStatus })}
                           className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] cursor-pointer transition-all"
                         >
-                          <option value="Emitido / Confirmado">✅ Emitido / Confirmado</option>
-                          <option value="Check-in Aberto">💡 Check-in Aberto</option>
-                          <option value="Check-in Realizado">✔️ Check-in Realizado</option>
-                          <option value="Embarcado">✈️ Embarcado</option>
-                          <option value="Concluído">🏁 Concluído</option>
+                          <option value="Não informado">⚪ Não informado</option>
+                          <option value="Pendente">⏳ Pendente / Não pago</option>
+                          <option value="Pago">✅ Pago</option>
                         </select>
+                        <span className="text-[10px] text-slate-400 block mt-1">
+                          Situação financeira do bilhete
+                        </span>
                       </div>
                     </div>
 
                     {/* Resumo Financeiro & Pagador */}
                     <div className="pt-4 border-t border-slate-200/70 space-y-3">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                        <div className="text-xs text-slate-500 font-medium flex items-center gap-2">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3 rounded-lg border border-slate-200/80">
+                        <div className="text-xs text-slate-600 font-medium flex items-center gap-2">
                           <Users className="w-4 h-4 text-slate-400 shrink-0" />
                           <span>
-                            Subtotal para <strong className="text-slate-800 font-semibold">{passengerCount}</strong> {passengerCount === 1 ? 'passagem' : 'passagens'}
+                            Total calculado para <strong className="text-slate-800 font-semibold">{passengerCount}</strong> {passengerCount === 1 ? 'passageiro' : 'passageiros'}:
                           </span>
                         </div>
                         <div className="flex items-center gap-2.5">
-                          <div className="bg-white px-3 py-1.5 rounded-lg border border-slate-200 flex flex-col items-end min-w-[105px]">
-                            <span className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Total USD</span>
+                          <div className="bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 flex flex-col items-end min-w-[110px]">
+                            <span className="text-[10px] text-slate-500 uppercase font-semibold tracking-wider">Total USD</span>
                             <span className="text-xs font-mono font-bold text-emerald-700">
                               US$ {(formData.ticketCostUSD || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </span>
                           </div>
-                          <div className="bg-white px-3 py-1.5 rounded-lg border border-slate-200 flex flex-col items-end min-w-[105px]">
-                            <span className="text-[10px] text-slate-400 uppercase font-semibold tracking-wider">Total BRL</span>
+                          <div className="bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 flex flex-col items-end min-w-[110px]">
+                            <span className="text-[10px] text-slate-500 uppercase font-semibold tracking-wider">Total BRL</span>
                             <span className="text-xs font-mono font-bold text-[#1A2B4C]">
                               R$ {(formData.ticketCostBRL || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                             </span>

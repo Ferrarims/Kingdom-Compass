@@ -304,6 +304,7 @@ CREATE TABLE public.flight_segments (
     gate TEXT,
     baggage_allowance JSONB DEFAULT '{"notes": "", "carryOnQty": 1, "checkedQty": 1, "personalItem": true}'::jsonb,
     status TEXT NOT NULL DEFAULT 'Emitido / Confirmado',
+    payment_status TEXT DEFAULT NULL,
     ticket_cost_usd NUMERIC(10, 2),
     ticket_cost_brl NUMERIC(12, 2),
     notes TEXT,
