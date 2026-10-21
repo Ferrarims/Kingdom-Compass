@@ -1115,8 +1115,9 @@ export const ParksGuideView: React.FC = () => {
                     className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs hover:shadow-md transition-all overflow-hidden flex flex-col justify-between group"
                   >
                     <div>
-                      {/* Standardized Header */}
+                      {/* Standardized Header - Stacked layout for 2-column grid */}
                       <LogisticsCardHeader
+                        layout="stacked"
                         icon={
                           <div className="w-10 h-10 rounded-xl bg-[#D4AF37]/20 border border-[#D4AF37]/40 flex items-center justify-center shrink-0">
                             <Ticket className="w-5 h-5 text-[#D4AF37]" />
@@ -1137,7 +1138,7 @@ export const ParksGuideView: React.FC = () => {
                               📦 {ticket.quantity || 1} {(ticket.quantity || 1) === 1 ? 'Pacote / Ingresso' : 'Pacotes / Ingressos'}
                             </span>
                             {ticket.seller && (
-                              <span>
+                              <span className="break-words">
                                 • Emitido por: <strong className="text-white font-medium">{ticket.seller}</strong>
                               </span>
                             )}
