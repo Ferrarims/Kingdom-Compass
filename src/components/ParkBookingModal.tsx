@@ -1304,12 +1304,24 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     if (nextDay) {
       const cleanedNextSchedule = cleanPreviousDayOverflowItems(nextDay.hourlySchedule || [], activeDay.dayNumber);
       const combinedNextSchedule = deduplicateHourlySchedule([...cleanedNextSchedule, ...scheduleResult.nextDayOverflowItems]);
-      await updateItineraryDay(nextDay.id, {
-        hourlySchedule: combinedNextSchedule,
-      });
+      try {
+        const nextDayRes = await updateItineraryDay(nextDay.id, {
+          hourlySchedule: combinedNextSchedule,
+        });
+
+        if (nextDayRes && typeof nextDayRes === 'object' && nextDayRes.success === false) {
+          alert(`⚠️ O parque foi salvo com sucesso, mas a sincronização dos eventos do dia seguinte falhou: ${nextDayRes.error || 'Falha de conexão'}.`);
+          return;
+        }
+      } catch (nextDayError: any) {
+        console.error('Erro ao sincronizar eventos excedentes do dia seguinte:', nextDayError);
+        const errorMsg = nextDayError?.message || 'Falha de conexão ou erro inesperado';
+        alert(`⚠️ O parque foi salvo com sucesso, mas a sincronização dos eventos do dia seguinte falhou: ${errorMsg}.`);
+        return;
+      }
     }
 
-      onClose();
+    onClose();
     } catch (error) {
       console.error('Error saving park booking:', error);
       alert('Ocorreu um erro ao salvar o agendamento. Por favor, tente novamente.');
