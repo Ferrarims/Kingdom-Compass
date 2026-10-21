@@ -1096,7 +1096,7 @@ export const ParksGuideView: React.FC = () => {
               </button>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <div className="grid grid-cols-1 gap-5">
               {filteredTickets.map((ticket) => {
                 const costBrl = ticket.costBRL || (ticket.costUSD ? ticket.costUSD * dollarRate : 0);
                 const costUsd = ticket.costUSD || (ticket.costBRL ? ticket.costBRL / dollarRate : 0);
