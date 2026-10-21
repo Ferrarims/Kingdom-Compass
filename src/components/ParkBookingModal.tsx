@@ -1312,6 +1312,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       onClose();
     } catch (error) {
       console.error('Error saving park booking:', error);
+      alert('Ocorreu um erro ao salvar o agendamento. Por favor, tente novamente.');
     } finally {
       isSavingRef.current = false;
       setIsSaving(false);
