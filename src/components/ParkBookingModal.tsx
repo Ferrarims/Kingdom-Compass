@@ -186,6 +186,8 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
   const [selectedDayId, setSelectedDayId] = useState<string>('');
   const wasOpenRef = useRef<boolean>(false);
   const selectedDayIdRef = useRef<string>('');
+  const isSavingRef = useRef<boolean>(false);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
 
   // Helper to determine if a day is viable for scheduling parks (verifying no flights or other bookings)
   const viableDays = React.useMemo(() => {
@@ -1003,7 +1005,12 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
   };
 
   const handleSaveAll = async () => {
-    if (!activeDay) return;
+    if (isSavingRef.current || !activeDay) return;
+    
+    isSavingRef.current = true;
+    setIsSaving(true);
+    
+    try {
 
     // Locate active accommodation for the day
     const activeAccommodation = accommodations.find((a) => {
@@ -1041,7 +1048,6 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
         alert(`❌ Erro ao salvar dados no banco: ${saveRes.error || 'Falha de conexão'}. Mantendo dados para nova tentativa.`);
         return;
       }
-
       onClose();
       return;
     }
@@ -1303,7 +1309,13 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       });
     }
 
-    onClose();
+      onClose();
+    } catch (error) {
+      console.error('Error saving park booking:', error);
+    } finally {
+      isSavingRef.current = false;
+      setIsSaving(false);
+    }
   };
 
   const handleUnlinkPark = async () => {
@@ -3289,10 +3301,17 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
             <button
               type="button"
               onClick={handleSaveAll}
-              className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] hover:bg-[#2A437E] text-white text-xs font-bold shadow-sm transition-all flex items-center gap-2 cursor-pointer"
+              disabled={isSaving}
+              className={`px-6 py-2.5 rounded-xl bg-[#1A2B4C] hover:bg-[#2A437E] text-white text-xs font-bold shadow-sm transition-all flex items-center gap-2 cursor-pointer ${isSaving ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
-              <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
-              <span>Salvar</span>
+              {isSaving ? (
+                <span>Salvando...</span>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
+                  <span>Salvar</span>
+                </>
+              )}
             </button>
           </div>
         </div>
