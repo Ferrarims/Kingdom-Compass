@@ -54,7 +54,6 @@ export const AccommodationsView: React.FC = () => {
     supabaseStatus,
     settings,
     openOverviewModal,
-    addNotification,
   } = usePlanner();
 
   // Determine min and max allowed dates for the active trip
@@ -285,10 +284,6 @@ export const AccommodationsView: React.FC = () => {
       if (res && res.success === false) {
         setValidationError(res.error || 'Erro ao salvar hospedagem no Supabase.');
         return;
-      }
-
-      if (res?.warning) {
-        addNotification(`⚠️ ${res.warning}`);
       }
 
       setIsModalOpen(false);
