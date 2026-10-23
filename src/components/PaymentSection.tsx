@@ -47,6 +47,8 @@ export interface PaymentSectionProps {
   unitLabelUSD?: string;
   /** Rótulo customizado do campo BRL unitário */
   unitLabelBRL?: string;
+  /** Modo de precificação: 'per_person' (multiplicado por viajante, ex: voos) ou 'total' (valor total fixo da estadia, ex: hospedagem) */
+  pricingMode?: 'per_person' | 'total';
   /** Se deve exibir o seletor de responsável pelo pagamento */
   showPayerSelector?: boolean;
 }
@@ -54,6 +56,7 @@ export interface PaymentSectionProps {
 export const PaymentSection: React.FC<PaymentSectionProps> = ({
   sectionNumber = 7,
   sectionTitle = 'CUSTOS & PAGAMENTO',
+  pricingMode = 'per_person',
   dollarRate = 5.75,
   unitCostUSD,
   unitCostBRL,
@@ -67,27 +70,52 @@ export const PaymentSection: React.FC<PaymentSectionProps> = ({
   travelers = [],
   passengerCount = 1,
   passengerLabel = 'passageiro',
-  unitLabelUSD = 'Valor por Passageiro (US$)',
-  unitLabelBRL = 'Valor por Passageiro (R$)',
+  unitLabelUSD,
+  unitLabelBRL,
   showPayerSelector = true,
 }) => {
   const rate = dollarRate > 0 ? dollarRate : 5.75;
   const count = passengerCount > 0 ? passengerCount : 1;
+  const isTotalMode = pricingMode === 'total';
+
+  const defaultUSDLabel = isTotalMode ? 'Valor Total da Hospedagem (US$)' : 'Valor por Passageiro (US$)';
+  const defaultBRLLabel = isTotalMode ? 'Valor Total da Hospedagem (R$)' : 'Valor por Passageiro (R$)';
+
+  const displayUSDLabel = unitLabelUSD || defaultUSDLabel;
+  const displayBRLLabel = unitLabelBRL || defaultBRLLabel;
 
   // Conversão quando o usuário digita em USD: atualiza BRL e recalcula os totais
   const handleUSDChange = (val: number | null) => {
-    const calculatedBrl = val !== null ? Math.round(val * rate * 100) / 100 : null;
-    const totUsd = val !== null ? val * count : null;
-    const totBrl = calculatedBrl !== null ? calculatedBrl * count : null;
-    onChangeCosts(val, calculatedBrl, totUsd, totBrl);
+    if (isTotalMode) {
+      const calculatedBrl = val !== null ? Math.round(val * rate * 100) / 100 : null;
+      const totUsd = val;
+      const totBrl = calculatedBrl;
+      const unitUsd = val !== null && count > 0 ? Math.round((val / count) * 100) / 100 : val;
+      const unitBrl = calculatedBrl !== null && count > 0 ? Math.round((calculatedBrl / count) * 100) / 100 : calculatedBrl;
+      onChangeCosts(unitUsd, unitBrl, totUsd, totBrl);
+    } else {
+      const calculatedBrl = val !== null ? Math.round(val * rate * 100) / 100 : null;
+      const totUsd = val !== null ? val * count : null;
+      const totBrl = calculatedBrl !== null ? calculatedBrl * count : null;
+      onChangeCosts(val, calculatedBrl, totUsd, totBrl);
+    }
   };
 
   // Conversão quando o usuário digita em BRL: atualiza USD e recalcula os totais
   const handleBRLChange = (val: number | null) => {
-    const calculatedUsd = val !== null && rate > 0 ? Math.round((val / rate) * 100) / 100 : null;
-    const totUsd = calculatedUsd !== null ? calculatedUsd * count : null;
-    const totBrl = val !== null ? val * count : null;
-    onChangeCosts(calculatedUsd, val, totUsd, totBrl);
+    if (isTotalMode) {
+      const calculatedUsd = val !== null && rate > 0 ? Math.round((val / rate) * 100) / 100 : null;
+      const totUsd = calculatedUsd;
+      const totBrl = val;
+      const unitUsd = calculatedUsd !== null && count > 0 ? Math.round((calculatedUsd / count) * 100) / 100 : calculatedUsd;
+      const unitBrl = val !== null && count > 0 ? Math.round((val / count) * 100) / 100 : val;
+      onChangeCosts(unitUsd, unitBrl, totUsd, totBrl);
+    } else {
+      const calculatedUsd = val !== null && rate > 0 ? Math.round((val / rate) * 100) / 100 : null;
+      const totUsd = calculatedUsd !== null ? calculatedUsd * count : null;
+      const totBrl = val !== null ? val * count : null;
+      onChangeCosts(calculatedUsd, val, totUsd, totBrl);
+    }
   };
 
   const pluralLabel = count === 1 ? passengerLabel : `${passengerLabel}s`;
@@ -99,19 +127,21 @@ export const PaymentSection: React.FC<PaymentSectionProps> = ({
       </span>
 
       <div className="bg-slate-50/80 border border-slate-200/90 rounded-xl p-4 sm:p-5 space-y-4">
-        {/* Linha 1: Grade de 3 colunas para campos monetários unitários e status do pagamento */}
+        {/* Linha 1: Grade de 3 colunas para campos monetários e status do pagamento */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* Valor Unitário USD */}
+          {/* Valor USD */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-xs font-semibold text-slate-600">
-                {unitLabelUSD}
+                {displayUSDLabel}
               </label>
-              <span className="text-[10px] text-slate-400 font-mono">USD/unidade</span>
+              <span className="text-[10px] text-slate-400 font-mono">
+                {isTotalMode ? 'USD total' : 'USD/unidade'}
+              </span>
             </div>
             <MoneyInput
               currency="USD"
-              value={unitCostUSD}
+              value={isTotalMode ? (totalCostUSD !== null && totalCostUSD !== undefined ? totalCostUSD : unitCostUSD) : unitCostUSD}
               className="!bg-white !border-slate-200 !rounded-lg !text-slate-800 !h-10 !text-xs !font-medium focus:!ring-[#D4AF37]/50 focus:!border-[#D4AF37]"
               onChange={handleUSDChange}
             />
@@ -120,17 +150,19 @@ export const PaymentSection: React.FC<PaymentSectionProps> = ({
             </span>
           </div>
 
-          {/* Valor Unitário BRL */}
+          {/* Valor BRL */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="text-xs font-semibold text-slate-600">
-                {unitLabelBRL}
+                {displayBRLLabel}
               </label>
-              <span className="text-[10px] text-slate-400 font-mono">BRL/unidade</span>
+              <span className="text-[10px] text-slate-400 font-mono">
+                {isTotalMode ? 'BRL total' : 'BRL/unidade'}
+              </span>
             </div>
             <MoneyInput
               currency="BRL"
-              value={unitCostBRL}
+              value={isTotalMode ? (totalCostBRL !== null && totalCostBRL !== undefined ? totalCostBRL : unitCostBRL) : unitCostBRL}
               className="!bg-white !border-slate-200 !rounded-lg !text-slate-800 !h-10 !text-xs !font-medium focus:!ring-[#D4AF37]/50 focus:!border-[#D4AF37]"
               onChange={handleBRLChange}
             />
@@ -139,7 +171,7 @@ export const PaymentSection: React.FC<PaymentSectionProps> = ({
             </span>
           </div>
 
-          {/* Status do Pagamento (Independente do status operacional) */}
+          {/* Status do Pagamento */}
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1.5">
               Status do Pagamento
@@ -159,14 +191,29 @@ export const PaymentSection: React.FC<PaymentSectionProps> = ({
           </div>
         </div>
 
-        {/* Linha 2: Resumo e Totais Calculados */}
+        {/* Linha 2: Resumo e Totais */}
         <div className="pt-4 border-t border-slate-200/70 space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3 rounded-lg border border-slate-200/80">
             <div className="text-xs text-slate-600 font-medium flex items-center gap-2">
               <Users className="w-4 h-4 text-slate-400 shrink-0" />
-              <span>
-                Total calculado para <strong className="text-slate-800 font-semibold">{count}</strong> {pluralLabel}:
-              </span>
+              <div>
+                <span>
+                  {isTotalMode
+                    ? 'Resumo da Hospedagem para '
+                    : 'Total calculado para '}
+                  <strong className="text-slate-800 font-semibold">{count}</strong> {pluralLabel}:
+                </span>
+                {isTotalMode ? (
+                  <span className="block text-[10px] text-slate-400 font-normal">
+                    Valor total fixo da estadia (não multiplicado pelo nº de {pluralLabel})
+                    {count > 1 && totalCostBRL ? (
+                      <span className="ml-1 text-[#1A2B4C] font-medium">
+                        • Rateio informativo: ~ R$ {((totalCostBRL || 0) / count).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} por {passengerLabel}
+                      </span>
+                    ) : null}
+                  </span>
+                ) : null}
+              </div>
             </div>
             <div className="flex items-center gap-2.5">
               <div className="bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 flex flex-col items-end min-w-[110px]">

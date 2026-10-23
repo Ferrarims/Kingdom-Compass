@@ -41,6 +41,9 @@ export const getStatusVariant = (
 ): 'success' | 'warning' | 'danger' | 'info' | 'neutral' => {
   if (!status) return 'neutral';
   const s = status.toLowerCase();
+  if (s.includes('não informado') || s.includes('nao informado')) {
+    return 'neutral';
+  }
   if (
     s.includes('confirmado') ||
     s.includes('emitido') ||

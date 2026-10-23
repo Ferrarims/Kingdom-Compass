@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { usePlanner, calculateDateOffset, formatDisplayDate, getTripEndDate } from '../context/PlannerContext';
-import { parseInputToNumber, formatInputDisplay } from '../utils/currency';
 import { AccommodationBooking } from '../types';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
 import { TravelerSelector } from './TravelerSelector';
+import { PaymentSection, PaymentStatusType } from './PaymentSection';
 import { LogisticsCardHeader } from './LogisticsCardHeader';
 import {
   Building2,
@@ -99,10 +99,6 @@ export const AccommodationsView: React.FC = () => {
 
   const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
 
-  // Input formatting temporary states
-  const [focusedField, setFocusedField] = useState<string | null>(null);
-  const [tempValue, setTempValue] = useState('');
-
   // Form State
   const [formData, setFormData] = useState<Omit<AccommodationBooking, 'id'>>({
     type: 'resort',
@@ -116,7 +112,7 @@ export const AccommodationsView: React.FC = () => {
     roomType: '',
     costUSD: 0,
     costBRL: 0,
-    status: 'Reservado / Confirmado',
+    status: 'Não informado',
     payerId: settings.currentUserId || 'all',
     travelerIds: ['all'],
     guestName: '',
@@ -125,6 +121,11 @@ export const AccommodationsView: React.FC = () => {
     contactPhone: '',
     notes: '',
   });
+
+  const selectedGuestsCount = formData.travelerIds?.includes('all')
+    ? (settings.travelers?.length || 1)
+    : (formData.travelerIds?.length || 1);
+  const guestCount = Math.max(1, selectedGuestsCount);
 
   const availableAmenities = [
     'Estacionamento Gratuito nos Parques Disney',
@@ -156,7 +157,7 @@ export const AccommodationsView: React.FC = () => {
       roomType: '',
       costUSD: 0,
       costBRL: 0,
-      status: 'Reservado / Confirmado',
+      status: 'Não informado',
       payerId: settings.currentUserId || 'all',
       travelerIds: ['all'],
       guestName: '',
@@ -182,6 +183,16 @@ export const AccommodationsView: React.FC = () => {
       ? acc.checkOutDate
       : (tripMaxDate >= validCheckIn ? tripMaxDate : validCheckIn);
 
+    // Identificar status de pagamento sem presumir pago para confirmações operacionais
+    let initialPaymentStatus: 'Pago' | 'Pendente' | 'Não informado' = 'Não informado';
+    if (acc.status === 'Pago') {
+      initialPaymentStatus = 'Pago';
+    } else if (acc.status === 'Pendente' || acc.status === 'Falta Pagar') {
+      initialPaymentStatus = 'Pendente';
+    } else {
+      initialPaymentStatus = 'Não informado';
+    }
+
     setFormData({
       type: acc.type,
       name: acc.name,
@@ -193,8 +204,8 @@ export const AccommodationsView: React.FC = () => {
       checkOutTime: acc.checkOutTime || '11:00',
       roomType: acc.roomType || '',
       costUSD: acc.costUSD || 0,
-      costBRL: acc.costBRL || 0,
-      status: acc.status,
+      costBRL: acc.costBRL || (acc.costUSD ? acc.costUSD * (settings.dollarRate || 5.75) : 0),
+      status: initialPaymentStatus,
       payerId: acc.payerId || 'all',
       travelerIds: acc.travelerIds || ['all'],
       guestName: acc.guestName || '',
@@ -1152,120 +1163,65 @@ export const AccommodationsView: React.FC = () => {
                 </div>
               </div>
 
-              {/* 6. VIAJANTES DO PACOTE */}
+              {/* 6. VIAJANTES / HÓSPEDES */}
               <TravelerSelector
-                label="6. Viajantes do Pacote"
+                label="6. VIAJANTES / HÓSPEDES"
                 travelers={settings.travelers || []}
                 selectedIds={formData.travelerIds || ['all']}
                 onChange={(ids) => {
                   const total = ids.includes('all') ? (settings.travelers?.length || 1) : ids.length;
-                  setFormData({ ...formData, travelerIds: ids, totalGuests: total > 0 ? total : 1 });
+                  setFormData((prev) => ({
+                    ...prev,
+                    travelerIds: ids,
+                    totalGuests: total > 0 ? total : 1,
+                  }));
                 }}
               />
 
-              {/* 7. CUSTOS & STATUS DA RESERVA */}
-              <div className="space-y-4">
-                <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
-                  7. Custos & Status da Reserva
-                </label>
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div className="space-y-1">
-                      <label className="text-xs font-bold text-slate-700 block flex items-center justify-between">
-                        Valor a Pagar (US$)
-                        <span className="text-[9px] font-mono text-slate-400 font-bold uppercase">USD</span>
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">$</span>
-                        <input
-                          type="text"
-                          value={focusedField === 'costUSD' ? tempValue : formatInputDisplay(formData.costUSD || 0)}
-                          onFocus={() => {
-                            setFocusedField('costUSD');
-                            setTempValue(formData.costUSD ? formData.costUSD.toString().replace('.', ',') : '');
-                          }}
-                          onBlur={() => {
-                            setFocusedField(null);
-                            const val = parseInputToNumber(tempValue);
-                            setFormData({
-                              ...formData,
-                              costUSD: val,
-                              costBRL: val * settings.dollarRate,
-                            });
-                          }}
-                          onChange={(e) => setTempValue(e.target.value)}
-                          className="w-full pl-7 pr-3.5 py-2 rounded-xl border border-slate-200 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] bg-white"
-                          placeholder="0,00"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-xs font-bold text-slate-700 block flex items-center justify-between">
-                        Valor a Pagar (R$)
-                        <span className="text-[9px] font-mono text-slate-400 font-bold uppercase">BRL</span>
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-3 top-2.5 text-xs text-slate-400 font-bold">R$</span>
-                        <input
-                          type="text"
-                          value={focusedField === 'costBRL' ? tempValue : formatInputDisplay(formData.costBRL || 0)}
-                          onFocus={() => {
-                            setFocusedField('costBRL');
-                            setTempValue(formData.costBRL ? formData.costBRL.toString().replace('.', ',') : '');
-                          }}
-                          onBlur={() => {
-                            setFocusedField(null);
-                            const val = parseInputToNumber(tempValue);
-                            setFormData({
-                              ...formData,
-                              costBRL: val,
-                              costUSD: settings.dollarRate > 0 ? val / settings.dollarRate : 0,
-                            });
-                          }}
-                          onChange={(e) => setTempValue(e.target.value)}
-                          className="w-full pl-8 pr-3.5 py-2 rounded-xl border border-slate-200 text-xs font-mono font-bold focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] bg-white"
-                          placeholder="0,00"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-xs font-bold text-slate-700 block flex items-center justify-between">
-                        Status do Pagamento
-                        <span className="opacity-0 text-[9px] font-mono">_</span>
-                      </label>
-                      <select
-                        value={formData.status}
-                        onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                        className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] cursor-pointer h-[38px]"
-                      >
-                        <option value="Reservado / Confirmado">✅ Reservado / Confirmado (Pago)</option>
-                        <option value="Pago">💰 Pago / Quitado</option>
-                        <option value="Pendente">⏳ Pagamento Pendente</option>
-                        <option value="Falta Pagar">⚠️ Falta Pagar (No Check-in)</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <CreditCard className="w-4 h-4 text-[#D4AF37]" />
-                      <label className="text-xs font-bold text-slate-700">Responsável pelo Pagamento</label>
-                    </div>
-                    <select
-                      value={formData.payerId || 'all'}
-                      onChange={(e) => setFormData({ ...formData, payerId: e.target.value })}
-                      className="bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#1A2B4C]/30 min-w-[200px]"
-                    >
-                      <option value="all">👥 Dividido pelo grupo</option>
-                      {settings.travelers.map((t) => (
-                        <option key={t.id} value={t.id}>👤 {t.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              </div>
+              {/* 7. CUSTOS & PAGAMENTO */}
+              <PaymentSection
+                sectionNumber={7}
+                sectionTitle="CUSTOS & PAGAMENTO"
+                pricingMode="total"
+                dollarRate={settings.dollarRate || 5.75}
+                unitCostUSD={formData.costUSD ? formData.costUSD / guestCount : null}
+                unitCostBRL={formData.costBRL ? formData.costBRL / guestCount : null}
+                totalCostUSD={formData.costUSD !== undefined && formData.costUSD !== null ? formData.costUSD : null}
+                totalCostBRL={formData.costBRL !== undefined && formData.costBRL !== null ? formData.costBRL : null}
+                onChangeCosts={(_unitUSD, _unitBRL, totalUSD, totalBRL) => {
+                  setFormData((prev) => ({
+                    ...prev,
+                    costUSD: totalUSD ?? 0,
+                    costBRL: totalBRL ?? 0,
+                  }));
+                }}
+                paymentStatus={
+                  formData.status === 'Pago'
+                    ? 'Pago'
+                    : formData.status === 'Pendente' || formData.status === 'Falta Pagar'
+                    ? 'Pendente'
+                    : 'Não informado'
+                }
+                onChangePaymentStatus={(status: PaymentStatusType) => {
+                  setFormData((prev) => ({
+                    ...prev,
+                    status,
+                  }));
+                }}
+                payerId={formData.payerId || 'all'}
+                onChangePayerId={(payerId) => {
+                  setFormData((prev) => ({
+                    ...prev,
+                    payerId,
+                  }));
+                }}
+                travelers={settings.travelers || []}
+                passengerCount={guestCount}
+                passengerLabel="hóspede"
+                unitLabelUSD="Valor Total da Hospedagem (US$)"
+                unitLabelBRL="Valor Total da Hospedagem (R$)"
+                showPayerSelector={true}
+              />
 
               {/* 8. OBSERVAÇÕES & INSTRUÇÕES */}
               <div className="space-y-4">

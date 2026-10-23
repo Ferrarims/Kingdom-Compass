@@ -764,8 +764,8 @@ export function mapAccommodationToDb(a: AccommodationBooking, tripId: string): R
   const validTypes = ['hotel', 'resort', 'airbnb', 'house', 'other'];
   const type = validTypes.includes(a.type) ? a.type : 'hotel';
 
-  const validStatuses = ['Reservado / Confirmado', 'Pago', 'Pendente', 'Concluído'];
-  const status = validStatuses.includes(a.status) ? a.status : 'Reservado / Confirmado';
+  const validStatuses = ['Reservado / Confirmado', 'Pago', 'Pendente', 'Concluído', 'Não informado'];
+  const status = validStatuses.includes(a.status) ? a.status : (a.status || 'Não informado');
 
   const checkIn = sanitizeDate(a.checkInDate) || '2026-12-30';
   const checkOut = sanitizeDate(a.checkOutDate) || '2027-01-10';
@@ -2398,7 +2398,7 @@ export const SupabaseService = {
         brl: accommodation.costBRL || 0,
         payerId: accommodation.payerId || 'all',
         travelerIds: accommodation.travelerIds || ['all'],
-        status: (accommodation.status === 'Pago' || accommodation.status === 'Concluído') ? 'Pago' : 'Pendente',
+        status: accommodation.status === 'Pago' ? 'Pago' : 'Pendente',
         notes: `Check-in: ${accommodation.checkInDate || '---'} | Check-out: ${accommodation.checkOutDate || '---'}`
       }, fallbackTrip);
 

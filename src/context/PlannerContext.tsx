@@ -1688,14 +1688,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     });
   }, [accommodations]);
 
-  // Helper para verificar se uma hospedagem é considerada paga/confirmada
+  // Helper para verificar se uma hospedagem é considerada paga
   const isAccommodationPaid = (status?: string): boolean => {
-    if (!status) return true;
+    if (!status) return false;
     const s = status.trim().toLowerCase();
-    if (s.includes('pendente') || s.includes('falta pagar') || s.includes('previsão') || s.includes('não iniciado')) {
-      return false;
-    }
-    return true; // 'Reservado / Confirmado', 'Pago', 'Confirmado', 'Concluído' etc. são considerados pagos
+    return s === 'pago';
   };
 
   // Helper para verificar se uma locação de carro é considerada paga
@@ -4280,15 +4277,15 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       if (existingIndex >= 0) {
         const updated = [...prev];
         const prevItem = updated[existingIndex];
-        const finalPaid = isPaid || prevItem.status === 'Pago' || (prevItem.paidValueBRL || 0) > 0;
+        const finalPaid = isPaid;
         updated[existingIndex] = {
           ...prevItem,
           title: accTitle,
           estimatedValueUSD: finalUsd > 0 ? finalUsd : (prevItem.estimatedValueUSD || 0),
           estimatedValueBRL: brl > 0 ? brl : (prevItem.estimatedValueBRL || 0),
-          paidValueBRL: finalPaid ? (prevItem.paidValueBRL && prevItem.paidValueBRL > 0 ? prevItem.paidValueBRL : brl) : 0,
-          paidValueUSD: finalPaid ? (prevItem.paidValueUSD && prevItem.paidValueUSD > 0 ? prevItem.paidValueUSD : finalUsd) : 0,
-          status: finalPaid ? 'Pago' : (prevItem.status === 'Parcial' ? 'Parcial' : (isPaid ? 'Pago' : 'Pendente')),
+          paidValueBRL: finalPaid ? brl : 0,
+          paidValueUSD: finalPaid ? finalUsd : 0,
+          status: finalPaid ? 'Pago' : 'Pendente',
           payerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevItem.payerId || expData.payerId),
           responsibleTravelerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevItem.responsibleTravelerId || expData.payerId),
           travelerIds: expData.travelerIds,
