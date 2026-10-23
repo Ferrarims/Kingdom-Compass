@@ -3290,7 +3290,19 @@ export const SupabaseService = {
       // Etapa A: Excluir despesas financeiras restritas por trip_id e source_type = 'park_ticket'
       const expDelRes = await deleteExpensesBySourceInDb(cleanTripId, 'park_ticket', id);
       if (!expDelRes.success) {
-        return { success: false, error: expDelRes.error || 'Falha ao excluir despesas financeiras do ingresso' };
+        // Compensação: Restaurar despesas que possam ter sido parcialmente removidas antes da falha
+        const rollRes = await rollbackAll(true, false, false);
+        const primaryError = expDelRes.error || 'Falha ao excluir despesas financeiras do ingresso';
+        if (!rollRes.success) {
+          return {
+            success: false,
+            error: `${primaryError}. ${rollRes.details} O banco de dados pode estar em estado parcialmente inconsistente.`,
+          };
+        }
+        return {
+          success: false,
+          error: `${primaryError}. ${rollRes.details}`,
+        };
       }
 
       // Etapa B: Excluir horários da agenda (source_type = 'ticket')
@@ -3452,7 +3464,183 @@ export const SupabaseService = {
       if (existing && existing.length > 0) {
         const toDelete = existing.map((r: any) => r.id).filter((id: string) => !currentIds.includes(id));
         if (toDelete.length > 0) {
-          // Deletar ingressos obsoletos no Supabase
+          // 1. Capturar snapshots completos de todos os registros que serão afetados
+          const { data: snapshotTickets, error: tktFetchErr } = await supabase
+            .from('park_ticket_purchases')
+            .select('*')
+            .eq('trip_id', cleanTripId)
+            .in('id', toDelete);
+
+          if (tktFetchErr && !isSupabaseMissingTableError(tktFetchErr)) {
+            return { success: false, error: `Falha ao carregar instantâneo de ingressos para sincronização: ${tktFetchErr.message}` };
+          }
+
+          const { data: expRows1, error: expErr1 } = await supabase
+            .from('expenses')
+            .select('*')
+            .eq('trip_id', cleanTripId)
+            .eq('source_type', 'park_ticket')
+            .in('source_id', toDelete);
+
+          if (expErr1 && !isSupabaseMissingTableError(expErr1)) {
+            return { success: false, error: `Falha ao carregar instantâneo de despesas por origem na sincronização: ${expErr1.message}` };
+          }
+
+          const delExpIds = toDelete.flatMap((delId) => [
+            generateDeterministicUUID('ticket-expense', delId),
+            `exp-ticket-${delId}`,
+          ]);
+
+          const { data: expRows2, error: expErr2 } = await supabase
+            .from('expenses')
+            .select('*')
+            .eq('trip_id', cleanTripId)
+            .eq('source_type', 'park_ticket')
+            .in('id', delExpIds);
+
+          if (expErr2 && !isSupabaseMissingTableError(expErr2)) {
+            return { success: false, error: `Falha ao carregar instantâneo de despesas por ID na sincronização: ${expErr2.message}` };
+          }
+
+          const snapshotExpenses: any[] = [];
+          const seenExpIds = new Set<string>();
+          for (const e of [...(expRows1 || []), ...(expRows2 || [])]) {
+            if (e && e.id && !seenExpIds.has(e.id)) {
+              seenExpIds.add(e.id);
+              snapshotExpenses.push(e);
+            }
+          }
+
+          const { data: schedRows, error: schedErr } = await supabase
+            .from('hourly_schedules')
+            .select('*')
+            .eq('trip_id', cleanTripId)
+            .eq('source_type', 'ticket')
+            .in('source_id', toDelete);
+
+          if (schedErr && !isSupabaseMissingTableError(schedErr)) {
+            return { success: false, error: `Falha ao carregar instantâneo de horários na sincronização: ${schedErr.message}` };
+          }
+          const snapshotSchedules = schedRows || [];
+
+          // Função de restauração compensatória em lote
+          const rollbackSync = async (
+            restoreExpenses: boolean,
+            restoreSchedules: boolean,
+            restoreTickets: boolean
+          ): Promise<{
+            success: boolean;
+            restoredSets: string[];
+            failedSets: string[];
+            details: string;
+          }> => {
+            const restoredSets: string[] = [];
+            const failedSets: string[] = [];
+
+            if (restoreTickets && snapshotTickets && snapshotTickets.length > 0) {
+              const { error: tktErr } = await supabase
+                .from('park_ticket_purchases')
+                .upsert(snapshotTickets, { onConflict: 'id' });
+              if (tktErr) {
+                const errReason = isSupabaseMissingTableError(tktErr)
+                  ? 'tabela park_ticket_purchases ausente'
+                  : tktErr.message;
+                failedSets.push(`ingressos anteriores (${errReason})`);
+              } else {
+                restoredSets.push('ingressos anteriores');
+              }
+            }
+
+            if (restoreExpenses && snapshotExpenses.length > 0) {
+              const { error: expErr } = await supabase
+                .from('expenses')
+                .upsert(snapshotExpenses, { onConflict: 'id' });
+              if (expErr) {
+                const errReason = isSupabaseMissingTableError(expErr)
+                  ? 'tabela expenses ausente'
+                  : expErr.message;
+                failedSets.push(`despesas vinculadas (${errReason})`);
+              } else {
+                restoredSets.push('despesas vinculadas');
+              }
+            }
+
+            if (restoreSchedules && snapshotSchedules.length > 0) {
+              const { error: schedErr } = await supabase
+                .from('hourly_schedules')
+                .upsert(snapshotSchedules, { onConflict: 'id' });
+              if (schedErr) {
+                const errReason = isSupabaseMissingTableError(schedErr)
+                  ? 'tabela hourly_schedules ausente'
+                  : schedErr.message;
+                failedSets.push(`horários vinculados (${errReason})`);
+              } else {
+                restoredSets.push('horários vinculados');
+              }
+            }
+
+            const isFullyCompensated = failedSets.length === 0;
+            let details = '';
+            if (isFullyCompensated) {
+              details = restoredSets.length > 0
+                ? `Restauração compensatória em lote concluída para: ${restoredSets.join(', ')}.`
+                : 'Nenhum dado necessitou de restauração.';
+            } else {
+              details = `Falha na restauração compensatória em lote: erro ao restaurar ${failedSets.join(', ')}.${
+                restoredSets.length > 0
+                  ? ` Conjuntos restaurados parcialmente: ${restoredSets.join(', ')}.`
+                  : ' Nenhum conjunto pôde ser restaurado.'
+              }`;
+            }
+
+            return {
+              success: isFullyCompensated,
+              restoredSets,
+              failedSets,
+              details,
+            };
+          };
+
+          // 2. Ordem segura de exclusão: despesas -> horários -> ingressos
+          // Etapa 1: Excluir despesas vinculadas aos ingressos obsoletos
+          for (const delId of toDelete) {
+            const expDelRes = await deleteExpensesBySourceInDb(cleanTripId, 'park_ticket', delId);
+            if (!expDelRes.success) {
+              const primaryError = `Falha ao excluir despesa vinculada do ingresso ${delId}: ${expDelRes.error}`;
+              const rollRes = await rollbackSync(true, false, false);
+              if (!rollRes.success) {
+                return {
+                  success: false,
+                  error: `${primaryError}. ${rollRes.details} O banco de dados pode estar em estado parcialmente inconsistente.`,
+                };
+              }
+              return {
+                success: false,
+                error: `${primaryError}. ${rollRes.details}`,
+              };
+            }
+          }
+
+          // Etapa 2: Excluir horários vinculados aos ingressos obsoletos
+          for (const delId of toDelete) {
+            const schedDelRes = await this.deleteHourlySchedulesBySource(cleanTripId, delId, 'ticket');
+            if (!schedDelRes.success) {
+              const primaryError = `Falha ao excluir horários vinculados do ingresso ${delId}: ${schedDelRes.error}`;
+              const rollRes = await rollbackSync(true, true, false);
+              if (!rollRes.success) {
+                return {
+                  success: false,
+                  error: `${primaryError}. ${rollRes.details} O banco de dados pode estar em estado parcialmente inconsistente.`,
+                };
+              }
+              return {
+                success: false,
+                error: `${primaryError}. ${rollRes.details}`,
+              };
+            }
+          }
+
+          // Etapa 3: Excluir os registros de ingressos obsoletos no Supabase
           const { error: delErr } = await supabase
             .from('park_ticket_purchases')
             .delete()
@@ -3460,23 +3648,47 @@ export const SupabaseService = {
             .in('id', toDelete);
 
           if (delErr && !isSupabaseMissingTableError(delErr)) {
-            return { success: false, error: `Falha ao excluir ingressos obsoletos: ${delErr.message}` };
+            const primaryError = `Falha ao excluir ingressos obsoletos: ${delErr.message}`;
+            const rollRes = await rollbackSync(true, true, false);
+            if (!rollRes.success) {
+              return {
+                success: false,
+                error: `${primaryError}. ${rollRes.details} O banco de dados pode estar em estado parcialmente inconsistente.`,
+              };
+            }
+            return {
+              success: false,
+              error: `${primaryError}. ${rollRes.details}`,
+            };
           }
 
-          // Deletar despesas e horários vinculados a cada ingresso excluído
-          for (const delId of toDelete) {
-            const expDelRes = await deleteExpensesBySourceInDb(cleanTripId, 'park_ticket', delId);
-            if (!expDelRes.success) {
-              return { success: false, error: `Falha ao excluir despesa vinculada do ingresso ${delId}: ${expDelRes.error}` };
-            }
-            const schedDelRes = await this.deleteHourlySchedulesBySource(cleanTripId, delId, 'ticket');
-            if (!schedDelRes.success) {
-              return { success: false, error: `Falha ao excluir horários vinculados do ingresso ${delId}: ${schedDelRes.error}` };
+          // Etapa 4: Persistir novos ingressos
+          if (currentDbRows.length > 0) {
+            const { error: upsertErr } = await supabase.from('park_ticket_purchases').upsert(currentDbRows, { onConflict: 'id' });
+            if (upsertErr) {
+              const rollRes = await rollbackSync(true, true, true);
+              const errReason = isSupabaseMissingTableError(upsertErr)
+                ? 'Tabela park_ticket_purchases aguardando criação no Supabase.'
+                : upsertErr.message;
+              const primaryError = `Falha ao sincronizar ingressos: ${errReason}`;
+              if (!rollRes.success) {
+                return {
+                  success: false,
+                  error: `${primaryError}. ${rollRes.details} O banco de dados pode estar em estado parcialmente inconsistente.`,
+                };
+              }
+              return {
+                success: false,
+                error: `${primaryError}. ${rollRes.details}`,
+              };
             }
           }
+
+          return { success: true };
         }
       }
 
+      // Caso não haja itens para exclusão (toDelete.length === 0), apenas executa o upsert
       if (currentDbRows.length > 0) {
         const { error: upsertErr } = await supabase.from('park_ticket_purchases').upsert(currentDbRows, { onConflict: 'id' });
         if (upsertErr) {
