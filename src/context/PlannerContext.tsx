@@ -4862,18 +4862,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     if (activeTripId) {
       const delFlightRes = await SupabaseService.deleteFlight(id, activeTripId);
-      if (!delFlightRes) {
-        const errMsg = 'Falha ao excluir voo no Supabase';
-        addNotification(`❌ ${errMsg}`);
-        return { success: false, error: errMsg };
-      }
-      const delExpRes = await SupabaseService.deleteExpensesBySource(activeTripId, 'flight', id);
-      if (!delExpRes.success) {
-        setFlights(prevFlights);
-        setTrips(prevTrips);
-        setExpenses(prevExpenses);
-        setRawDays(prevRawDays);
-        const errMsg = delExpRes.error || 'Falha ao excluir despesa do voo no Supabase';
+      if (!delFlightRes.success) {
+        const errMsg = delFlightRes.error || 'Falha ao excluir voo no Supabase';
         addNotification(`❌ ${errMsg}`);
         return { success: false, error: errMsg };
       }
@@ -5482,11 +5472,12 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     if (activeTripId) {
       const delAccRes = await SupabaseService.deleteAccommodation(id, activeTripId);
-      if (!delAccRes) {
-        const errMsg = 'Falha ao excluir hospedagem no banco de dados';
+      if (!delAccRes.success) {
+        const errMsg = delAccRes.error || 'Falha ao excluir hospedagem no banco de dados';
         addNotification(`❌ ${errMsg}`);
         return { success: false, error: errMsg };
       }
+      await SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'accommodation');
     }
 
     setAccommodations((prev) => {
@@ -5507,16 +5498,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           !(e.sourceType === 'accommodation' && e.sourceId === id)
       )
     );
-
-    if (activeTripId) {
-      const delExpRes = await SupabaseService.deleteExpensesBySource(activeTripId, 'accommodation', id);
-      if (!delExpRes.success) {
-        const errMsg = delExpRes.error || 'Falha ao excluir despesa da hospedagem no Supabase';
-        addNotification(`❌ ${errMsg}`);
-        return { success: false, error: errMsg };
-      }
-      await SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'accommodation');
-    }
 
     const syncRes = await syncAccommodationToDays(acc, true);
     if (!syncRes.success) {

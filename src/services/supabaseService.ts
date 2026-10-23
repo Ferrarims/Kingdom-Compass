@@ -2196,15 +2196,21 @@ export const SupabaseService = {
   /**
    * Delete Flight
    */
-  async deleteFlight(id: string, tripId?: string): Promise<boolean> {
+  async deleteFlight(id: string, tripId?: string): Promise<{ success: boolean; error?: string }> {
     try {
       const { error } = await supabase.from('flight_segments').delete().eq('id', id);
-      if (tripId) {
-        await deleteExpensesBySourceInDb(tripId, 'flight', id);
+      if (error && !isSupabaseMissingTableError(error)) {
+        return { success: false, error: error.message };
       }
-      return !error;
-    } catch {
-      return false;
+      if (tripId) {
+        const expDelRes = await deleteExpensesBySourceInDb(tripId, 'flight', id);
+        if (!expDelRes.success) {
+          return { success: false, error: expDelRes.error || 'Falha ao excluir despesa do voo no Supabase' };
+        }
+      }
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro ao excluir voo' };
     }
   },
 
@@ -2368,15 +2374,21 @@ export const SupabaseService = {
   /**
    * Delete Accommodation
    */
-  async deleteAccommodation(id: string, tripId?: string): Promise<boolean> {
+  async deleteAccommodation(id: string, tripId?: string): Promise<{ success: boolean; error?: string }> {
     try {
       const { error } = await supabase.from('accommodations').delete().eq('id', id);
-      if (tripId) {
-        await deleteExpensesBySourceInDb(tripId, 'accommodation', id);
+      if (error && !isSupabaseMissingTableError(error)) {
+        return { success: false, error: error.message };
       }
-      return !error;
-    } catch {
-      return false;
+      if (tripId) {
+        const expDelRes = await deleteExpensesBySourceInDb(tripId, 'accommodation', id);
+        if (!expDelRes.success) {
+          return { success: false, error: expDelRes.error || 'Falha ao excluir despesa da hospedagem no Supabase' };
+        }
+      }
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro ao excluir hospedagem' };
     }
   },
 
@@ -3550,11 +3562,29 @@ export const SupabaseService = {
       const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
 
       // Regra obrigatória: se a cobrança for zero nas duas moedas para um item vinculado (voo ou hospedagem),
-      // nenhuma despesa vinculada pode existir no Financeiro. Exclui e encerra.
+      // nenhuma despesa vinculada pode existir no Financeiro. Exclui e encerra sem upsert.
       const isZero = (Number(expense.estimatedValueUSD) || 0) <= 0 && (Number(expense.estimatedValueBRL) || 0) <= 0;
-      if (isZero && expense.sourceType && expense.sourceId && (expense.sourceType === 'flight' || expense.sourceType === 'accommodation')) {
-        await deleteExpensesBySourceInDb(cleanTripId, expense.sourceType, expense.sourceId);
-        return { success: true };
+      if (isZero && expense.sourceType && (expense.sourceType === 'flight' || expense.sourceType === 'accommodation')) {
+        if (expense.sourceId) {
+          const delRes = await deleteExpensesBySourceInDb(cleanTripId, expense.sourceType, expense.sourceId);
+          if (!delRes.success) {
+            return { success: false, error: delRes.error || 'Falha ao excluir despesa zerada no Supabase' };
+          }
+          return { success: true };
+        } else if (expense.id) {
+          const { error: idDelErr } = await supabase
+            .from('expenses')
+            .delete()
+            .eq('trip_id', cleanTripId)
+            .eq('id', expense.id);
+
+          if (idDelErr && !isSupabaseMissingTableError(idDelErr)) {
+            return { success: false, error: idDelErr.message };
+          }
+          return { success: true };
+        } else {
+          return { success: false, error: 'Despesa zerada sem identificador de origem não foi salva.' };
+        }
       }
 
       // Ensure parent trip exists
