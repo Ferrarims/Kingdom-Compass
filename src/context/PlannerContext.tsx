@@ -5966,13 +5966,17 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     const ticket = parkTickets.find((t) => t.id === id);
     if (!ticket) return { success: false, error: 'Ingresso não encontrado' };
 
-    if (activeTripId) {
-      const delRes = await SupabaseService.deleteParkTicket(id, activeTripId);
-      if (!delRes.success) {
-        const errMsg = delRes.error || 'Falha ao excluir o ingresso no Supabase';
-        addNotification(`❌ ${errMsg}`);
-        return { success: false, error: errMsg };
-      }
+    if (!activeTripId || !activeTripId.trim()) {
+      const errMsg = 'Nenhuma viagem ativa selecionada para excluir o ingresso.';
+      addNotification(`❌ ${errMsg}`);
+      return { success: false, error: errMsg };
+    }
+
+    const delRes = await SupabaseService.deleteParkTicket(id, activeTripId);
+    if (!delRes.success) {
+      const errMsg = delRes.error || 'Falha ao excluir o ingresso no Supabase';
+      addNotification(`❌ ${errMsg}`);
+      return { success: false, error: errMsg };
     }
 
     // Só remover do estado local após confirmação remota da exclusão
