@@ -3072,17 +3072,20 @@ export const SupabaseService = {
     fallbackTrip?: Partial<Trip>,
     previousSnapshot?: { rental?: CarRentalBooking | any; expenses?: any[] }
   ): Promise<{ success: boolean; error?: string; compensationSuccess?: boolean }> {
+    let writeAttempted = false;
+    let cleanTripId = '';
+    let cleanRentalId = '';
+    let isExistingRental = false;
+    let dbPreviousRental: any = null;
+    let dbPreviousExpenses: any[] = [];
+
     try {
       if (!tripId || !rental) return { success: false, error: 'Parâmetros inválidos', compensationSuccess: true };
-      const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
-      const cleanRentalId = ensureValidUUID(rental.id, 'car', tripId + '-' + rental.confirmationCode);
+      cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+      cleanRentalId = ensureValidUUID(rental.id, 'car', tripId + '-' + rental.confirmationCode);
 
       // 1. Instantâneo de segurança antes de qualquer gravação
       // Capturar dados anteriores da locação no banco (se existir)
-      let dbPreviousRental: any = null;
-      let dbPreviousExpenses: any[] = [];
-      let isExistingRental = false;
-
       const { data: existingRentalRow, error: fetchRentalErr } = await supabase
         .from('car_rentals')
         .select('*')
@@ -3093,7 +3096,7 @@ export const SupabaseService = {
       if (fetchRentalErr) {
         return {
           success: false,
-          compensationSuccess: true, // Nenhuma gravação foi realizada
+          compensationSuccess: true, // Nenhuma gravação foi realizada ainda
           error: `Falha ao capturar registro anterior da locação para snapshot: ${fetchRentalErr.message}. Gravação interrompida.`
         };
       }
@@ -3121,7 +3124,7 @@ export const SupabaseService = {
       if (errSource) {
         return {
           success: false,
-          compensationSuccess: true, // Nenhuma gravação foi realizada
+          compensationSuccess: true, // Nenhuma gravação foi realizada ainda
           error: `Falha ao capturar despesas vinculadas por origem para snapshot: ${errSource.message}. Gravação interrompida.`
         };
       }
@@ -3138,7 +3141,7 @@ export const SupabaseService = {
         if (errId) {
           return {
             success: false,
-            compensationSuccess: true, // Nenhuma gravação foi realizada
+            compensationSuccess: true, // Nenhuma gravação foi realizada ainda
             error: `Falha ao capturar despesas vinculadas por ID para snapshot: ${errId.message}. Gravação interrompida.`
           };
         }
@@ -3160,7 +3163,7 @@ export const SupabaseService = {
         );
       }
 
-      // 2. Ensure parent trip exists
+      // 2. Ensure parent trip exists (Se precisar criar a viagem pai, conta como gravação iniciada)
       try {
         const { data: tripCheck } = await supabase.from('trips').select('id').eq('id', cleanTripId).maybeSingle();
         if (!tripCheck) {
@@ -3182,6 +3185,7 @@ export const SupabaseService = {
             createdAt: new Date().toISOString().split('T')[0],
           };
           const tripDb = mapTripToDb(tripToInsert);
+          writeAttempted = true;
           await supabase.from('trips').upsert(tripDb, { onConflict: 'id' });
         }
       } catch (e) {
@@ -3189,6 +3193,7 @@ export const SupabaseService = {
       }
 
       // 3. Gravação da locação na tabela car_rentals
+      writeAttempted = true;
       const dbRow = mapCarRentalToDb(rental, cleanTripId);
       let { error: upsertErr } = await supabase.from('car_rentals').upsert(dbRow, { onConflict: 'id' });
 
@@ -3330,7 +3335,73 @@ export const SupabaseService = {
 
       return { success: true };
     } catch (err: any) {
-      return { success: false, error: err?.message || 'Erro ao salvar aluguel de carro' };
+      if (!writeAttempted) {
+        return {
+          success: false,
+          compensationSuccess: true,
+          error: `Erro antes de gravar locação no Supabase: ${err?.message || 'Erro desconhecido'}. Nenhuma alteração foi feita no banco.`
+        };
+      }
+
+      // Exceção ocorreu após o início da gravação: tentar compensação adequada
+      const compFailures: string[] = [];
+      if (!isExistingRental) {
+        // CADASTRO: tentar remover locação e despesas parciais
+        try {
+          const { data: delRows, error: delErr } = await supabase
+            .from('car_rentals')
+            .delete()
+            .eq('trip_id', cleanTripId)
+            .eq('id', cleanRentalId)
+            .select('id');
+          if (delErr || !delRows || delRows.length === 0) {
+            compFailures.push('car_rentals');
+          }
+          const delExp = await deleteExpensesBySourceInDb(cleanTripId, 'car_rental', rental.id);
+          if (!delExp.success) {
+            compFailures.push('expenses');
+          }
+        } catch (e) {
+          compFailures.push('car_rentals/expenses');
+        }
+      } else {
+        // EDIÇÃO: tentar restaurar snapshot anterior
+        try {
+          const previousDbRow = dbPreviousRental || (previousSnapshot?.rental ? mapCarRentalToDb(previousSnapshot.rental, cleanTripId) : null);
+          if (previousDbRow) {
+            const { error: rErr } = await supabase
+              .from('car_rentals')
+              .upsert({ ...previousDbRow, trip_id: cleanTripId, id: cleanRentalId }, { onConflict: 'id' });
+            if (rErr) compFailures.push('car_rentals');
+          } else {
+            compFailures.push('car_rentals (snapshot indisponível)');
+          }
+
+          await deleteExpensesBySourceInDb(cleanTripId, 'car_rental', rental.id);
+          if (dbPreviousExpenses && dbPreviousExpenses.length > 0) {
+            const { error: expRestErr } = await supabase
+              .from('expenses')
+              .upsert(dbPreviousExpenses.map((e) => ({ ...e, trip_id: cleanTripId, source_type: 'car_rental', source_id: rental.id })), { onConflict: 'id' });
+            if (expRestErr) compFailures.push('expenses');
+          }
+        } catch (e) {
+          compFailures.push('car_rentals/expenses');
+        }
+      }
+
+      if (compFailures.length > 0) {
+        return {
+          success: false,
+          compensationSuccess: false,
+          error: `Exceção ao salvar aluguel de carro: ${err?.message || 'Erro desconhecido'}. A compensação automática falhou no banco (${compFailures.join(', ')}). Registros na tabela car_rentals/expenses podem estar inconsistentes.`
+        };
+      }
+
+      return {
+        success: false,
+        compensationSuccess: true,
+        error: `Exceção ao salvar aluguel de carro: ${err?.message || 'Erro desconhecido'}. A compensação automática restaurou/limpou os registros no Supabase com sucesso.`
+      };
     }
   },
 
