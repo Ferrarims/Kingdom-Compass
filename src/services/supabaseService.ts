@@ -3,6 +3,7 @@ import { ensureValidUUID, generateDeterministicUUID } from '../utils/uuid';
 import { ensurePreparationDocsForTravelers } from '../utils/prepDocs';
 import { deduplicateHourlySchedule, syncAllEventsToHourlySchedule, ensureHourlyScheduleItems } from '../utils/parkScheduleUtils';
 import { normalizeAttractionName } from '../utils/attractionUtils';
+import { validatePartialPayment } from '../utils/currency';
 import {
   Trip,
   ExpenseItem,
@@ -481,8 +482,15 @@ async function syncToExpenses(
       paidBrl = numBrl;
       paidUsd = numUsd;
     } else if (expStatus === 'Parcial') {
-      paidBrl = data.paidValueBRL !== undefined && data.paidValueBRL !== null ? Number(data.paidValueBRL) : 0;
-      paidUsd = data.paidValueUSD !== undefined && data.paidValueUSD !== null ? Number(data.paidValueUSD) : 0;
+      const pBrl = data.paidValueBRL !== undefined && data.paidValueBRL !== null ? Number(data.paidValueBRL) : 0;
+      const pUsd = data.paidValueUSD !== undefined && data.paidValueUSD !== null ? Number(data.paidValueUSD) : 0;
+      const rate = fallbackTrip?.dollarRate || 5.75;
+      const validation = validatePartialPayment(numBrl, numUsd, pBrl, pUsd, rate);
+      if (!validation.valid) {
+        return { success: false, error: validation.error || 'Valor parcial inválido.' };
+      }
+      paidBrl = validation.paidBrl;
+      paidUsd = validation.paidUsd;
     } else {
       paidBrl = 0;
       paidUsd = 0;

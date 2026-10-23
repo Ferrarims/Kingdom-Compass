@@ -127,3 +127,53 @@ export const formatInputDisplay = (val: number | string | null | undefined, curr
   if (num === null) return '';
   return formatCurrency(num, currency, false);
 };
+
+export function validatePartialPayment(
+  totalBrl: number,
+  totalUsd: number,
+  paidBrl: number | null | undefined,
+  paidUsd: number | null | undefined,
+  rate: number
+): { valid: boolean; error?: string; paidBrl: number; paidUsd: number } {
+  const totBrl = Number(totalBrl) || 0;
+  const totUsd = Number(totalUsd) || (totBrl > 0 && rate > 0 ? totBrl / rate : 0);
+  const effectiveTotBrl = totBrl > 0 ? totBrl : (totUsd > 0 && rate > 0 ? totUsd * rate : 0);
+  const effectiveTotUsd = totUsd > 0 ? totUsd : (totBrl > 0 && rate > 0 ? totBrl / rate : 0);
+
+  const pBrl = paidBrl !== undefined && paidBrl !== null ? Number(paidBrl) : 0;
+  const pUsd = paidUsd !== undefined && paidUsd !== null ? Number(paidUsd) : 0;
+
+  if (effectiveTotBrl <= 0 && effectiveTotUsd <= 0) {
+    return { valid: true, paidBrl: 0, paidUsd: 0 };
+  }
+
+  if (pBrl <= 0 && pUsd <= 0) {
+    return { valid: false, error: 'Para pagamento Parcial, o valor pago deve ser maior que zero e menor que o valor total.', paidBrl: 0, paidUsd: 0 };
+  }
+
+  let finalPaidBrl = pBrl;
+  let finalPaidUsd = pUsd;
+
+  if (pBrl > 0) {
+    if (pBrl >= effectiveTotBrl) {
+      return { valid: false, error: 'Para pagamento Parcial, o valor pago em R$ deve ser menor que o valor total.', paidBrl: pBrl, paidUsd: pUsd };
+    }
+    finalPaidUsd = rate > 0 ? Math.round((pBrl / rate) * 100) / 100 : pUsd;
+  }
+
+  if (pUsd > 0) {
+    if (pUsd >= effectiveTotUsd) {
+      return { valid: false, error: 'Para pagamento Parcial, o valor pago em US$ deve ser menor que o valor total.', paidBrl: pBrl, paidUsd: pUsd };
+    }
+    finalPaidBrl = rate > 0 ? Math.round(pUsd * rate * 100) / 100 : pBrl;
+  }
+
+  if (pBrl > 0 && pUsd > 0 && rate > 0) {
+    const expectedUsdFromBrl = pBrl / rate;
+    if (Math.abs(expectedUsdFromBrl - pUsd) / pUsd > 0.1 && Math.abs(expectedUsdFromBrl - pUsd) > 5) {
+      return { valid: false, error: 'Os valores pagos em BRL e USD são incompatíveis com a cotação vigente da viagem.', paidBrl: pBrl, paidUsd: pUsd };
+    }
+  }
+
+  return { valid: true, paidBrl: finalPaidBrl, paidUsd: finalPaidUsd };
+}
