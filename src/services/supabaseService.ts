@@ -2198,16 +2198,26 @@ export const SupabaseService = {
    */
   async deleteFlight(id: string, tripId?: string): Promise<{ success: boolean; error?: string }> {
     try {
-      const { error } = await supabase.from('flight_segments').delete().eq('id', id);
-      if (error && !isSupabaseMissingTableError(error)) {
-        return { success: false, error: error.message };
-      }
       if (tripId) {
+        // 1. Excluir despesas financeiras vinculadas no Supabase PRIMEIRO
         const expDelRes = await deleteExpensesBySourceInDb(tripId, 'flight', id);
         if (!expDelRes.success) {
           return { success: false, error: expDelRes.error || 'Falha ao excluir despesa do voo no Supabase' };
         }
+
+        // 2. Excluir agendamentos no roteiro diário vinculados
+        const schedDelRes = await this.deleteHourlySchedulesBySource(tripId, id, 'flight');
+        if (!schedDelRes.success) {
+          return { success: false, error: schedDelRes.error || 'Falha ao excluir horários do voo no roteiro' };
+        }
       }
+
+      // 3. Excluir o trecho de voo em flight_segments
+      const { error } = await supabase.from('flight_segments').delete().eq('id', id);
+      if (error && !isSupabaseMissingTableError(error)) {
+        return { success: false, error: error.message };
+      }
+
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Erro ao excluir voo' };
@@ -2376,16 +2386,26 @@ export const SupabaseService = {
    */
   async deleteAccommodation(id: string, tripId?: string): Promise<{ success: boolean; error?: string }> {
     try {
-      const { error } = await supabase.from('accommodations').delete().eq('id', id);
-      if (error && !isSupabaseMissingTableError(error)) {
-        return { success: false, error: error.message };
-      }
       if (tripId) {
+        // 1. Excluir despesas financeiras vinculadas no Supabase PRIMEIRO
         const expDelRes = await deleteExpensesBySourceInDb(tripId, 'accommodation', id);
         if (!expDelRes.success) {
           return { success: false, error: expDelRes.error || 'Falha ao excluir despesa da hospedagem no Supabase' };
         }
+
+        // 2. Excluir agendamentos no roteiro diário vinculados
+        const schedDelRes = await this.deleteHourlySchedulesBySource(tripId, id, 'accommodation');
+        if (!schedDelRes.success) {
+          return { success: false, error: schedDelRes.error || 'Falha ao excluir horários da hospedagem no roteiro' };
+        }
       }
+
+      // 3. Excluir a reserva de hospedagem em accommodations
+      const { error } = await supabase.from('accommodations').delete().eq('id', id);
+      if (error && !isSupabaseMissingTableError(error)) {
+        return { success: false, error: error.message };
+      }
+
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Erro ao excluir hospedagem' };

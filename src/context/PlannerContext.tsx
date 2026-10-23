@@ -4867,7 +4867,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         addNotification(`❌ ${errMsg}`);
         return { success: false, error: errMsg };
       }
-      await SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'flight');
     }
 
     const nextFlights = flights.filter((f) => f.id !== id);
@@ -5477,7 +5476,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         addNotification(`❌ ${errMsg}`);
         return { success: false, error: errMsg };
       }
-      await SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'accommodation');
     }
 
     setAccommodations((prev) => {
