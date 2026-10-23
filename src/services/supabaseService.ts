@@ -2520,13 +2520,15 @@ export const SupabaseService = {
         return { success: false, error: error.message };
       }
 
-      // 3. Sincronizar com a tabela de expenses usando o status de pagamento real
-      const expenseStatus = flight.paymentStatus === 'Pago' ? 'Pago' : 'Pendente';
+      // 3. Sincronizar com a tabela de expenses usando o status de pagamento real e valores parciais preservados
+      const expenseStatus = flight.paymentStatus || 'Não informado';
       const syncRes = await syncToExpenses(tripId, 'flight', flight.id, {
         title: `Passagem: ${flight.airline || 'Voo'} (${flight.typeLabel || 'Voo'}${flight.flightNumber ? ' ' + flight.flightNumber : ''})`,
         category: 'Passagens',
         usd: flight.ticketCostUSD || 0,
         brl: flight.ticketCostBRL || 0,
+        paidValueBRL: flight.paidValueBRL || 0,
+        paidValueUSD: flight.paidValueUSD || 0,
         payerId: flight.payerId || 'all',
         travelerIds: flight.travelerIds || ['all'],
         status: expenseStatus,
@@ -2910,13 +2912,15 @@ export const SupabaseService = {
         return { success: false, error: error.message };
       }
 
-      // 3. Sincronizar com a tabela de expenses usando o status de pagamento real
-      const expenseStatus = accommodation.paymentStatus === 'Pago' ? 'Pago' : 'Pendente';
+      // 3. Sincronizar com a tabela de expenses usando o status de pagamento real e valores parciais preservados
+      const expenseStatus = accommodation.paymentStatus || 'Não informado';
       const syncRes = await syncToExpenses(tripId, 'accommodation', accommodation.id, {
         title: `Hospedagem: ${accommodation.name || 'Reserva'}`,
         category: 'Hospedagem',
         usd: accommodation.costUSD || 0,
         brl: accommodation.costBRL || 0,
+        paidValueBRL: accommodation.paidValueBRL || 0,
+        paidValueUSD: accommodation.paidValueUSD || 0,
         payerId: accommodation.payerId || 'all',
         travelerIds: accommodation.travelerIds || ['all'],
         status: expenseStatus,
@@ -3248,10 +3252,8 @@ export const SupabaseService = {
         return { success: false, error: upsertErr.message, compensationSuccess: true };
       }
 
-      // 4. Sincronizar com a tabela de expenses usando estritamente o status de pagamento
-      const isPaid = rental.paymentStatus
-        ? rental.paymentStatus === 'Pago'
-        : rental.status === 'Pago';
+      // 4. Sincronizar com a tabela de expenses usando estritamente o status de pagamento e valores parciais preservados
+      const expenseStatus = rental.paymentStatus || (rental.status === 'Pago' ? 'Pago' : 'Pendente');
 
       const syncRes = await syncToExpenses(
         cleanTripId,
@@ -3262,9 +3264,11 @@ export const SupabaseService = {
           category: 'Transporte',
           usd: rental.costUSD || 0,
           brl: rental.costBRL || 0,
+          paidValueBRL: rental.paidValueBRL || 0,
+          paidValueUSD: rental.paidValueUSD || 0,
           payerId: rental.payerId || 'all',
           travelerIds: rental.travelerIds || ['all'],
-          status: isPaid ? 'Pago' : 'Pendente',
+          status: expenseStatus,
           notes: `Período: ${rental.pickupDate || '---'} a ${rental.dropoffDate || '---'}`
         },
         fallbackTrip
