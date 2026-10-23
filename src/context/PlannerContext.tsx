@@ -577,7 +577,7 @@ interface PlannerContextType {
   flights: FlightSegment[];
   addFlight: (flight: Omit<FlightSegment, 'id'>) => Promise<{ success: boolean; error?: string; warning?: string }>;
   updateFlight: (id: string, updates: Partial<FlightSegment>) => Promise<{ success: boolean; error?: string; warning?: string }>;
-  deleteFlight: (id: string) => void;
+  deleteFlight: (id: string) => Promise<{ success: boolean; error?: string }>;
 
   // Car Rentals & Transportation
   carRentals: CarRentalBooking[];
@@ -4851,8 +4851,35 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     return { success: true, warning: saveWarning };
   };
 
-  const deleteFlight = (id: string) => {
+  const deleteFlight = async (id: string): Promise<{ success: boolean; error?: string }> => {
     const flight = flights.find((f) => f.id === id);
+    if (!flight) return { success: false, error: 'Voo não encontrado' };
+
+    const prevFlights = [...flights];
+    const prevTrips = [...trips];
+    const prevExpenses = [...expenses];
+    const prevRawDays = [...rawDays];
+
+    if (activeTripId) {
+      const delFlightRes = await SupabaseService.deleteFlight(id, activeTripId);
+      if (!delFlightRes) {
+        const errMsg = 'Falha ao excluir voo no Supabase';
+        addNotification(`❌ ${errMsg}`);
+        return { success: false, error: errMsg };
+      }
+      const delExpRes = await SupabaseService.deleteExpensesBySource(activeTripId, 'flight', id);
+      if (!delExpRes.success) {
+        setFlights(prevFlights);
+        setTrips(prevTrips);
+        setExpenses(prevExpenses);
+        setRawDays(prevRawDays);
+        const errMsg = delExpRes.error || 'Falha ao excluir despesa do voo no Supabase';
+        addNotification(`❌ ${errMsg}`);
+        return { success: false, error: errMsg };
+      }
+      await SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'flight');
+    }
+
     const nextFlights = flights.filter((f) => f.id !== id);
     setFlights(nextFlights);
     setTrips((prevTrips) =>
@@ -4869,12 +4896,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           !(e.sourceType === 'flight' && e.sourceId === id)
       )
     );
-
-    SupabaseService.deleteFlight(id, activeTripId);
-    if (activeTripId) {
-      SupabaseService.deleteExpensesBySource(activeTripId, 'flight', id);
-      SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'flight');
-    }
 
     // Re-sincronizar apenas os dias afetados
     setRawDays((prevDays) => {
@@ -4916,9 +4937,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       return result.updatedDays;
     });
 
-    if (flight) {
-      addNotification(`Removeu o voo ${flight.flightNumber} e atualizou o roteiro`);
-    }
+    addNotification(`Removeu o voo ${flight.flightNumber || ''} e atualizou o roteiro`);
+    return { success: true };
   };
 
 

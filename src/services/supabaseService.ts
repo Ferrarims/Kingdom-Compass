@@ -398,10 +398,14 @@ async function syncToExpenses(
 
     // Sincronização idempotente: remover registros paralelos/duplicados da mesma origem/tipo antes de gravar
     try {
-      const { data: existingRows } = await supabase
+      const { data: existingRows, error: selectErr } = await supabase
         .from('expenses')
         .select('id, source_type, source_id')
         .eq('trip_id', cleanTripId);
+
+      if (selectErr && !isSupabaseMissingTableError(selectErr)) {
+        return { success: false, error: selectErr.message };
+      }
 
       if (existingRows && existingRows.length > 0) {
         const idsToDelete = existingRows
@@ -419,12 +423,12 @@ async function syncToExpenses(
             .eq('trip_id', cleanTripId)
             .in('id', idsToDelete);
           if (dedupDelErr && !isSupabaseMissingTableError(dedupDelErr)) {
-            console.warn('Error during deduplication delete in syncToExpenses:', dedupDelErr);
+            return { success: false, error: dedupDelErr.message };
           }
         }
       }
-    } catch (dedupErr) {
-      console.warn('Deduplication check in syncToExpenses notice:', dedupErr);
+    } catch (dedupErr: any) {
+      return { success: false, error: dedupErr?.message || 'Erro ao verificar duplicatas de despesas' };
     }
 
     const expenseItem: ExpenseItem = {
@@ -3470,10 +3474,22 @@ export const SupabaseService = {
           (Number(e.estimatedValueUSD) || 0) <= 0 &&
           (Number(e.estimatedValueBRL) || 0) <= 0;
 
-        if (isZeroFlightOrAcc && e.sourceId) {
-          const delRes = await deleteExpensesBySourceInDb(cleanTripId, e.sourceType as 'flight' | 'accommodation', e.sourceId);
-          if (!delRes.success) {
-            return { success: false, error: delRes.error || 'Falha ao excluir despesa zerada no Supabase' };
+        if (isZeroFlightOrAcc) {
+          if (e.sourceId) {
+            const delRes = await deleteExpensesBySourceInDb(cleanTripId, e.sourceType as 'flight' | 'accommodation', e.sourceId);
+            if (!delRes.success) {
+              return { success: false, error: delRes.error || 'Falha ao excluir despesa zerada no Supabase' };
+            }
+          } else if (e.id) {
+            const { error: idDelErr } = await supabase
+              .from('expenses')
+              .delete()
+              .eq('trip_id', cleanTripId)
+              .eq('id', e.id);
+
+            if (idDelErr && !isSupabaseMissingTableError(idDelErr)) {
+              return { success: false, error: idDelErr.message };
+            }
           }
         } else {
           validExpenses.push(e);
