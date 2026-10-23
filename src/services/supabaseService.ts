@@ -2318,20 +2318,26 @@ export const SupabaseService = {
       }
       const { data: deletedFlightRows, error: flightErr } = await flightQuery.select('id');
 
-      if (flightErr && !isSupabaseMissingTableError(flightErr)) {
-        // Compensação: Restaurar despesas e horários excluídos
+      // Tratar QUALQUER erro na tabela principal (inclusive tabela ausente) como falha
+      if (flightErr) {
         const rollRes = await rollbackCompensation(snapshotExpenses, snapshotSchedules);
+        const errDetail = isSupabaseMissingTableError(flightErr)
+          ? 'Tabela flight_segments não encontrada ou aguardando criação no Supabase'
+          : flightErr.message;
         if (!rollRes.success) {
           return {
             success: false,
-            error: `Falha ao excluir voo (${flightErr.message}). A restauração dos dados associados falhou parcialmente: ${rollRes.error}. O banco de dados pode estar em estado inconsistente.`,
+            error: `Falha ao excluir voo (${errDetail}). A restauração dos dados associados falhou parcialmente: ${rollRes.error}. O banco de dados pode estar em estado inconsistente.`,
           };
         }
-        return { success: false, error: `${flightErr.message}. Registros associados (despesas e horários) foram restaurados com sucesso no banco.` };
+        return {
+          success: false,
+          error: `Falha ao excluir voo (${errDetail}). Registros associados (despesas e horários) foram restaurados com sucesso no banco.`,
+        };
       }
 
-      if (!isSupabaseMissingTableError(flightErr) && (!deletedFlightRows || deletedFlightRows.length === 0)) {
-        // Compensação: Restaurar despesas e horários excluídos
+      // Confirmar que pelo menos 1 linha foi efetivamente removida
+      if (!deletedFlightRows || deletedFlightRows.length === 0) {
         const rollRes = await rollbackCompensation(snapshotExpenses, snapshotSchedules);
         if (!rollRes.success) {
           return {
@@ -2603,20 +2609,26 @@ export const SupabaseService = {
       }
       const { data: deletedAccRows, error: accErr } = await accQuery.select('id');
 
-      if (accErr && !isSupabaseMissingTableError(accErr)) {
-        // Compensação: Restaurar despesas e horários excluídos
+      // Tratar QUALQUER erro na tabela principal (inclusive tabela ausente) como falha
+      if (accErr) {
         const rollRes = await rollbackCompensation(snapshotExpenses, snapshotSchedules);
+        const errDetail = isSupabaseMissingTableError(accErr)
+          ? 'Tabela accommodations não encontrada ou aguardando criação no Supabase'
+          : accErr.message;
         if (!rollRes.success) {
           return {
             success: false,
-            error: `Falha ao excluir hospedagem (${accErr.message}). A restauração dos dados associados falhou parcialmente: ${rollRes.error}. O banco de dados pode estar em estado inconsistente.`,
+            error: `Falha ao excluir hospedagem (${errDetail}). A restauração dos dados associados falhou parcialmente: ${rollRes.error}. O banco de dados pode estar em estado inconsistente.`,
           };
         }
-        return { success: false, error: `${accErr.message}. Registros associados (despesas e horários) foram restaurados com sucesso no banco.` };
+        return {
+          success: false,
+          error: `Falha ao excluir hospedagem (${errDetail}). Registros associados (despesas e horários) foram restaurados com sucesso no banco.`,
+        };
       }
 
-      if (!isSupabaseMissingTableError(accErr) && (!deletedAccRows || deletedAccRows.length === 0)) {
-        // Compensação: Restaurar despesas e horários excluídos
+      // Confirmar que pelo menos 1 linha foi efetivamente removida
+      if (!deletedAccRows || deletedAccRows.length === 0) {
         const rollRes = await rollbackCompensation(snapshotExpenses, snapshotSchedules);
         if (!rollRes.success) {
           return {
