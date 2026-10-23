@@ -317,30 +317,35 @@ export async function deleteExpensesBySourceInDb(
     const legacyPrefix = sourceType === 'accommodation' ? 'acc' : sourceType === 'flight' ? 'flight' : sourceType;
     const legacyId = `exp-${legacyPrefix}-${sourceId}`;
 
-    // 1. Exclusão por ID determinístico e legado
-    await supabase.from('expenses').delete().in('id', [expId, legacyId]);
+    // 1. Exclusão por ID determinístico e legado restritos à viagem
+    const { error: err1 } = await supabase
+      .from('expenses')
+      .delete()
+      .eq('trip_id', cleanTripId)
+      .in('id', [expId, legacyId]);
 
-    // 2. Exclusão por trip_id + source_type + source_id
-    await supabase
+    if (err1 && !isSupabaseMissingTableError(err1)) {
+      return { success: false, error: err1.message };
+    }
+
+    // 2. Exclusão restrita por trip_id + source_type + source_id
+    const { error: err2 } = await supabase
       .from('expenses')
       .delete()
       .eq('trip_id', cleanTripId)
       .eq('source_type', sourceType)
       .eq('source_id', sourceId);
 
-    // 3. Exclusão de segurança por trip_id + source_id
-    await supabase
-      .from('expenses')
-      .delete()
-      .eq('trip_id', cleanTripId)
-      .eq('source_id', sourceId);
+    if (err2 && !isSupabaseMissingTableError(err2)) {
+      return { success: false, error: err2.message };
+    }
 
     return { success: true };
   } catch (err: any) {
     if (!isSupabaseMissingTableError(err)) {
       console.warn('deleteExpensesBySourceInDb notice:', err);
     }
-    return { success: false, error: err?.message };
+    return { success: false, error: err?.message || 'Erro ao excluir despesa' };
   }
 }
 
@@ -364,7 +369,7 @@ async function syncToExpenses(
     notes?: string;
   },
   fallbackTrip?: Partial<Trip>
-) {
+): Promise<{ success: boolean; error?: string }> {
   try {
     const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
     const numUsd = Number(data.usd) || 0;
@@ -372,8 +377,11 @@ async function syncToExpenses(
 
     // Regra obrigatória: se a cobrança for zero nas duas moedas, nenhuma despesa pode existir vinculada ao item
     if (numUsd <= 0 && numBrl <= 0) {
-      await deleteExpensesBySourceInDb(cleanTripId, sourceType, sourceId);
-      return;
+      const delRes = await deleteExpensesBySourceInDb(cleanTripId, sourceType, sourceId);
+      if (!delRes.success) {
+        return { success: false, error: delRes.error || 'Falha ao excluir despesa zerada no Supabase' };
+      }
+      return { success: true };
     }
 
     const typeMap: Record<string, string> = {
@@ -388,18 +396,31 @@ async function syncToExpenses(
     const legacyPrefix = sourceType === 'accommodation' ? 'acc' : sourceType === 'flight' ? 'flight' : sourceType;
     const legacyId = `exp-${legacyPrefix}-${sourceId}`;
 
-    // Sincronização idempotente: remover registros paralelos/duplicados com ID antigo antes de gravar
+    // Sincronização idempotente: remover registros paralelos/duplicados da mesma origem/tipo antes de gravar
     try {
       const { data: existingRows } = await supabase
         .from('expenses')
-        .select('id')
-        .eq('trip_id', cleanTripId)
-        .or(`source_id.eq.${sourceId},id.eq.${legacyId}`);
+        .select('id, source_type, source_id')
+        .eq('trip_id', cleanTripId);
 
       if (existingRows && existingRows.length > 0) {
-        const idsToDelete = existingRows.map((r: any) => r.id).filter((id: string) => id !== expId);
+        const idsToDelete = existingRows
+          .filter((r: any) =>
+            (r.source_type === sourceType && r.source_id === sourceId) ||
+            r.id === legacyId
+          )
+          .map((r: any) => r.id)
+          .filter((id: string) => id !== expId);
+
         if (idsToDelete.length > 0) {
-          await supabase.from('expenses').delete().in('id', idsToDelete);
+          const { error: dedupDelErr } = await supabase
+            .from('expenses')
+            .delete()
+            .eq('trip_id', cleanTripId)
+            .in('id', idsToDelete);
+          if (dedupDelErr && !isSupabaseMissingTableError(dedupDelErr)) {
+            console.warn('Error during deduplication delete in syncToExpenses:', dedupDelErr);
+          }
         }
       }
     } catch (dedupErr) {
@@ -449,11 +470,17 @@ async function syncToExpenses(
       }
     }
 
-    if (error && !isSupabaseMissingTableError(error)) {
-      console.error(`Erro ao sincronizar gasto (${sourceType}):`, error);
+    if (error) {
+      if (isSupabaseMissingTableError(error)) {
+        return { success: false, error: 'Tabela expenses aguardando criação no Supabase.' };
+      }
+      return { success: false, error: error.message };
     }
-  } catch (err) {
+
+    return { success: true };
+  } catch (err: any) {
     console.error(`Erro ao sincronizar gasto (${sourceType}):`, err);
+    return { success: false, error: err?.message || 'Erro ao sincronizar gasto' };
   }
 }
 
@@ -2266,7 +2293,7 @@ export const SupabaseService = {
 
       // 3. Sincronizar com a tabela de expenses usando o status de pagamento real
       const expenseStatus = flight.paymentStatus === 'Pago' ? 'Pago' : 'Pendente';
-      await syncToExpenses(tripId, 'flight', flight.id, {
+      const syncRes = await syncToExpenses(tripId, 'flight', flight.id, {
         title: `Passagem: ${flight.airline || 'Voo'} (${flight.typeLabel || 'Voo'}${flight.flightNumber ? ' ' + flight.flightNumber : ''})`,
         category: 'Passagens',
         usd: flight.ticketCostUSD || 0,
@@ -2276,6 +2303,10 @@ export const SupabaseService = {
         status: expenseStatus,
         notes: `Trecho: ${flight.originCity || flight.originAirport || 'Origem'} ➔ ${flight.destinationCity || flight.destinationAirport || 'Destino'}`
       }, fallbackTrip);
+
+      if (!syncRes.success) {
+        return { success: false, error: syncRes.error };
+      }
 
       if (paymentStatusNotPersisted) {
         return {
@@ -2524,7 +2555,7 @@ export const SupabaseService = {
 
       // 3. Sincronizar com a tabela de expenses usando o status de pagamento real
       const expenseStatus = accommodation.paymentStatus === 'Pago' ? 'Pago' : 'Pendente';
-      await syncToExpenses(tripId, 'accommodation', accommodation.id, {
+      const syncRes = await syncToExpenses(tripId, 'accommodation', accommodation.id, {
         title: `Hospedagem: ${accommodation.name || 'Reserva'}`,
         category: 'Hospedagem',
         usd: accommodation.costUSD || 0,
@@ -2534,6 +2565,10 @@ export const SupabaseService = {
         status: expenseStatus,
         notes: `Check-in: ${accommodation.checkInDate || '---'} | Check-out: ${accommodation.checkOutDate || '---'}`
       }, fallbackTrip);
+
+      if (!syncRes.success) {
+        return { success: false, error: syncRes.error };
+      }
 
       if (paymentStatusNotPersisted) {
         return {
@@ -3426,17 +3461,51 @@ export const SupabaseService = {
         }
       }
 
-      const currentIds = (expenses || []).map((e) => e.id).filter(Boolean);
-      const { data: existing } = await supabase.from('expenses').select('id').eq('trip_id', cleanTripId);
-      if (existing && existing.length > 0) {
-        const toDelete = existing.map((r: any) => r.id).filter((id: string) => !currentIds.includes(id));
-        if (toDelete.length > 0) {
-          await supabase.from('expenses').delete().eq('trip_id', cleanTripId).in('id', toDelete);
+      // Regra obrigatória em lote:
+      // Identificar e expurgar despesas zeradas de voo ou hospedagem no Supabase
+      const validExpenses: ExpenseItem[] = [];
+      for (const e of expenses || []) {
+        const isZeroFlightOrAcc =
+          (e.sourceType === 'flight' || e.sourceType === 'accommodation') &&
+          (Number(e.estimatedValueUSD) || 0) <= 0 &&
+          (Number(e.estimatedValueBRL) || 0) <= 0;
+
+        if (isZeroFlightOrAcc && e.sourceId) {
+          const delRes = await deleteExpensesBySourceInDb(cleanTripId, e.sourceType as 'flight' | 'accommodation', e.sourceId);
+          if (!delRes.success) {
+            return { success: false, error: delRes.error || 'Falha ao excluir despesa zerada no Supabase' };
+          }
+        } else {
+          validExpenses.push(e);
         }
       }
 
-      if (expenses && expenses.length > 0) {
-        const dbRows = expenses.map((e) => mapExpenseToDb(e, cleanTripId));
+      const currentIds = validExpenses.map((e) => e.id).filter(Boolean);
+      const { data: existing, error: fetchErr } = await supabase
+        .from('expenses')
+        .select('id')
+        .eq('trip_id', cleanTripId);
+
+      if (fetchErr && !isSupabaseMissingTableError(fetchErr)) {
+        return { success: false, error: fetchErr.message };
+      }
+
+      if (existing && existing.length > 0) {
+        const toDelete = existing.map((r: any) => r.id).filter((id: string) => !currentIds.includes(id));
+        if (toDelete.length > 0) {
+          const { error: delErr } = await supabase
+            .from('expenses')
+            .delete()
+            .eq('trip_id', cleanTripId)
+            .in('id', toDelete);
+          if (delErr && !isSupabaseMissingTableError(delErr)) {
+            return { success: false, error: delErr.message };
+          }
+        }
+      }
+
+      if (validExpenses.length > 0) {
+        const dbRows = validExpenses.map((e) => mapExpenseToDb(e, cleanTripId));
         const { error: upsertErr } = await supabase.from('expenses').upsert(dbRows, { onConflict: 'id' });
         if (upsertErr) {
           if (isSupabaseMissingTableError(upsertErr)) {

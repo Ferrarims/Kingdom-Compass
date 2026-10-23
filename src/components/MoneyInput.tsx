@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { CurrencyType, formatInputDisplay, parseInputToNumber } from '../utils/currency';
+import { CurrencyType, formatInputDisplay, parseInputToNumber, coerceToNumber } from '../utils/currency';
 
 interface MoneyInputProps {
   currency: CurrencyType;
-  value: number | null | undefined;
+  value: number | string | null | undefined;
   onChange: (val: number | null) => void;
   placeholder?: string;
   className?: string;
@@ -30,10 +30,15 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (value === null || value === undefined || isNaN(value)) {
+    if (value === null || value === undefined || value === '') {
       setDisplayValue('');
     } else {
-      setDisplayValue(formatInputDisplay(value, currency));
+      const num = coerceToNumber(value);
+      if (num === null) {
+        setDisplayValue('');
+      } else {
+        setDisplayValue(formatInputDisplay(num, currency));
+      }
     }
   }, [value, currency]);
 
@@ -88,14 +93,12 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
       .replace(/\s*(BRL|USD)$/i, '')
       .trim();
     
-    // Strict validation using parseInputToNumber
-    const parsedNum = parseInputToNumber(cleanPaste, currency);
+    // Strict validation using parseInputToNumber with coerceToNumber fallback
+    const parsedNum = parseInputToNumber(cleanPaste, currency) ?? coerceToNumber(cleanPaste);
 
     if (parsedNum !== null && !isNaN(parsedNum)) {
       onChange(parsedNum);
       setDisplayValue(formatInputDisplay(parsedNum, currency));
-    } else {
-      alert(`Valor colado inválido para o formato ${currency}. Esperado: ${currency === 'BRL' ? 'R$ 1.234,56' : 'US$ 1,234.56'}`);
     }
   };
 

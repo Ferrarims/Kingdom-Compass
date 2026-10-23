@@ -1801,8 +1801,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           if (
             e.id === expId ||
             e.id === legacyId ||
-            (e.sourceType === 'flight' && e.sourceId === flight.id) ||
-            e.sourceId === flight.id
+            (e.sourceType === 'flight' && e.sourceId === flight.id)
           ) {
             updatedExpenses.splice(i, 1);
           }
@@ -1845,8 +1844,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           if (
             e.id === expId ||
             e.id === legacyId ||
-            (e.sourceType === 'flight' && e.sourceId === flight.id) ||
-            e.sourceId === flight.id
+            (e.sourceType === 'flight' && e.sourceId === flight.id)
           ) {
             matchingIndices.push(idx);
           }
@@ -1883,8 +1881,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           if (
             e.id === expId ||
             e.id === legacyId ||
-            (e.sourceType === 'accommodation' && e.sourceId === acc.id) ||
-            e.sourceId === acc.id
+            (e.sourceType === 'accommodation' && e.sourceId === acc.id)
           ) {
             updatedExpenses.splice(i, 1);
           }
@@ -1922,8 +1919,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           if (
             e.id === expId ||
             e.id === legacyId ||
-            (e.sourceType === 'accommodation' && e.sourceId === acc.id) ||
-            e.sourceId === acc.id
+            (e.sourceType === 'accommodation' && e.sourceId === acc.id)
           ) {
             matchingIndices.push(idx);
           }
@@ -1985,7 +1981,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           updatedBy: cUser.name || 'Sistema',
         };
 
-        const existingIdx = updatedExpenses.findIndex((e) => e.id === expId || e.id === `exp-car-${rental.id}` || e.sourceId === rental.id);
+        const existingIdx = updatedExpenses.findIndex((e) => e.id === expId || e.id === `exp-car-${rental.id}` || (e.sourceType === 'car_rental' && e.sourceId === rental.id));
         if (existingIdx >= 0) {
           const prevExp = updatedExpenses[existingIdx];
           const finalPaid = isPaid || prevExp.status === 'Pago' || (prevExp.paidValueBRL || 0) > 0;
@@ -2054,8 +2050,21 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       );
       setExpenses(reconciledExpenses);
 
-      // Sincronizar com o Supabase se faltavam gastos derivados de voos/hotéis/ingressos
-      if (reconciledExpenses.length !== (found.expenses || []).length && found.id) {
+      // Sincronizar com o Supabase se houve alterações nas despesas (limpeza, adição, ajuste de valores/status)
+      const expensesChanged =
+        reconciledExpenses.length !== (found.expenses || []).length ||
+        reconciledExpenses.some((re, idx) => {
+          const fe = (found.expenses || [])[idx];
+          return (
+            !fe ||
+            fe.id !== re.id ||
+            fe.estimatedValueBRL !== re.estimatedValueBRL ||
+            fe.estimatedValueUSD !== re.estimatedValueUSD ||
+            fe.status !== re.status
+          );
+        });
+
+      if (expensesChanged && found.id) {
         SupabaseService.syncExpenses(found.id, reconciledExpenses, {
           ...found,
           travelers: currentTravelers,
@@ -4261,8 +4270,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           (e) =>
             e.id !== expId &&
             e.id !== legacyId &&
-            !(e.sourceType === 'flight' && e.sourceId === flight.id) &&
-            e.sourceId !== flight.id
+            !(e.sourceType === 'flight' && e.sourceId === flight.id)
         );
         setTrips((prevTrips) =>
           prevTrips.map((t) => (t.id === activeTripId ? { ...t, expenses: nextExpenses } : t))
@@ -4271,7 +4279,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       });
 
       if (activeTripId) {
-        await SupabaseService.deleteExpensesBySource(activeTripId, 'flight', flight.id);
+        const delRes = await SupabaseService.deleteExpensesBySource(activeTripId, 'flight', flight.id);
+        if (!delRes.success) {
+          return { success: false, error: delRes.error || 'Erro ao excluir despesa zerada no Supabase' };
+        }
       }
       return { success: true };
     }
@@ -4307,8 +4318,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         (e) =>
           e.id === expId ||
           e.id === legacyId ||
-          (e.sourceType === 'flight' && e.sourceId === flight.id) ||
-          e.sourceId === flight.id
+          (e.sourceType === 'flight' && e.sourceId === flight.id)
       );
       if (existingIndex >= 0) {
         const updated = [...prev];
@@ -4336,8 +4346,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
             !(
               e.id === expId ||
               e.id === legacyId ||
-              (e.sourceType === 'flight' && e.sourceId === flight.id) ||
-              e.sourceId === flight.id
+              (e.sourceType === 'flight' && e.sourceId === flight.id)
             )
         );
       } else {
@@ -4358,7 +4367,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         durationDays: settings.durationDays,
         travelers: settings.travelers,
       };
-      await SupabaseService.saveExpense(activeTripId, expData, fallbackTrip);
+      const saveRes = await SupabaseService.saveExpense(activeTripId, expData, fallbackTrip);
+      if (!saveRes.success) {
+        return { success: false, error: saveRes.error || 'Erro ao salvar despesa do voo no Supabase' };
+      }
     }
     return { success: true };
   };
@@ -4379,8 +4391,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           (e) =>
             e.id !== expId &&
             e.id !== legacyId &&
-            !(e.sourceType === 'accommodation' && e.sourceId === acc.id) &&
-            e.sourceId !== acc.id
+            !(e.sourceType === 'accommodation' && e.sourceId === acc.id)
         );
         setTrips((prevTrips) =>
           prevTrips.map((t) => (t.id === activeTripId ? { ...t, expenses: nextExpenses } : t))
@@ -4389,7 +4400,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       });
 
       if (activeTripId) {
-        await SupabaseService.deleteExpensesBySource(activeTripId, 'accommodation', acc.id);
+        const delRes = await SupabaseService.deleteExpensesBySource(activeTripId, 'accommodation', acc.id);
+        if (!delRes.success) {
+          return { success: false, error: delRes.error || 'Erro ao excluir despesa da hospedagem no Supabase' };
+        }
       }
       return { success: true };
     }
@@ -4424,8 +4438,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         (e) =>
           e.id === expId ||
           e.id === legacyId ||
-          (e.sourceType === 'accommodation' && e.sourceId === acc.id) ||
-          e.sourceId === acc.id
+          (e.sourceType === 'accommodation' && e.sourceId === acc.id)
       );
       if (existingIndex >= 0) {
         const updated = [...prev];
@@ -4455,8 +4468,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
             !(
               e.id === expId ||
               e.id === legacyId ||
-              (e.sourceType === 'accommodation' && e.sourceId === acc.id) ||
-              e.sourceId === acc.id
+              (e.sourceType === 'accommodation' && e.sourceId === acc.id)
             )
         );
       } else {
@@ -4477,7 +4489,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         durationDays: settings.durationDays,
         travelers: settings.travelers,
       };
-      await SupabaseService.saveExpense(activeTripId, expData, fallbackTrip);
+      const saveRes = await SupabaseService.saveExpense(activeTripId, expData, fallbackTrip);
+      if (!saveRes.success) {
+        return { success: false, error: saveRes.error || 'Erro ao salvar despesa de hospedagem no Supabase' };
+      }
     }
     return { success: true };
   };
@@ -4656,7 +4671,15 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
     }
 
-    await syncFlightExpense(newFlight, settings.dollarRate || 5.75);
+    const expSyncRes = await syncFlightExpense(newFlight, settings.dollarRate || 5.75);
+    if (!expSyncRes.success) {
+      setFlights(prevFlights);
+      setTrips(prevTrips);
+      setRawDays(prevRawDays);
+      setExpenses(prevExpenses);
+      addNotification(`❌ Falha ao sincronizar despesa do voo: ${expSyncRes.error}`);
+      return { success: false, error: expSyncRes.error };
+    }
 
     // Sincronizar todos os voos no roteiro diário
     setRawDays((prevDays) => {
@@ -4763,7 +4786,15 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         }
       }
       // Await da sincronização financeira sequencialmente para garantir idempotência e evitar disputa
-      await syncFlightExpense(savedUpdated, settings.dollarRate || 5.75);
+      const expSyncRes = await syncFlightExpense(savedUpdated, settings.dollarRate || 5.75);
+      if (!expSyncRes.success) {
+        setFlights(prevFlights);
+        setTrips(prevTrips);
+        setRawDays(prevRawDays);
+        setExpenses(prevExpenses);
+        addNotification(`❌ Falha ao sincronizar despesa do voo: ${expSyncRes.error}`);
+        return { success: false, error: expSyncRes.error };
+      }
     }
 
     // Sincronizar no cronograma diário apenas os dias afetados
@@ -4835,8 +4866,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         (e) =>
           e.id !== expId &&
           e.id !== legacyId &&
-          !(e.sourceType === 'flight' && e.sourceId === id) &&
-          e.sourceId !== id
+          !(e.sourceType === 'flight' && e.sourceId === id)
       )
     );
 
@@ -5357,7 +5387,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       return nextAccs;
     });
     // Await da sincronização financeira para garantir consistência e evitar condição de corrida
-    await syncAccommodationExpense(newAcc, settings.dollarRate || 5.75);
+    const expSyncRes = await syncAccommodationExpense(newAcc, settings.dollarRate || 5.75);
+    if (!expSyncRes.success) {
+      addNotification(`❌ Falha ao sincronizar despesa da hospedagem: ${expSyncRes.error}`);
+      return { success: false, error: expSyncRes.error };
+    }
 
     const syncRes = await syncAccommodationToDays(newAcc);
     if (!syncRes.success) {
@@ -5407,7 +5441,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       return nextAccs;
     });
     // Await da sincronização financeira sequencialmente
-    await syncAccommodationExpense(updatedAcc, settings.dollarRate || 5.75);
+    const expSyncRes = await syncAccommodationExpense(updatedAcc, settings.dollarRate || 5.75);
+    if (!expSyncRes.success) {
+      addNotification(`❌ Falha ao sincronizar despesa da hospedagem: ${expSyncRes.error}`);
+      return { success: false, error: expSyncRes.error };
+    }
 
     const syncRes = await syncAccommodationToDays(updatedAcc, false, oldAcc);
     if (!syncRes.success) {
@@ -5446,13 +5484,17 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         (e) =>
           e.id !== expId &&
           e.id !== legacyId &&
-          !(e.sourceType === 'accommodation' && e.sourceId === id) &&
-          e.sourceId !== id
+          !(e.sourceType === 'accommodation' && e.sourceId === id)
       )
     );
 
     if (activeTripId) {
-      await SupabaseService.deleteExpensesBySource(activeTripId, 'accommodation', id);
+      const delExpRes = await SupabaseService.deleteExpensesBySource(activeTripId, 'accommodation', id);
+      if (!delExpRes.success) {
+        const errMsg = delExpRes.error || 'Falha ao excluir despesa da hospedagem no Supabase';
+        addNotification(`❌ ${errMsg}`);
+        return { success: false, error: errMsg };
+      }
       await SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'accommodation');
     }
 
