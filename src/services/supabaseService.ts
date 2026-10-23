@@ -294,7 +294,60 @@ export function mapDbToExpense(row: any): ExpenseItem {
 }
 
 /**
+ * Deleta rigorosamente qualquer gasto vinculado a uma origem (voo, hospedagem, etc.)
+ * procurando por ID determinístico, ID legado com prefixo ('exp-flight-...', 'exp-acc-...'),
+ * e pelos pares (trip_id, source_type, source_id) e (trip_id, source_id).
+ */
+export async function deleteExpensesBySourceInDb(
+  tripId: string,
+  sourceType: 'flight' | 'accommodation' | 'car_rental' | 'park_ticket' | 'photo_package',
+  sourceId: string
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    if (!sourceId) return { success: true };
+    const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+    const typeMap: Record<string, string> = {
+      flight: 'flight-expense',
+      accommodation: 'acc-expense',
+      car_rental: 'car-expense',
+      park_ticket: 'ticket-expense',
+      photo_package: 'photo-expense',
+    };
+    const expId = generateDeterministicUUID(typeMap[sourceType] || sourceType, sourceId);
+    const legacyPrefix = sourceType === 'accommodation' ? 'acc' : sourceType === 'flight' ? 'flight' : sourceType;
+    const legacyId = `exp-${legacyPrefix}-${sourceId}`;
+
+    // 1. Exclusão por ID determinístico e legado
+    await supabase.from('expenses').delete().in('id', [expId, legacyId]);
+
+    // 2. Exclusão por trip_id + source_type + source_id
+    await supabase
+      .from('expenses')
+      .delete()
+      .eq('trip_id', cleanTripId)
+      .eq('source_type', sourceType)
+      .eq('source_id', sourceId);
+
+    // 3. Exclusão de segurança por trip_id + source_id
+    await supabase
+      .from('expenses')
+      .delete()
+      .eq('trip_id', cleanTripId)
+      .eq('source_id', sourceId);
+
+    return { success: true };
+  } catch (err: any) {
+    if (!isSupabaseMissingTableError(err)) {
+      console.warn('deleteExpensesBySourceInDb notice:', err);
+    }
+    return { success: false, error: err?.message };
+  }
+}
+
+/**
  * Sincroniza um gasto de outra tabela (voos, hotéis, etc.) com a tabela de expenses central.
+ * Regra obrigatória: se o valor for zero nas duas moedas (USD e BRL), a despesa vinculada
+ * é imediatamente excluída da tabela de expenses, mesmo se o status estiver como "Pago".
  */
 async function syncToExpenses(
   tripId: string, 
@@ -313,6 +366,16 @@ async function syncToExpenses(
   fallbackTrip?: Partial<Trip>
 ) {
   try {
+    const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+    const numUsd = Number(data.usd) || 0;
+    const numBrl = Number(data.brl) || 0;
+
+    // Regra obrigatória: se a cobrança for zero nas duas moedas, nenhuma despesa pode existir vinculada ao item
+    if (numUsd <= 0 && numBrl <= 0) {
+      await deleteExpensesBySourceInDb(cleanTripId, sourceType, sourceId);
+      return;
+    }
+
     const typeMap: Record<string, string> = {
       flight: 'flight-expense',
       accommodation: 'acc-expense',
@@ -322,24 +385,35 @@ async function syncToExpenses(
     };
 
     const expId = generateDeterministicUUID(typeMap[sourceType] || sourceType, sourceId);
+    const legacyPrefix = sourceType === 'accommodation' ? 'acc' : sourceType === 'flight' ? 'flight' : sourceType;
+    const legacyId = `exp-${legacyPrefix}-${sourceId}`;
 
-    if (data.usd <= 0 && data.brl <= 0) {
-      try {
-        await supabase.from('expenses').delete().eq('id', expId);
-      } catch (e) {
-        // ignore
+    // Sincronização idempotente: remover registros paralelos/duplicados com ID antigo antes de gravar
+    try {
+      const { data: existingRows } = await supabase
+        .from('expenses')
+        .select('id')
+        .eq('trip_id', cleanTripId)
+        .or(`source_id.eq.${sourceId},id.eq.${legacyId}`);
+
+      if (existingRows && existingRows.length > 0) {
+        const idsToDelete = existingRows.map((r: any) => r.id).filter((id: string) => id !== expId);
+        if (idsToDelete.length > 0) {
+          await supabase.from('expenses').delete().in('id', idsToDelete);
+        }
       }
-      return;
+    } catch (dedupErr) {
+      console.warn('Deduplication check in syncToExpenses notice:', dedupErr);
     }
 
     const expenseItem: ExpenseItem = {
       id: expId,
       title: data.title,
       category: data.category,
-      estimatedValueUSD: data.usd,
-      estimatedValueBRL: data.brl,
-      paidValueBRL: data.status === 'Pago' ? data.brl : 0,
-      paidValueUSD: data.status === 'Pago' ? data.usd : 0,
+      estimatedValueUSD: numUsd,
+      estimatedValueBRL: numBrl,
+      paidValueBRL: data.status === 'Pago' ? numBrl : 0,
+      paidValueUSD: data.status === 'Pago' ? numUsd : 0,
       status: data.status,
       payerId: data.payerId,
       responsibleTravelerId: data.payerId,
@@ -356,12 +430,11 @@ async function syncToExpenses(
       defaultTravelerId = fallbackTrip.travelers[0].id;
     }
 
-    let row = mapExpenseToDb(expenseItem, tripId, defaultTravelerId);
+    let row = mapExpenseToDb(expenseItem, cleanTripId, defaultTravelerId);
     let { error } = await supabase.from('expenses').upsert(row, { onConflict: 'id' });
 
     // Se falhar por restrição NOT NULL em responsible_traveler_id, busca o primeiro viajante da viagem no banco e repete
     if (error && (error.message?.includes('responsible_traveler_id') || error.code === '23502')) {
-      const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
       const { data: dbTraveler } = await supabase
         .from('travelers')
         .select('id')
@@ -370,7 +443,7 @@ async function syncToExpenses(
         .maybeSingle();
 
       if (dbTraveler?.id) {
-        row = mapExpenseToDb(expenseItem, tripId, dbTraveler.id);
+        row = mapExpenseToDb(expenseItem, cleanTripId, dbTraveler.id);
         const retryResult = await supabase.from('expenses').upsert(row, { onConflict: 'id' });
         error = retryResult.error;
       }
@@ -2092,13 +2165,27 @@ export const SupabaseService = {
   /**
    * Delete Flight
    */
-  async deleteFlight(id: string): Promise<boolean> {
+  async deleteFlight(id: string, tripId?: string): Promise<boolean> {
     try {
       const { error } = await supabase.from('flight_segments').delete().eq('id', id);
+      if (tripId) {
+        await deleteExpensesBySourceInDb(tripId, 'flight', id);
+      }
       return !error;
     } catch {
       return false;
     }
+  },
+
+  /**
+   * Delete all expenses linked to a specific source (flight, accommodation, etc.)
+   */
+  async deleteExpensesBySource(
+    tripId: string,
+    sourceType: 'flight' | 'accommodation' | 'car_rental' | 'park_ticket' | 'photo_package',
+    sourceId: string
+  ): Promise<{ success: boolean; error?: string }> {
+    return deleteExpensesBySourceInDb(tripId, sourceType, sourceId);
   },
 
   /**
@@ -2246,9 +2333,12 @@ export const SupabaseService = {
   /**
    * Delete Accommodation
    */
-  async deleteAccommodation(id: string): Promise<boolean> {
+  async deleteAccommodation(id: string, tripId?: string): Promise<boolean> {
     try {
       const { error } = await supabase.from('accommodations').delete().eq('id', id);
+      if (tripId) {
+        await deleteExpensesBySourceInDb(tripId, 'accommodation', id);
+      }
       return !error;
     } catch {
       return false;
@@ -3373,6 +3463,14 @@ export const SupabaseService = {
     try {
       if (!tripId || !expense) return { success: false, error: 'Parâmetros inválidos' };
       const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+
+      // Regra obrigatória: se a cobrança for zero nas duas moedas para um item vinculado (voo ou hospedagem),
+      // nenhuma despesa vinculada pode existir no Financeiro. Exclui e encerra.
+      const isZero = (Number(expense.estimatedValueUSD) || 0) <= 0 && (Number(expense.estimatedValueBRL) || 0) <= 0;
+      if (isZero && expense.sourceType && expense.sourceId && (expense.sourceType === 'flight' || expense.sourceType === 'accommodation')) {
+        await deleteExpensesBySourceInDb(cleanTripId, expense.sourceType, expense.sourceId);
+        return { success: true };
+      }
 
       // Ensure parent trip exists
       try {

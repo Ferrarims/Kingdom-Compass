@@ -1688,6 +1688,13 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     });
   }, [accommodations]);
 
+  // Helper para verificar se a cobrança de um item é zero nas duas moedas (USD e BRL)
+  const isZeroCost = (usd?: number | null, brl?: number | null): boolean => {
+    const numUsd = usd !== null && usd !== undefined ? Number(usd) : 0;
+    const numBrl = brl !== null && brl !== undefined ? Number(brl) : 0;
+    return (isNaN(numUsd) || numUsd <= 0) && (isNaN(numBrl) || numBrl <= 0);
+  };
+
   // Helper para verificar se uma hospedagem é considerada paga
   const isAccommodationPaid = (accOrStatus?: AccommodationBooking | string): boolean => {
     if (!accOrStatus) return false;
@@ -1783,12 +1790,33 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     // 2. Passagens Aéreas
     flightsList.forEach((flight) => {
       const expId = generateDeterministicUUID('flight-expense', flight.id);
-      const usd = flight.ticketCostUSD || 0;
-      const brl = flight.ticketCostBRL || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
-      const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
+      const legacyId = `exp-flight-${flight.id}`;
+      const isZero = isZeroCost(flight.ticketCostUSD, flight.ticketCostBRL);
 
-      if (brl > 0 || finalUsd > 0) {
-        const isPaid = flight.status === 'Emitido / Confirmado' || flight.status === 'Check-in Realizado' || flight.status === 'Embarcado' || flight.status === 'Concluído';
+      if (isZero) {
+        // Regra obrigatória: se a cobrança for zero nas duas moedas, nenhuma despesa vinculada
+        // a este voo pode existir no Financeiro (mesmo que paymentStatus seja 'Pago')
+        for (let i = updatedExpenses.length - 1; i >= 0; i--) {
+          const e = updatedExpenses[i];
+          if (
+            e.id === expId ||
+            e.id === legacyId ||
+            (e.sourceType === 'flight' && e.sourceId === flight.id) ||
+            e.sourceId === flight.id
+          ) {
+            updatedExpenses.splice(i, 1);
+          }
+        }
+      } else {
+        const usd = Number(flight.ticketCostUSD) || 0;
+        const brl = Number(flight.ticketCostBRL) || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
+        const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
+        const isPaid = flight.paymentStatus
+          ? flight.paymentStatus === 'Pago'
+          : flight.status === 'Emitido / Confirmado' ||
+            flight.status === 'Check-in Realizado' ||
+            flight.status === 'Embarcado' ||
+            flight.status === 'Concluído';
         const flightTitle = `Passagem: ${flight.airline || 'Voo'} (${flight.typeLabel || 'Voo'}${flight.flightNumber ? ' ' + flight.flightNumber : ''})`.trim();
         const flightNotes = `Trecho: ${flight.originCity || flight.originAirport || 'Origem'} ➔ ${flight.destinationCity || flight.destinationAirport || 'Destino'}${flight.departureDate ? ' (' + flight.departureDate + ')' : ''}`;
 
@@ -1812,14 +1840,29 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           updatedBy: cUser.name || 'Sistema',
         };
 
-        const existingIdx = updatedExpenses.findIndex((e) => e.id === expId || e.id === `exp-flight-${flight.id}`);
-        if (existingIdx >= 0) {
-          updatedExpenses[existingIdx] = {
-            ...updatedExpenses[existingIdx],
+        const matchingIndices: number[] = [];
+        updatedExpenses.forEach((e, idx) => {
+          if (
+            e.id === expId ||
+            e.id === legacyId ||
+            (e.sourceType === 'flight' && e.sourceId === flight.id) ||
+            e.sourceId === flight.id
+          ) {
+            matchingIndices.push(idx);
+          }
+        });
+
+        if (matchingIndices.length > 0) {
+          const primaryIdx = matchingIndices[0];
+          updatedExpenses[primaryIdx] = {
+            ...updatedExpenses[primaryIdx],
             ...expData,
-            id: updatedExpenses[existingIdx].id,
-            excluded: updatedExpenses[existingIdx].excluded,
+            id: expId,
+            excluded: updatedExpenses[primaryIdx].excluded,
           };
+          for (let d = matchingIndices.length - 1; d >= 1; d--) {
+            updatedExpenses.splice(matchingIndices[d], 1);
+          }
         } else {
           updatedExpenses.push(expData);
         }
@@ -1829,11 +1872,27 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     // 3. Hospedagens
     accommodationsList.forEach((acc) => {
       const expId = generateDeterministicUUID('acc-expense', acc.id);
-      const usd = acc.costUSD || 0;
-      const brl = acc.costBRL || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
-      const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
+      const legacyId = `exp-acc-${acc.id}`;
+      const isZero = isZeroCost(acc.costUSD, acc.costBRL);
 
-      if (brl > 0 || finalUsd > 0) {
+      if (isZero) {
+        // Regra obrigatória: se a cobrança for zero nas duas moedas, nenhuma despesa vinculada
+        // a esta acomodação pode existir no Financeiro (mesmo que paymentStatus seja 'Pago')
+        for (let i = updatedExpenses.length - 1; i >= 0; i--) {
+          const e = updatedExpenses[i];
+          if (
+            e.id === expId ||
+            e.id === legacyId ||
+            (e.sourceType === 'accommodation' && e.sourceId === acc.id) ||
+            e.sourceId === acc.id
+          ) {
+            updatedExpenses.splice(i, 1);
+          }
+        }
+      } else {
+        const usd = Number(acc.costUSD) || 0;
+        const brl = Number(acc.costBRL) || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
+        const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
         const isPaid = isAccommodationPaid(acc);
         const accTitle = `Hospedagem: ${acc.name || 'Reserva de Hotel / Airbnb'}`.trim();
         const accNotes = `Check-in: ${acc.checkInDate || '---'} | Check-out: ${acc.checkOutDate || '---'}${acc.address ? ' (' + acc.address + ')' : ''}`;
@@ -1858,14 +1917,26 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           updatedBy: cUser.name || 'Sistema',
         };
 
-        const existingIdx = updatedExpenses.findIndex((e) => e.id === expId || e.id === `exp-acc-${acc.id}` || e.sourceId === acc.id);
-        if (existingIdx >= 0) {
-          const prevExp = updatedExpenses[existingIdx];
+        const matchingIndices: number[] = [];
+        updatedExpenses.forEach((e, idx) => {
+          if (
+            e.id === expId ||
+            e.id === legacyId ||
+            (e.sourceType === 'accommodation' && e.sourceId === acc.id) ||
+            e.sourceId === acc.id
+          ) {
+            matchingIndices.push(idx);
+          }
+        });
+
+        if (matchingIndices.length > 0) {
+          const primaryIdx = matchingIndices[0];
+          const prevExp = updatedExpenses[primaryIdx];
           const finalPaid = isPaid || prevExp.status === 'Pago' || (prevExp.paidValueBRL || 0) > 0;
-          updatedExpenses[existingIdx] = {
+          updatedExpenses[primaryIdx] = {
             ...prevExp,
             ...expData,
-            id: prevExp.id,
+            id: expId,
             status: finalPaid ? 'Pago' : (prevExp.status === 'Parcial' ? 'Parcial' : 'Pendente'),
             paidValueBRL: finalPaid ? (prevExp.paidValueBRL && prevExp.paidValueBRL > 0 ? prevExp.paidValueBRL : brl) : 0,
             paidValueUSD: finalPaid ? (prevExp.paidValueUSD && prevExp.paidValueUSD > 0 ? prevExp.paidValueUSD : finalUsd) : 0,
@@ -1873,6 +1944,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
             responsibleTravelerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevExp.responsibleTravelerId || expData.payerId),
             excluded: prevExp.excluded,
           };
+          for (let d = matchingIndices.length - 1; d >= 1; d--) {
+            updatedExpenses.splice(matchingIndices[d], 1);
+          }
         } else {
           updatedExpenses.push(expData);
         }
@@ -4171,11 +4245,36 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   // Helpers to synchronize flight, accommodation, and transportation expenses
-  const syncFlightExpense = (flight: FlightSegment, rate: number) => {
+  const syncFlightExpense = async (flight: FlightSegment, rate: number): Promise<{ success: boolean; error?: string }> => {
     const expId = generateDeterministicUUID('flight-expense', flight.id);
+    const legacyId = `exp-flight-${flight.id}`;
     const usd = Number(flight.ticketCostUSD) || 0;
     const brl = Number(flight.ticketCostBRL) || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
     const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
+
+    const isZero = isZeroCost(flight.ticketCostUSD, flight.ticketCostBRL);
+
+    if (isZero) {
+      // Regra obrigatória: cobrança zerada remove qualquer despesa vinculada no Financeiro
+      setExpenses((prev) => {
+        const nextExpenses = prev.filter(
+          (e) =>
+            e.id !== expId &&
+            e.id !== legacyId &&
+            !(e.sourceType === 'flight' && e.sourceId === flight.id) &&
+            e.sourceId !== flight.id
+        );
+        setTrips((prevTrips) =>
+          prevTrips.map((t) => (t.id === activeTripId ? { ...t, expenses: nextExpenses } : t))
+        );
+        return nextExpenses;
+      });
+
+      if (activeTripId) {
+        await SupabaseService.deleteExpensesBySource(activeTripId, 'flight', flight.id);
+      }
+      return { success: true };
+    }
 
     const isPaid = flight.paymentStatus === 'Pago';
 
@@ -4204,7 +4303,13 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     setExpenses((prev) => {
       let nextExpenses: ExpenseItem[];
-      const existingIndex = prev.findIndex((e) => e.id === expId || e.sourceId === flight.id);
+      const existingIndex = prev.findIndex(
+        (e) =>
+          e.id === expId ||
+          e.id === legacyId ||
+          (e.sourceType === 'flight' && e.sourceId === flight.id) ||
+          e.sourceId === flight.id
+      );
       if (existingIndex >= 0) {
         const updated = [...prev];
         updated[existingIndex] = {
@@ -4224,7 +4329,17 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           updatedAt: expData.updatedAt,
           updatedBy: expData.updatedBy,
         };
-        nextExpenses = updated;
+        // Idempotência: remover duplicatas paralelas
+        nextExpenses = updated.filter(
+          (e, idx) =>
+            idx === existingIndex ||
+            !(
+              e.id === expId ||
+              e.id === legacyId ||
+              (e.sourceType === 'flight' && e.sourceId === flight.id) ||
+              e.sourceId === flight.id
+            )
+        );
       } else {
         nextExpenses = [expData, ...prev];
       }
@@ -4243,22 +4358,47 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         durationDays: settings.durationDays,
         travelers: settings.travelers,
       };
-      SupabaseService.saveExpense(activeTripId, expData, fallbackTrip);
+      await SupabaseService.saveExpense(activeTripId, expData, fallbackTrip);
     }
+    return { success: true };
   };
 
-  const syncAccommodationExpense = (acc: AccommodationBooking, rate: number) => {
+  const syncAccommodationExpense = async (acc: AccommodationBooking, rate: number): Promise<{ success: boolean; error?: string }> => {
     const expId = generateDeterministicUUID('acc-expense', acc.id);
-    const usd = acc.costUSD || 0;
-    const brl = acc.costBRL || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
+    const legacyId = `exp-acc-${acc.id}`;
+    const usd = Number(acc.costUSD) || 0;
+    const brl = Number(acc.costBRL) || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
     const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
+
+    const isZero = isZeroCost(acc.costUSD, acc.costBRL);
+
+    if (isZero) {
+      // Regra obrigatória: valor zero remove qualquer despesa vinculada no Financeiro
+      setExpenses((prev) => {
+        const nextExpenses = prev.filter(
+          (e) =>
+            e.id !== expId &&
+            e.id !== legacyId &&
+            !(e.sourceType === 'accommodation' && e.sourceId === acc.id) &&
+            e.sourceId !== acc.id
+        );
+        setTrips((prevTrips) =>
+          prevTrips.map((t) => (t.id === activeTripId ? { ...t, expenses: nextExpenses } : t))
+        );
+        return nextExpenses;
+      });
+
+      if (activeTripId) {
+        await SupabaseService.deleteExpensesBySource(activeTripId, 'accommodation', acc.id);
+      }
+      return { success: true };
+    }
 
     const isPaid = isAccommodationPaid(acc);
     const accTitle = `Hospedagem: ${acc.name || 'Reserva de Hotel / Airbnb'}`.trim();
     const accNotes = `Check-in: ${acc.checkInDate || '---'} | Check-out: ${acc.checkOutDate || '---'}${acc.address ? ' (' + acc.address + ')' : ''}`;
 
-    if (brl > 0 || finalUsd > 0) {
-      const expData: ExpenseItem = {
+    const expData: ExpenseItem = {
       id: expId,
       title: accTitle,
       category: 'Hospedagem',
@@ -4280,7 +4420,13 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     setExpenses((prev) => {
       let nextExpenses: ExpenseItem[];
-      const existingIndex = prev.findIndex((e) => e.id === expId || e.id === `exp-acc-${acc.id}` || e.sourceId === acc.id);
+      const existingIndex = prev.findIndex(
+        (e) =>
+          e.id === expId ||
+          e.id === legacyId ||
+          (e.sourceType === 'accommodation' && e.sourceId === acc.id) ||
+          e.sourceId === acc.id
+      );
       if (existingIndex >= 0) {
         const updated = [...prev];
         const prevItem = updated[existingIndex];
@@ -4302,7 +4448,17 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           updatedAt: expData.updatedAt,
           updatedBy: expData.updatedBy,
         };
-        nextExpenses = updated;
+        // Idempotência: remover duplicatas paralelas
+        nextExpenses = updated.filter(
+          (e, idx) =>
+            idx === existingIndex ||
+            !(
+              e.id === expId ||
+              e.id === legacyId ||
+              (e.sourceType === 'accommodation' && e.sourceId === acc.id) ||
+              e.sourceId === acc.id
+            )
+        );
       } else {
         nextExpenses = [expData, ...prev];
       }
@@ -4312,27 +4468,18 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       return nextExpenses;
     });
 
-      if (activeTripId) {
-        const fallbackTrip = activeTrip || {
-          id: activeTripId,
-          tripName: settings.tripName,
-          destination: settings.destination,
-          startDate: settings.startDate,
-          durationDays: settings.durationDays,
-          travelers: settings.travelers,
-        };
-        SupabaseService.saveExpense(activeTripId, expData, fallbackTrip);
-      }
-    } else {
-      setExpenses((prev) => {
-        const nextExpenses = prev.filter((e) => e.id !== expId && e.id !== `exp-acc-${acc.id}` && e.sourceId !== acc.id);
-        setTrips((prevTrips) =>
-          prevTrips.map((t) => (t.id === activeTripId ? { ...t, expenses: nextExpenses } : t))
-        );
-        return nextExpenses;
-      });
-      SupabaseService.deleteExpense(expId);
+    if (activeTripId) {
+      const fallbackTrip = activeTrip || {
+        id: activeTripId,
+        tripName: settings.tripName,
+        destination: settings.destination,
+        startDate: settings.startDate,
+        durationDays: settings.durationDays,
+        travelers: settings.travelers,
+      };
+      await SupabaseService.saveExpense(activeTripId, expData, fallbackTrip);
     }
+    return { success: true };
   };
 
   const syncCarRentalExpense = async (rental: CarRentalBooking, rate: number): Promise<{ success: boolean; error?: string }> => {
@@ -4475,8 +4622,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       prevTrips.map((t) => (t.id === activeTripId ? { ...t, flights: nextFlights } : t))
     );
 
-    syncFlightExpense(newFlight, settings.dollarRate || 5.75);
-
     let saveWarning: string | undefined;
     if (activeTripId) {
       const fallbackTrip = activeTrip || {
@@ -4510,6 +4655,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         return { success: false, error: e.message || 'Falha ao salvar voo' };
       }
     }
+
+    await syncFlightExpense(newFlight, settings.dollarRate || 5.75);
 
     // Sincronizar todos os voos no roteiro diário
     setRawDays((prevDays) => {
@@ -4587,7 +4734,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     let saveWarning: string | undefined;
     if (savedUpdated) {
-      syncFlightExpense(savedUpdated, settings.dollarRate || 5.75);
       if (activeTripId) {
         const fallbackTrip = activeTrip || {
           id: activeTripId,
@@ -4616,6 +4762,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           addNotification(`⚠️ ${result.warning}`);
         }
       }
+      // Await da sincronização financeira sequencialmente para garantir idempotência e evitar disputa
+      await syncFlightExpense(savedUpdated, settings.dollarRate || 5.75);
     }
 
     // Sincronizar no cronograma diário apenas os dias afetados
@@ -4681,11 +4829,20 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     );
 
     const expId = generateDeterministicUUID('flight-expense', id);
-    setExpenses((prev) => prev.filter((e) => e.id !== expId && e.sourceId !== id));
+    const legacyId = `exp-flight-${id}`;
+    setExpenses((prev) =>
+      prev.filter(
+        (e) =>
+          e.id !== expId &&
+          e.id !== legacyId &&
+          !(e.sourceType === 'flight' && e.sourceId === id) &&
+          e.sourceId !== id
+      )
+    );
 
-    SupabaseService.deleteFlight(id);
-    SupabaseService.deleteExpense(expId);
+    SupabaseService.deleteFlight(id, activeTripId);
     if (activeTripId) {
+      SupabaseService.deleteExpensesBySource(activeTripId, 'flight', id);
       SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'flight');
     }
 
@@ -5199,7 +5356,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       );
       return nextAccs;
     });
-    syncAccommodationExpense(newAcc, settings.dollarRate || 5.75);
+    // Await da sincronização financeira para garantir consistência e evitar condição de corrida
+    await syncAccommodationExpense(newAcc, settings.dollarRate || 5.75);
 
     const syncRes = await syncAccommodationToDays(newAcc);
     if (!syncRes.success) {
@@ -5248,7 +5406,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       );
       return nextAccs;
     });
-    syncAccommodationExpense(updatedAcc, settings.dollarRate || 5.75);
+    // Await da sincronização financeira sequencialmente
+    await syncAccommodationExpense(updatedAcc, settings.dollarRate || 5.75);
 
     const syncRes = await syncAccommodationToDays(updatedAcc, false, oldAcc);
     if (!syncRes.success) {
@@ -5264,7 +5423,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     if (!acc) return { success: false, error: 'Hospedagem não encontrada' };
 
     if (activeTripId) {
-      const delAccRes = await SupabaseService.deleteAccommodation(id);
+      const delAccRes = await SupabaseService.deleteAccommodation(id, activeTripId);
       if (!delAccRes) {
         const errMsg = 'Falha ao excluir hospedagem no banco de dados';
         addNotification(`❌ ${errMsg}`);
@@ -5281,11 +5440,19 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     });
 
     const expId = generateDeterministicUUID('acc-expense', id);
-    setExpenses((prev) => prev.filter((e) => e.id !== expId && e.id !== `exp-acc-${id}`));
+    const legacyId = `exp-acc-${id}`;
+    setExpenses((prev) =>
+      prev.filter(
+        (e) =>
+          e.id !== expId &&
+          e.id !== legacyId &&
+          !(e.sourceType === 'accommodation' && e.sourceId === id) &&
+          e.sourceId !== id
+      )
+    );
 
     if (activeTripId) {
-      await SupabaseService.deleteExpense(expId);
-      await SupabaseService.deleteExpense(`exp-acc-${id}`);
+      await SupabaseService.deleteExpensesBySource(activeTripId, 'accommodation', id);
       await SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'accommodation');
     }
 
