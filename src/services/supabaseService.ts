@@ -998,7 +998,7 @@ export function mapParkTicketToDb(t: ParkTicketPurchase, tripId: string): Record
     quantity: t.quantity || 1,
     cost_usd: t.costUSD ? Number(t.costUSD) : null,
     cost_brl: t.costBRL ? Number(t.costBRL) : null,
-    payment_status: t.paymentStatus || 'Pago',
+    payment_status: t.paymentStatus || 'Não informado',
     payer_id: sanitizeTravelerForeignKey(t.payerId),
     confirmation_code: t.confirmationCode || null,
     seller: t.seller || null,
@@ -1012,6 +1012,19 @@ export function mapParkTicketToDb(t: ParkTicketPurchase, tripId: string): Record
 }
 
 export function mapDbToParkTicket(row: any): ParkTicketPurchase {
+  let paymentStatus: ParkTicketPurchase['paymentStatus'] = 'Não informado';
+  if (row.payment_status === 'Pago') {
+    paymentStatus = 'Pago';
+  } else if (row.payment_status === 'Pendente') {
+    paymentStatus = 'Pendente';
+  } else if (row.payment_status === 'Não informado') {
+    paymentStatus = 'Não informado';
+  } else if (row.payment_status) {
+    paymentStatus = row.payment_status;
+  } else {
+    paymentStatus = 'Não informado';
+  }
+
   return {
     id: row.id,
     title: row.title,
@@ -1026,7 +1039,7 @@ export function mapDbToParkTicket(row: any): ParkTicketPurchase {
     quantity: row.quantity,
     costUSD: row.cost_usd ? Number(row.cost_usd) : undefined,
     costBRL: row.cost_brl ? Number(row.cost_brl) : undefined,
-    paymentStatus: row.payment_status,
+    paymentStatus,
     payerId: row.payer_id || 'all',
     confirmationCode: row.confirmation_code,
     seller: row.seller,
@@ -3307,7 +3320,15 @@ export const SupabaseService = {
       }
 
       const dbRow = mapParkTicketToDb(ticket, cleanTripId);
-      const { error: upsertErr } = await supabase.from('park_ticket_purchases').upsert(dbRow, { onConflict: 'id' });
+      let { error: upsertErr } = await supabase.from('park_ticket_purchases').upsert(dbRow, { onConflict: 'id' });
+
+      // Fallback gracioso se a coluna payment_status ainda não foi criada no Supabase via migração SQL
+      if (upsertErr && (upsertErr.message?.includes('payment_status') || upsertErr.details?.includes('payment_status') || upsertErr.code === 'PGRST204')) {
+        const fallbackRow = { ...dbRow };
+        delete fallbackRow.payment_status;
+        const retryRes = await supabase.from('park_ticket_purchases').upsert(fallbackRow, { onConflict: 'id' });
+        upsertErr = retryRes.error;
+      }
 
       if (upsertErr) {
         console.error('saveParkTicket error:', upsertErr);
@@ -3319,7 +3340,7 @@ export const SupabaseService = {
 
       // Sincronizar automaticamente com a tabela de expenses
       const cleanTicketId = dbRow.id || ensureValidUUID(ticket.id, 'ticket', cleanTripId + '-' + ticket.title);
-      await syncToExpenses(cleanTripId, 'park_ticket', cleanTicketId, {
+      const syncRes = await syncToExpenses(cleanTripId, 'park_ticket', cleanTicketId, {
         title: `Ingresso: ${ticket.title || 'Ingresso de Parques'}`,
         category: 'Ingressos',
         usd: ticket.costUSD || 0,
@@ -3329,6 +3350,10 @@ export const SupabaseService = {
         status: ticket.paymentStatus === 'Pago' ? 'Pago' : 'Pendente',
         notes: `Voucher: ${ticket.confirmationCode || '---'} | Qtd: ${ticket.quantity || 1}`
       }, fallbackTrip);
+
+      if (!syncRes.success) {
+        return { success: false, error: syncRes.error || 'Erro ao sincronizar despesa do ingresso' };
+      }
 
       return { success: true };
     } catch (err: any) {

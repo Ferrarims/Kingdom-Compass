@@ -6,6 +6,7 @@ import {
   Users,
   CheckCircle2,
   Info,
+  AlertCircle,
 } from 'lucide-react';
 import { ParkTicketPurchase, Traveler } from '../types';
 import { usePlanner } from '../context/PlannerContext';
@@ -16,8 +17,8 @@ interface ParkTicketModalProps {
   isOpen: boolean;
   onClose: () => void;
   ticketToEdit?: ParkTicketPurchase | null;
-  onSave: (ticket: Omit<ParkTicketPurchase, 'id'>, editId?: string) => void;
-  onDelete?: (id: string) => void;
+  onSave: (ticket: Omit<ParkTicketPurchase, 'id'>, editId?: string) => Promise<{ success: boolean; error?: string } | void> | void;
+  onDelete?: (id: string) => Promise<{ success: boolean; error?: string } | void> | void;
 }
 
 const COMPLEX_OPTIONS: {
@@ -574,7 +575,9 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
   const [quantity, setQuantity] = useState<number>(travelers.length || 1);
   const [unitCostUSD, setUnitCostUSD] = useState<number | null>(null);
   const [unitCostBRL, setUnitCostBRL] = useState<number | null>(null);
-  const [paymentStatus, setPaymentStatus] = useState<PaymentStatusType>('Pago');
+  const [paymentStatus, setPaymentStatus] = useState<PaymentStatusType>('Não informado');
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [confirmationCode, setConfirmationCode] = useState<string>('');
   const [seller, setSeller] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
@@ -715,11 +718,12 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
           }
 
           setSelectedTravelerIds(['all']);
-          setPaymentStatus('Pago');
+          setPaymentStatus('Não informado');
           setConfirmationCode('');
           setSeller('Site Oficial Walt Disney World');
           setNotes('');
         }
+        setSaveError(null);
       }
     } else {
       wasOpenRef.current = false;
@@ -758,44 +762,75 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
     }
   };
 
-  const handleDelete = () => {
-    if (!ticketToEdit?.id) return;
+  const handleDelete = async () => {
+    if (!ticketToEdit?.id || isSaving) return;
     if (window.confirm(`Tem certeza que deseja excluir o pacote de ingressos "${ticketToEdit.title}"?`)) {
-      if (onDelete) {
-        onDelete(ticketToEdit.id);
-      } else {
-        deleteParkTicket(ticketToEdit.id);
+      setSaveError(null);
+      setIsSaving(true);
+      try {
+        if (onDelete) {
+          const res = await onDelete(ticketToEdit.id);
+          if (res && typeof res === 'object' && 'success' in res && !res.success) {
+            setSaveError(res.error || 'Erro ao excluir o ingresso.');
+            return;
+          }
+        } else {
+          const res = await deleteParkTicket(ticketToEdit.id);
+          if (res && typeof res === 'object' && 'success' in res && !res.success) {
+            setSaveError(res.error || 'Erro ao excluir o ingresso.');
+            return;
+          }
+        }
+        onClose();
+      } catch (err: any) {
+        setSaveError(err?.message || 'Erro inesperado ao excluir o ingresso.');
+      } finally {
+        setIsSaving(false);
       }
-      onClose();
     }
   };
 
-  const handleSave = (e?: React.FormEvent) => {
+  const handleSave = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (isSaving) return;
 
-    const usdVal = totalUSD !== null ? totalUSD : 0;
-    const brlVal = totalBRL !== null ? totalBRL : (usdVal > 0 ? usdVal * dollarRate : 0);
+    setSaveError(null);
+    setIsSaving(true);
 
-    const ticketData: Omit<ParkTicketPurchase, 'id'> = {
-      title: title.trim() || `${complex} - Ingressos`,
-      type,
-      complex,
-      parksIncluded: eligibleParks.length > 0 ? eligibleParks : [complex],
-      daysCount: Math.max(1, daysCount),
-      ticketOption: ticketOption.trim(),
-      travelerIds: selectedTravelerIds,
-      quantity: Math.max(1, quantity),
-      costUSD: usdVal > 0 ? usdVal : undefined,
-      costBRL: brlVal > 0 ? brlVal : undefined,
-      paymentStatus: paymentStatus as any,
-      payerId,
-      confirmationCode: confirmationCode.trim() || undefined,
-      seller: seller.trim() || undefined,
-      notes: notes.trim() || undefined,
-    };
+    try {
+      const usdVal = totalUSD !== null ? totalUSD : 0;
+      const brlVal = totalBRL !== null ? totalBRL : (usdVal > 0 ? usdVal * dollarRate : 0);
 
-    onSave(ticketData, ticketToEdit?.id);
-    onClose();
+      const ticketData: Omit<ParkTicketPurchase, 'id'> = {
+        title: title.trim() || `${complex} - Ingressos`,
+        type,
+        complex,
+        parksIncluded: eligibleParks.length > 0 ? eligibleParks : [complex],
+        daysCount: Math.max(1, daysCount),
+        ticketOption: ticketOption.trim(),
+        travelerIds: selectedTravelerIds,
+        quantity: Math.max(1, quantity),
+        costUSD: usdVal > 0 ? usdVal : undefined,
+        costBRL: brlVal > 0 ? brlVal : undefined,
+        paymentStatus,
+        payerId,
+        confirmationCode: confirmationCode.trim() || undefined,
+        seller: seller.trim() || undefined,
+        notes: notes.trim() || undefined,
+      };
+
+      const res = await onSave(ticketData, ticketToEdit?.id);
+      if (res && typeof res === 'object' && 'success' in res && !res.success) {
+        setSaveError(res.error || 'Erro ao salvar os ingressos. Tente novamente.');
+        return;
+      }
+
+      onClose();
+    } catch (err: any) {
+      setSaveError(err?.message || 'Erro inesperado ao salvar os ingressos.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   useModalKeyEvents({ isOpen, onClose, onSave: () => handleSave() });
@@ -846,6 +881,22 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
 
         {/* Modal Form Body */}
         <form onSubmit={handleSave} className="flex flex-col flex-1 min-h-0 overflow-hidden text-slate-700">
+          {saveError && (
+            <div className="mx-5 sm:mx-6 mt-4 p-3.5 rounded-xl bg-rose-50 border border-rose-200 flex items-center justify-between gap-2.5 text-rose-700 text-xs font-medium">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                <span>{saveError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSaveError(null)}
+                className="p-1 hover:bg-rose-100 rounded text-rose-500 cursor-pointer"
+                aria-label="Dispensar erro"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
           <div className="p-5 sm:p-6 space-y-6 flex-1 overflow-y-auto min-h-0 custom-scrollbar">
             
             {/* 1. SELEÇÃO DO COMPLEXO & INGRESSOS DISPONÍVEIS */}
@@ -1147,11 +1198,12 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
                 <button
                   type="button"
                   onClick={handleDelete}
-                  className="px-4 py-2 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 border border-rose-200 transition-colors flex items-center gap-1.5 cursor-pointer"
+                  disabled={isSaving}
+                  className="px-4 py-2 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 border border-rose-200 transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   id="btn-delete-ticket"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
-                  <span>Excluir</span>
+                  <span>{isSaving ? 'Aguarde...' : 'Excluir'}</span>
                 </button>
               )}
             </div>
@@ -1160,18 +1212,29 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-5 py-2.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                disabled={isSaving}
+                className="px-5 py-2.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 id="btn-cancel-ticket"
               >
                 Cancelar
               </button>
               <button
                 type="submit"
-                className="px-6 py-2.5 rounded-lg bg-[#1A2B4C] text-white text-xs font-semibold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-sm"
+                disabled={isSaving}
+                className="px-6 py-2.5 rounded-lg bg-[#1A2B4C] text-white text-xs font-semibold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
                 id="btn-save-ticket"
               >
-                <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
-                <span>Salvar Ingresso</span>
+                {isSaving ? (
+                  <>
+                    <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span>Salvando...</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
+                    <span>Salvar Ingresso</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

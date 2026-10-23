@@ -254,7 +254,7 @@ export interface ParkTicketPurchase {
   quantity: number; // number of people / tickets
   costUSD?: number;
   costBRL?: number;
-  paymentStatus: 'Pago' | 'Pendente' | 'Reservado' | 'Previsão (Planejamento)' | 'Apenas Previsão';
+  paymentStatus: 'Não informado' | 'Pendente' | 'Pago' | 'Reservado' | 'Previsão (Planejamento)' | 'Apenas Previsão' | string;
   payerId?: string;
   confirmationCode?: string;
   seller?: string; // e.g. "Site Oficial Disney", "Civitatis", "Decolar", "Agência"

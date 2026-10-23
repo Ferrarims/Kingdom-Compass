@@ -348,11 +348,11 @@ export const ParksGuideView: React.FC = () => {
     setIsTicketModalOpen(true);
   };
 
-  const handleSaveTicket = (ticketData: Omit<ParkTicketPurchase, 'id'>, editId?: string) => {
+  const handleSaveTicket = async (ticketData: Omit<ParkTicketPurchase, 'id'>, editId?: string) => {
     if (editId) {
-      updateParkTicket(editId, ticketData);
+      return await updateParkTicket(editId, ticketData);
     } else {
-      addParkTicket(ticketData);
+      return await addParkTicket(ticketData);
     }
   };
 

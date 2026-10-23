@@ -603,9 +603,9 @@ interface PlannerContextType {
 
   // Park Tickets & Passes (Individual & Combos)
   parkTickets: ParkTicketPurchase[];
-  addParkTicket: (ticket: Omit<ParkTicketPurchase, 'id'>) => void;
-  updateParkTicket: (id: string, updates: Partial<ParkTicketPurchase>) => void;
-  deleteParkTicket: (id: string) => void;
+  addParkTicket: (ticket: Omit<ParkTicketPurchase, 'id'>) => Promise<{ success: boolean; error?: string }>;
+  updateParkTicket: (id: string, updates: Partial<ParkTicketPurchase>) => Promise<{ success: boolean; error?: string }>;
+  deleteParkTicket: (id: string) => Promise<{ success: boolean; error?: string }>;
 
   // Attraction Selections per Traveler
   attractionSelections: Record<string, boolean>;
@@ -5716,6 +5716,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     const isZero = isZeroCost(ticket.costUSD, ticket.costBRL);
 
     if (isZero) {
+      const prevExpensesSnapshot = expenses;
+      const prevTripsSnapshot = trips;
+
       setExpenses((prev) => {
         const nextExpenses = prev.filter(
           (e) =>
@@ -5732,6 +5735,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       if (activeTripId) {
         const delRes = await SupabaseService.deleteExpensesBySource(activeTripId, 'park_ticket', ticket.id);
         if (!delRes.success) {
+          setExpenses(prevExpensesSnapshot);
+          setTrips(prevTripsSnapshot);
           return { success: false, error: delRes.error || 'Erro ao excluir despesa do ingresso no Supabase' };
         }
       }
@@ -5778,6 +5783,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       updatedBy: currentUser.name,
     };
 
+    const prevExpensesSnapshot = expenses;
+    const prevTripsSnapshot = trips;
+
     setExpenses((prev) => {
       let nextExpenses: ExpenseItem[];
       const existingIndex = prev.findIndex(
@@ -5793,9 +5801,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           title: ticketTitle,
           estimatedValueUSD: finalUsd,
           estimatedValueBRL: brl,
-          paidValueBRL: isPaid ? brl : updated[existingIndex].paidValueBRL,
-          paidValueUSD: isPaid ? finalUsd : updated[existingIndex].paidValueUSD,
-          status: isPaid ? 'Pago' : updated[existingIndex].status,
+          paidValueBRL: isPaid ? brl : 0,
+          paidValueUSD: isPaid ? finalUsd : 0,
+          status: isPaid ? 'Pago' : 'Pendente',
           payerId: expData.payerId,
           responsibleTravelerId: expData.responsibleTravelerId,
           travelerIds: expData.travelerIds,
@@ -5834,6 +5842,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       };
       const saveRes = await SupabaseService.saveExpense(activeTripId, expData, fallbackTrip);
       if (!saveRes.success) {
+        setExpenses(prevExpensesSnapshot);
+        setTrips(prevTripsSnapshot);
         return { success: false, error: saveRes.error || 'Erro ao salvar despesa do ingresso no Supabase' };
       }
     }
@@ -5841,20 +5851,16 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   // Park Tickets Handlers
-  const addParkTicket = async (ticket: Omit<ParkTicketPurchase, 'id'>) => {
+  const addParkTicket = async (ticket: Omit<ParkTicketPurchase, 'id'>): Promise<{ success: boolean; error?: string }> => {
     const newTicket: ParkTicketPurchase = {
       ...ticket,
       id: generateUUID(),
       createdAt: new Date().toISOString().split('T')[0],
     };
-    setParkTickets((prev) => {
-      const nextTickets = [...prev, newTicket];
-      setTrips((prevTrips) =>
-        prevTrips.map((t) => (t.id === activeTripId ? { ...t, parkTickets: nextTickets } : t))
-      );
-      return nextTickets;
-    });
-    
+
+    const prevTicketsSnapshot = parkTickets;
+    const prevTripsSnapshot = trips;
+
     if (activeTripId) {
       const fallbackTrip: Partial<Trip> = activeTrip || {
         id: activeTripId,
@@ -5865,30 +5871,78 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         travelers: settings.travelers,
         dollarRate: settings.dollarRate,
       };
-      await SupabaseService.saveParkTicket(activeTripId, newTicket, fallbackTrip);
+      const saveRes = await SupabaseService.saveParkTicket(activeTripId, newTicket, fallbackTrip);
+      if (!saveRes.success) {
+        const errMsg = saveRes.error || 'Erro ao salvar compra de ingresso no Supabase';
+        addNotification(`❌ ${errMsg}`);
+        return { success: false, error: errMsg };
+      }
     }
 
-    await syncParkTicketExpense(newTicket, settings.dollarRate || 5.75);
+    setParkTickets((prev) => {
+      const nextTickets = [...prev, newTicket];
+      setTrips((prevTrips) =>
+        prevTrips.map((t) => (t.id === activeTripId ? { ...t, parkTickets: nextTickets } : t))
+      );
+      return nextTickets;
+    });
+
+    const expRes = await syncParkTicketExpense(newTicket, settings.dollarRate || 5.75);
+    if (!expRes.success) {
+      setParkTickets(prevTicketsSnapshot);
+      setTrips(prevTripsSnapshot);
+      if (activeTripId) {
+        await SupabaseService.deleteParkTicket(newTicket.id);
+      }
+      addNotification(`❌ Falha ao sincronizar despesa do ingresso: ${expRes.error}`);
+      return { success: false, error: expRes.error };
+    }
+
     addNotification(`Cadastrou compra de ingresso (${ticket.title}) e sincronizou no financeiro`);
+    return { success: true };
   };
 
-  const updateParkTicket = async (id: string, updates: Partial<ParkTicketPurchase>) => {
-    let updatedTicket: ParkTicketPurchase | undefined;
+  const updateParkTicket = async (id: string, updates: Partial<ParkTicketPurchase>): Promise<{ success: boolean; error?: string }> => {
+    const oldTicket = parkTickets.find((t) => t.id === id);
+    if (!oldTicket) {
+      return { success: false, error: 'Ingresso não encontrado' };
+    }
+
+    const updatedTicket: ParkTicketPurchase = { ...oldTicket, ...updates };
+
+    const prevTicketsSnapshot = parkTickets;
+    const prevTripsSnapshot = trips;
+
+    if (activeTripId) {
+      const fallbackTrip: Partial<Trip> = activeTrip || {
+        id: activeTripId,
+        tripName: settings.tripName,
+        destination: settings.destination,
+        startDate: settings.startDate,
+        durationDays: settings.durationDays,
+        travelers: settings.travelers,
+        dollarRate: settings.dollarRate,
+      };
+      const saveRes = await SupabaseService.saveParkTicket(activeTripId, updatedTicket, fallbackTrip);
+      if (!saveRes.success) {
+        const errMsg = saveRes.error || 'Erro ao atualizar compra de ingresso no Supabase';
+        addNotification(`❌ ${errMsg}`);
+        return { success: false, error: errMsg };
+      }
+    }
+
     setParkTickets((prev) => {
-      const updatedList = prev.map((t) => {
-        if (t.id === id) {
-          updatedTicket = { ...t, ...updates };
-          return updatedTicket;
-        }
-        return t;
-      });
+      const updatedList = prev.map((t) => (t.id === id ? updatedTicket : t));
       setTrips((prevTrips) =>
         prevTrips.map((t) => (t.id === activeTripId ? { ...t, parkTickets: updatedList } : t))
       );
       return updatedList;
     });
 
-    if (updatedTicket) {
+    const expRes = await syncParkTicketExpense(updatedTicket, settings.dollarRate || 5.75);
+    if (!expRes.success) {
+      setParkTickets(prevTicketsSnapshot);
+      setTrips(prevTripsSnapshot);
       if (activeTripId) {
         const fallbackTrip: Partial<Trip> = activeTrip || {
           id: activeTripId,
@@ -5899,15 +5953,34 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           travelers: settings.travelers,
           dollarRate: settings.dollarRate,
         };
-        await SupabaseService.saveParkTicket(activeTripId, updatedTicket, fallbackTrip);
+        await SupabaseService.saveParkTicket(activeTripId, oldTicket, fallbackTrip);
       }
-      await syncParkTicketExpense(updatedTicket, settings.dollarRate || 5.75);
+      addNotification(`❌ Falha ao sincronizar despesa do ingresso: ${expRes.error}`);
+      return { success: false, error: expRes.error };
     }
+
     addNotification(`Atualizou informações de ingresso e orçamento`);
+    return { success: true };
   };
 
-  const deleteParkTicket = (id: string) => {
+  const deleteParkTicket = async (id: string): Promise<{ success: boolean; error?: string }> => {
     const ticket = parkTickets.find((t) => t.id === id);
+    if (!ticket) return { success: false, error: 'Ingresso não encontrado' };
+
+    const prevTickets = parkTickets;
+    const prevTrips = trips;
+    const prevExpenses = expenses;
+
+    if (activeTripId) {
+      const ok = await SupabaseService.deleteParkTicket(id);
+      if (!ok) {
+        const errMsg = 'Falha ao excluir o ingresso no Supabase';
+        addNotification(`❌ ${errMsg}`);
+        return { success: false, error: errMsg };
+      }
+      await SupabaseService.deleteExpensesBySource(activeTripId, 'park_ticket', id);
+    }
+
     setParkTickets((prev) => {
       const nextTickets = prev.filter((t) => t.id !== id);
       setTrips((prevTrips) =>
@@ -5918,22 +5991,21 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     
     const expId = generateDeterministicUUID('ticket-expense', id);
     setExpenses((prev) => {
-      const nextExpenses = prev.filter((e) => e.id !== expId && e.id !== `exp-ticket-${id}`);
+      const nextExpenses = prev.filter((e) => e.id !== expId && e.id !== `exp-ticket-${id}` && !(e.sourceType === 'park_ticket' && e.sourceId === id));
       setTrips((prevTrips) =>
         prevTrips.map((t) => (t.id === activeTripId ? { ...t, expenses: nextExpenses } : t))
       );
       return nextExpenses;
     });
     
-    SupabaseService.deleteParkTicket(id);
-    SupabaseService.deleteExpense(expId);
-    SupabaseService.deleteExpense(`exp-ticket-${id}`);
     if (activeTripId) {
+      SupabaseService.deleteExpense(expId);
+      SupabaseService.deleteExpense(`exp-ticket-${id}`);
       SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'ticket');
     }
-    if (ticket) {
-      addNotification(`Removeu o ingresso ${ticket.title} e seu gasto do orçamento`);
-    }
+
+    addNotification(`Removeu o ingresso ${ticket.title} e seu gasto do orçamento`);
+    return { success: true };
   };
 
   const importAiParsedData = (data: AiParsedData) => {
