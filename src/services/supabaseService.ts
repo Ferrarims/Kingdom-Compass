@@ -397,6 +397,8 @@ async function syncToExpenses(
     category: any;
     usd: number;
     brl: number;
+    paidValueBRL?: number | null;
+    paidValueUSD?: number | null;
     payerId: string;
     travelerIds: string[];
     status: any;
@@ -465,15 +467,34 @@ async function syncToExpenses(
       return { success: false, error: dedupErr?.message || 'Erro ao verificar duplicatas de despesas' };
     }
 
+    let expStatus: ExpenseItem['status'] = 'Pendente';
+    if (data.status === 'Pago') expStatus = 'Pago';
+    else if (data.status === 'Parcial') expStatus = 'Parcial';
+    else if (data.status === 'Não informado') expStatus = 'Não iniciado';
+    else expStatus = 'Pendente';
+
+    let paidBrl = 0;
+    let paidUsd = 0;
+    if (expStatus === 'Pago') {
+      paidBrl = numBrl;
+      paidUsd = numUsd;
+    } else if (expStatus === 'Parcial') {
+      paidBrl = data.paidValueBRL !== undefined && data.paidValueBRL !== null ? Number(data.paidValueBRL) : 0;
+      paidUsd = data.paidValueUSD !== undefined && data.paidValueUSD !== null ? Number(data.paidValueUSD) : 0;
+    } else {
+      paidBrl = 0;
+      paidUsd = 0;
+    }
+
     const expenseItem: ExpenseItem = {
       id: expId,
       title: data.title,
       category: data.category,
       estimatedValueUSD: numUsd,
       estimatedValueBRL: numBrl,
-      paidValueBRL: data.status === 'Pago' ? numBrl : 0,
-      paidValueUSD: data.status === 'Pago' ? numUsd : 0,
-      status: data.status,
+      paidValueBRL: paidBrl,
+      paidValueUSD: paidUsd,
+      status: expStatus,
       payerId: data.payerId,
       responsibleTravelerId: data.payerId,
       travelerIds: data.travelerIds,
@@ -749,10 +770,12 @@ export function mapFlightToDb(f: FlightSegment, tripId: string): Record<string, 
     terminal_destination: f.terminalDestination || null,
     gate: f.gate || null,
     baggage_allowance: f.baggageAllowance || { personalItem: true, carryOnQty: 1, checkedQty: 1, notes: '' },
-    status: f.status && f.status !== 'Pago' && f.status !== 'Pendente' ? f.status : 'Emitido / Confirmado',
+    status: f.status && f.status !== 'Pago' && f.status !== 'Pendente' && f.status !== 'Parcial' ? f.status : 'Emitido / Confirmado',
     payment_status: f.paymentStatus || 'Não informado',
     ticket_cost_usd: f.ticketCostUSD ? Number(f.ticketCostUSD) : null,
     ticket_cost_brl: f.ticketCostBRL ? Number(f.ticketCostBRL) : null,
+    paid_value_brl: f.paidValueBRL !== undefined && f.paidValueBRL !== null ? Number(f.paidValueBRL) : null,
+    paid_value_usd: f.paidValueUSD !== undefined && f.paidValueUSD !== null ? Number(f.paidValueUSD) : null,
     payer_id: sanitizeTravelerForeignKey(f.payerId),
     notes: f.notes || null,
     passengers: f.passengers || [],
@@ -781,22 +804,21 @@ export function mapDbToFlight(row: any): FlightSegment {
 
   // Identificar status operacional do voo e status de pagamento
   let operationalStatus: string = row.status || 'Emitido / Confirmado';
-  let paymentStatus: 'Pago' | 'Pendente' | 'Não informado' = 'Não informado';
+  let paymentStatus: FlightSegment['paymentStatus'] = 'Não informado';
 
   if (row.payment_status) {
     if (row.payment_status === 'Pago') paymentStatus = 'Pago';
     else if (row.payment_status === 'Pendente') paymentStatus = 'Pendente';
-    else paymentStatus = 'Não informado';
+    else if (row.payment_status === 'Parcial') paymentStatus = 'Parcial';
+    else if (row.payment_status === 'Não informado') paymentStatus = 'Não informado';
+    else paymentStatus = row.payment_status;
   } else if (row.status === 'Pago') {
-    // Valor legado inequivocamente de pagamento
     paymentStatus = 'Pago';
     operationalStatus = 'Emitido / Confirmado';
   } else if (row.status === 'Pendente') {
-    // Valor legado inequivocamente de pagamento
     paymentStatus = 'Pendente';
     operationalStatus = 'Emitido / Confirmado';
   } else {
-    // Para registros antigos sem status de pagamento identificável, exibe 'Não informado'
     paymentStatus = 'Não informado';
   }
 
@@ -832,6 +854,8 @@ export function mapDbToFlight(row: any): FlightSegment {
     paymentStatus,
     ticketCostUSD: row.ticket_cost_usd ? Number(row.ticket_cost_usd) : undefined,
     ticketCostBRL: row.ticket_cost_brl ? Number(row.ticket_cost_brl) : undefined,
+    paidValueBRL: row.paid_value_brl ? Number(row.paid_value_brl) : undefined,
+    paidValueUSD: row.paid_value_usd ? Number(row.paid_value_usd) : undefined,
     payerId: row.payer_id || 'all',
     notes: row.notes,
     passengers: row.passengers || [],
@@ -855,6 +879,8 @@ export function mapCarRentalToDb(c: CarRentalBooking, tripId: string): Record<st
     dropoff_time: c.dropoffTime || '12:00',
     cost_usd: c.costUSD ? Number(c.costUSD) : null,
     cost_brl: c.costBRL ? Number(c.costBRL) : null,
+    paid_value_brl: c.paidValueBRL !== undefined && c.paidValueBRL !== null ? Number(c.paidValueBRL) : null,
+    paid_value_usd: c.paidValueUSD !== undefined && c.paidValueUSD !== null ? Number(c.paidValueUSD) : null,
     status: c.status || 'Reservado / Confirmado',
     payment_status: c.paymentStatus || 'Não informado',
     payer_id: sanitizeTravelerForeignKey(c.payerId),
@@ -875,12 +901,14 @@ export function mapCarRentalToDb(c: CarRentalBooking, tripId: string): Record<st
 
 export function mapDbToCarRental(row: any): CarRentalBooking {
   let operationalStatus: string = row.status || 'Reservado / Confirmado';
-  let paymentStatus: 'Pago' | 'Pendente' | 'Não informado' = 'Não informado';
+  let paymentStatus: CarRentalBooking['paymentStatus'] = 'Não informado';
 
   if (row.payment_status) {
     if (row.payment_status === 'Pago') paymentStatus = 'Pago';
     else if (row.payment_status === 'Pendente') paymentStatus = 'Pendente';
-    else paymentStatus = 'Não informado';
+    else if (row.payment_status === 'Parcial') paymentStatus = 'Parcial';
+    else if (row.payment_status === 'Não informado') paymentStatus = 'Não informado';
+    else paymentStatus = row.payment_status;
   } else if (row.status === 'Pago') {
     paymentStatus = 'Pago';
     operationalStatus = 'Reservado / Confirmado';
@@ -904,6 +932,8 @@ export function mapDbToCarRental(row: any): CarRentalBooking {
     dropoffTime: row.dropoff_time,
     costUSD: row.cost_usd ? Number(row.cost_usd) : undefined,
     costBRL: row.cost_brl ? Number(row.cost_brl) : undefined,
+    paidValueBRL: row.paid_value_brl ? Number(row.paid_value_brl) : undefined,
+    paidValueUSD: row.paid_value_usd ? Number(row.paid_value_usd) : undefined,
     status: operationalStatus,
     paymentStatus,
     payerId: row.payer_id || 'all',
@@ -922,7 +952,7 @@ export function mapAccommodationToDb(a: AccommodationBooking, tripId: string): R
   const type = validTypes.includes(a.type) ? a.type : 'hotel';
 
   const operationalStatus =
-    a.status && a.status !== 'Pago' && a.status !== 'Pendente' && a.status !== 'Não informado'
+    a.status && a.status !== 'Pago' && a.status !== 'Pendente' && a.status !== 'Parcial' && a.status !== 'Não informado'
       ? a.status
       : 'Reservado / Confirmado';
 
@@ -942,6 +972,8 @@ export function mapAccommodationToDb(a: AccommodationBooking, tripId: string): R
     room_type: a.roomType || null,
     cost_usd: a.costUSD !== undefined && a.costUSD !== null && !isNaN(Number(a.costUSD)) ? Number(a.costUSD) : null,
     cost_brl: a.costBRL !== undefined && a.costBRL !== null && !isNaN(Number(a.costBRL)) ? Number(a.costBRL) : null,
+    paid_value_brl: a.paidValueBRL !== undefined && a.paidValueBRL !== null ? Number(a.paidValueBRL) : null,
+    paid_value_usd: a.paidValueUSD !== undefined && a.paidValueUSD !== null ? Number(a.paidValueUSD) : null,
     status: operationalStatus,
     payment_status: a.paymentStatus || 'Não informado',
     payer_id: sanitizeTravelerForeignKey(a.payerId),
@@ -963,12 +995,14 @@ export function mapAccommodationToDb(a: AccommodationBooking, tripId: string): R
 
 export function mapDbToAccommodation(row: any): AccommodationBooking {
   let operationalStatus: string = row.status || 'Reservado / Confirmado';
-  let paymentStatus: 'Pago' | 'Pendente' | 'Não informado' = 'Não informado';
+  let paymentStatus: AccommodationBooking['paymentStatus'] = 'Não informado';
 
   if (row.payment_status) {
     if (row.payment_status === 'Pago') paymentStatus = 'Pago';
     else if (row.payment_status === 'Pendente') paymentStatus = 'Pendente';
-    else paymentStatus = 'Não informado';
+    else if (row.payment_status === 'Parcial') paymentStatus = 'Parcial';
+    else if (row.payment_status === 'Não informado') paymentStatus = 'Não informado';
+    else paymentStatus = row.payment_status;
   } else if (row.status === 'Pago') {
     paymentStatus = 'Pago';
     operationalStatus = 'Reservado / Confirmado';
@@ -992,6 +1026,8 @@ export function mapDbToAccommodation(row: any): AccommodationBooking {
     roomType: row.room_type || undefined,
     costUSD: row.cost_usd !== null && row.cost_usd !== undefined ? Number(row.cost_usd) : undefined,
     costBRL: row.cost_brl !== null && row.cost_brl !== undefined ? Number(row.cost_brl) : undefined,
+    paidValueBRL: row.paid_value_brl ? Number(row.paid_value_brl) : undefined,
+    paidValueUSD: row.paid_value_usd ? Number(row.paid_value_usd) : undefined,
     status: operationalStatus,
     paymentStatus,
     payerId: row.payer_id || 'all',
@@ -1021,6 +1057,8 @@ export function mapParkTicketToDb(t: ParkTicketPurchase, tripId: string): Record
     quantity: t.quantity || 1,
     cost_usd: t.costUSD ? Number(t.costUSD) : null,
     cost_brl: t.costBRL ? Number(t.costBRL) : null,
+    paid_value_brl: t.paidValueBRL !== undefined && t.paidValueBRL !== null ? Number(t.paidValueBRL) : null,
+    paid_value_usd: t.paidValueUSD !== undefined && t.paidValueUSD !== null ? Number(t.paidValueUSD) : null,
     payment_status: t.paymentStatus || 'Não informado',
     payer_id: sanitizeTravelerForeignKey(t.payerId),
     confirmation_code: t.confirmationCode || null,
@@ -1040,6 +1078,8 @@ export function mapDbToParkTicket(row: any): ParkTicketPurchase {
     paymentStatus = 'Pago';
   } else if (row.payment_status === 'Pendente') {
     paymentStatus = 'Pendente';
+  } else if (row.payment_status === 'Parcial') {
+    paymentStatus = 'Parcial';
   } else if (row.payment_status === 'Não informado') {
     paymentStatus = 'Não informado';
   } else if (row.payment_status) {
@@ -1062,6 +1102,8 @@ export function mapDbToParkTicket(row: any): ParkTicketPurchase {
     quantity: row.quantity,
     costUSD: row.cost_usd ? Number(row.cost_usd) : undefined,
     costBRL: row.cost_brl ? Number(row.cost_brl) : undefined,
+    paidValueBRL: row.paid_value_brl ? Number(row.paid_value_brl) : undefined,
+    paidValueUSD: row.paid_value_usd ? Number(row.paid_value_usd) : undefined,
     paymentStatus,
     payerId: row.payer_id || 'all',
     confirmationCode: row.confirmation_code,

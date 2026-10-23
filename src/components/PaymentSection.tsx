@@ -2,7 +2,7 @@ import React from 'react';
 import { CreditCard, DollarSign, Users, AlertCircle, Info } from 'lucide-react';
 import { MoneyInput } from './MoneyInput';
 
-export type PaymentStatusType = 'Não informado' | 'Pendente' | 'Pago';
+export type PaymentStatusType = 'Não informado' | 'Pendente' | 'Parcial' | 'Pago';
 
 export interface TravelerOption {
   id: string;
@@ -22,8 +22,12 @@ export interface PaymentSectionProps {
   unitCostBRL: number | null;
   /** Total calculado em USD */
   totalCostUSD: number | null;
-  /** Total calculado em BRL */
+  /** Total calculated em BRL */
   totalCostBRL: number | null;
+  /** Valor já pago em BRL (para status Parcial) */
+  paidValueBRL?: number | null;
+  /** Valor já pago em USD (para status Parcial) */
+  paidValueUSD?: number | null;
   /** Callback disparado quando qualquer valor monetário for alterado */
   onChangeCosts: (
     unitUSD: number | null,
@@ -31,6 +35,8 @@ export interface PaymentSectionProps {
     totalUSD: number | null,
     totalBRL: number | null
   ) => void;
+  /** Callback disparado quando os valores pagos forem alterados */
+  onChangePaidValues?: (paidBRL: number | null, paidUSD: number | null) => void;
   /** Status do pagamento */
   paymentStatus: PaymentStatusType;
   onChangePaymentStatus: (status: PaymentStatusType) => void;
@@ -66,7 +72,10 @@ export const PaymentSection: React.FC<PaymentSectionProps> = ({
   unitCostBRL,
   totalCostUSD,
   totalCostBRL,
+  paidValueBRL,
+  paidValueUSD,
   onChangeCosts,
+  onChangePaidValues,
   paymentStatus,
   onChangePaymentStatus,
   payerId = 'all',
@@ -187,8 +196,9 @@ export const PaymentSection: React.FC<PaymentSectionProps> = ({
               onChange={(e) => onChangePaymentStatus(e.target.value as PaymentStatusType)}
               className="w-full h-10 bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] cursor-pointer transition-all"
             >
-              <option value="Não informado">⚪ Não informado</option>
+              <option value="Não informado">⚪ Não informado / Não iniciado</option>
               <option value="Pendente">⏳ Pendente / Não pago</option>
+              <option value="Parcial">🔶 Parcial</option>
               <option value="Pago">✅ Pago</option>
             </select>
             <span className="text-[10px] text-slate-400 block mt-1">
@@ -196,6 +206,51 @@ export const PaymentSection: React.FC<PaymentSectionProps> = ({
             </span>
           </div>
         </div>
+
+        {/* Linha de Pagamento Parcial */}
+        {paymentStatus === 'Parcial' && (
+          <div className="pt-3 border-t border-slate-200/70 space-y-2 animate-in fade-in duration-200">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-semibold text-emerald-800 flex items-center gap-1.5">
+                <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Quanto já foi Pago? (Valor Parcial)</span>
+              </label>
+              <span className="text-[10px] text-slate-400 font-mono">
+                Deve ser &gt; 0 e &lt; Total
+              </span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <span className="text-[10px] text-slate-500 block mb-1">Valor Pago (R$)</span>
+                <MoneyInput
+                  currency="BRL"
+                  value={paidValueBRL ?? null}
+                  className="!bg-white !border-slate-200 !rounded-lg !text-slate-800 !h-10 !text-xs !font-medium focus:!ring-[#D4AF37]/50 focus:!border-[#D4AF37]"
+                  onChange={(val) => {
+                    const calculatedUsd = val !== null && rate > 0 ? Math.round((val / rate) * 100) / 100 : null;
+                    if (onChangePaidValues) {
+                      onChangePaidValues(val, calculatedUsd);
+                    }
+                  }}
+                />
+              </div>
+              <div>
+                <span className="text-[10px] text-slate-500 block mb-1">Valor Pago (US$)</span>
+                <MoneyInput
+                  currency="USD"
+                  value={paidValueUSD ?? null}
+                  className="!bg-white !border-slate-200 !rounded-lg !text-slate-800 !h-10 !text-xs !font-medium focus:!ring-[#D4AF37]/50 focus:!border-[#D4AF37]"
+                  onChange={(val) => {
+                    const calculatedBrl = val !== null ? Math.round(val * rate * 100) / 100 : null;
+                    if (onChangePaidValues) {
+                      onChangePaidValues(calculatedBrl, val);
+                    }
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Linha 2: Resumo e Totais */}
         <div className="pt-4 border-t border-slate-200/70 space-y-3">

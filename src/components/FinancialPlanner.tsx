@@ -163,6 +163,27 @@ export const FinancialPlanner: React.FC = () => {
   const handleSaveExpense = async (e: React.FormEvent) => {
     e.preventDefault();
     if (expenseSubmitLockRef.current || isSaving) return;
+
+    if (status === 'Parcial') {
+      const totBRL = estimatedValueBRL || 0;
+      const totUSD = estimatedValueUSD || 0;
+      const pBRL = paidValueBRL || 0;
+      const pUSD = pBRL > 0 ? pBRL / settings.dollarRate : 0;
+
+      const hasBRL = totBRL > 0;
+      const hasUSD = totUSD > 0;
+
+      let isValid = true;
+      if (hasBRL && (pBRL <= 0 || pBRL >= totBRL)) isValid = false;
+      if (hasUSD && (pUSD <= 0 || pUSD >= totUSD)) isValid = false;
+      if (!hasBRL && !hasUSD) isValid = false;
+
+      if (!isValid) {
+        alert('Para pagamento Parcial, o valor pago deve ser maior que zero e menor que o valor total.');
+        return;
+      }
+    }
+
     expenseSubmitLockRef.current = true;
     setIsSaving(true);
     try {

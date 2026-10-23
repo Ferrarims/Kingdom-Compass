@@ -113,7 +113,7 @@ export type ExpenseCategory =
   | 'Seguro'
   | 'Documentos';
 
-export type ExpenseStatus = 'Pago' | 'Pendente' | 'Parcial' | 'Não iniciado';
+export type ExpenseStatus = 'Pago' | 'Pendente' | 'Parcial' | 'Não informado' | 'Não iniciado';
 
 export interface ExpenseItem {
   id: string;
@@ -254,7 +254,9 @@ export interface ParkTicketPurchase {
   quantity: number; // number of people / tickets
   costUSD?: number;
   costBRL?: number;
-  paymentStatus: 'Não informado' | 'Pendente' | 'Pago' | 'Reservado' | 'Previsão (Planejamento)' | 'Apenas Previsão' | string;
+  paidValueBRL?: number;
+  paidValueUSD?: number;
+  paymentStatus: 'Não informado' | 'Pendente' | 'Parcial' | 'Pago' | 'Reservado' | 'Previsão (Planejamento)' | 'Apenas Previsão' | string;
   payerId?: string;
   confirmationCode?: string;
   seller?: string; // e.g. "Site Oficial Disney", "Civitatis", "Decolar", "Agência"
@@ -370,7 +372,7 @@ export type FlightOperationalStatus =
   | 'Reservado / Confirmado'
   | string;
 
-export type FlightPaymentStatus = 'Pago' | 'Pendente' | 'Não informado';
+export type FlightPaymentStatus = 'Pago' | 'Pendente' | 'Parcial' | 'Não informado';
 
 export interface FlightSegment {
   id: string;
@@ -388,6 +390,8 @@ export interface FlightSegment {
   pnrLocator?: string;
   ticketCostUSD?: number;
   ticketCostBRL?: number;
+  paidValueBRL?: number;
+  paidValueUSD?: number;
   status: FlightOperationalStatus;
   paymentStatus?: FlightPaymentStatus;
   payerId?: string;
@@ -419,7 +423,7 @@ export type CarRentalOperationalStatus =
   | 'Cancelado'
   | string;
 
-export type CarRentalPaymentStatus = 'Pago' | 'Pendente' | 'Não informado';
+export type CarRentalPaymentStatus = 'Pago' | 'Pendente' | 'Parcial' | 'Não informado';
 
 export interface CarRentalBooking {
   id: string;
@@ -437,6 +441,8 @@ export interface CarRentalBooking {
   
   costUSD?: number;
   costBRL?: number;
+  paidValueBRL?: number;
+  paidValueUSD?: number;
   status: CarRentalOperationalStatus;
   paymentStatus?: CarRentalPaymentStatus;
   payerId?: string;
@@ -455,7 +461,7 @@ export type AccommodationOperationalStatus =
   | 'Cancelado'
   | string;
 
-export type AccommodationPaymentStatus = 'Pago' | 'Pendente' | 'Não informado';
+export type AccommodationPaymentStatus = 'Pago' | 'Pendente' | 'Parcial' | 'Não informado';
 
 export interface AccommodationBooking {
   id: string;
@@ -470,6 +476,8 @@ export interface AccommodationBooking {
   roomType?: string; // e.g., "2 Quartos Standard Preferred"
   costUSD?: number;
   costBRL?: number;
+  paidValueBRL?: number;
+  paidValueUSD?: number;
   status: AccommodationOperationalStatus;
   paymentStatus?: AccommodationPaymentStatus;
   payerId?: string;

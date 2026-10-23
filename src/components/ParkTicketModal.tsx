@@ -575,6 +575,8 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
   const [quantity, setQuantity] = useState<number>(travelers.length || 1);
   const [unitCostUSD, setUnitCostUSD] = useState<number | null>(null);
   const [unitCostBRL, setUnitCostBRL] = useState<number | null>(null);
+  const [paidValueBRL, setPaidValueBRL] = useState<number | undefined>(undefined);
+  const [paidValueUSD, setPaidValueUSD] = useState<number | undefined>(undefined);
   const [paymentStatus, setPaymentStatus] = useState<PaymentStatusType>('Não informado');
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -666,11 +668,12 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
             setUnitCostBRL(null);
           }
 
+          setPaidValueBRL(ticketToEdit.paidValueBRL);
+          setPaidValueUSD(ticketToEdit.paidValueUSD);
+
           const rawStatus = ticketToEdit.paymentStatus;
-          if (rawStatus === 'Pago') {
-            setPaymentStatus('Pago');
-          } else if (rawStatus === 'Pendente') {
-            setPaymentStatus('Pendente');
+          if (rawStatus === 'Pago' || rawStatus === 'Pendente' || rawStatus === 'Parcial' || rawStatus === 'Não informado') {
+            setPaymentStatus(rawStatus);
           } else {
             setPaymentStatus('Não informado');
           }
@@ -795,12 +798,33 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
     if (isSaving) return;
 
     setSaveError(null);
+
+    const usdVal = totalUSD !== null ? totalUSD : 0;
+    const brlVal = totalBRL !== null ? totalBRL : (usdVal > 0 ? usdVal * dollarRate : 0);
+
+    if (paymentStatus === 'Parcial') {
+      const totBRL = brlVal || 0;
+      const totUSD = usdVal || 0;
+      const pBRL = paidValueBRL || 0;
+      const pUSD = paidValueUSD || 0;
+
+      const hasBRL = totBRL > 0;
+      const hasUSD = totUSD > 0;
+
+      let isValid = true;
+      if (hasBRL && (pBRL <= 0 || pBRL >= totBRL)) isValid = false;
+      if (hasUSD && (pUSD <= 0 || pUSD >= totUSD)) isValid = false;
+      if (!hasBRL && !hasUSD) isValid = false;
+
+      if (!isValid) {
+        setSaveError('Para pagamento Parcial, o valor pago deve ser maior que zero e menor que o valor total.');
+        return;
+      }
+    }
+
     setIsSaving(true);
 
     try {
-      const usdVal = totalUSD !== null ? totalUSD : 0;
-      const brlVal = totalBRL !== null ? totalBRL : (usdVal > 0 ? usdVal * dollarRate : 0);
-
       const ticketData: Omit<ParkTicketPurchase, 'id'> = {
         title: title.trim() || `${complex} - Ingressos`,
         type,
@@ -812,6 +836,8 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
         quantity: Math.max(1, quantity),
         costUSD: usdVal > 0 ? usdVal : undefined,
         costBRL: brlVal > 0 ? brlVal : undefined,
+        paidValueBRL: paidValueBRL,
+        paidValueUSD: paidValueUSD,
         paymentStatus,
         payerId,
         confirmationCode: confirmationCode.trim() || undefined,
@@ -1162,6 +1188,12 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
               }}
               paymentStatus={paymentStatus}
               onChangePaymentStatus={(st) => setPaymentStatus(st)}
+              paidValueBRL={paidValueBRL}
+              paidValueUSD={paidValueUSD}
+              onChangePaidValues={(pBRL, pUSD) => {
+                setPaidValueBRL(pBRL);
+                setPaidValueUSD(pUSD);
+              }}
               payerId={payerId}
               onChangePayerId={(pId) => setPayerId(pId)}
               travelers={travelers.map((t) => ({ id: t.id, name: t.name }))}

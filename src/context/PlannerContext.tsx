@@ -1741,16 +1741,38 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   ): ExpenseItem[] => {
     const updatedExpenses = [...currentExpenses];
 
+    // Helper para determinar status e valores pagos na reconciliação
+    const computePaymentValues = (
+      pStatus: string | undefined,
+      existingExp: ExpenseItem | undefined,
+      totBrl: number,
+      totUsd: number,
+      bookingPaidBrl?: number,
+      bookingPaidUsd?: number
+    ): { status: ExpenseItem['status']; paidBrl: number; paidUsd: number } => {
+      const status = (pStatus || existingExp?.status || 'Pendente') as ExpenseItem['status'];
+      if (status === 'Pago') {
+        return { status: 'Pago', paidBrl: totBrl, paidUsd: totUsd };
+      }
+      if (status === 'Parcial') {
+        const pBrl = bookingPaidBrl ?? existingExp?.paidValueBRL ?? 0;
+        const pUsd = bookingPaidUsd ?? existingExp?.paidValueUSD ?? 0;
+        return { status: 'Parcial', paidBrl: pBrl, paidUsd: pUsd };
+      }
+      if (status === 'Não informado') {
+        return { status: 'Não informado', paidBrl: 0, paidUsd: 0 };
+      }
+      return { status: 'Pendente', paidBrl: 0, paidUsd: 0 };
+    };
+
     // 1. Ingressos de Parques
     parkTicketsList.forEach((ticket) => {
       const expId = generateDeterministicUUID('ticket-expense', ticket.id);
-      const exists = updatedExpenses.some((e) => e.id === expId || e.id === `exp-ticket-${ticket.id}`);
       const usd = ticket.costUSD || 0;
       const brl = ticket.costBRL || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
       const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
 
       if (brl > 0 || finalUsd > 0) {
-        const isPaid = ticket.paymentStatus === 'Pago';
         const ticketTitle = `Ingresso: ${ticket.title || 'Ingresso de Parques'}`.trim();
         const parksStr = ticket.parksIncluded && ticket.parksIncluded.length > 0 ? ticket.parksIncluded.join(', ') : ticket.complex;
         const ticketTravelerIds = ticket.travelerIds || [];
@@ -1762,15 +1784,27 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         const qtyText = `${qty} ${qty === 1 ? 'pacote/ingresso' : 'pacotes/ingressos'}`;
         const ticketNotes = `${ticket.type === 'combo' ? 'Combo Multi-Parques / Multi-Dias' : 'Ingresso Individual'} (${ticket.daysCount} ${ticket.daysCount === 1 ? 'dia' : 'dias'}${ticket.ticketOption ? ' - ' + ticket.ticketOption : ''}) | Parques: ${parksStr}${ticket.confirmationCode ? ' | Voucher: ' + ticket.confirmationCode : ''} | Qtd: ${qtyText} | Para: ${selectedTravelerNames}`;
 
+        const existingIdx = updatedExpenses.findIndex((e) => e.id === expId || e.id === `exp-ticket-${ticket.id}`);
+        const existingExp = existingIdx >= 0 ? updatedExpenses[existingIdx] : undefined;
+
+        const { status: finalStatus, paidBrl, paidUsd } = computePaymentValues(
+          ticket.paymentStatus,
+          existingExp,
+          brl,
+          finalUsd,
+          ticket.paidValueBRL,
+          ticket.paidValueUSD
+        );
+
         const expData: ExpenseItem = {
           id: expId,
           title: ticketTitle,
           category: 'Ingressos',
           estimatedValueUSD: finalUsd,
           estimatedValueBRL: brl,
-          paidValueBRL: isPaid ? brl : 0,
-          paidValueUSD: isPaid ? finalUsd : 0,
-          status: isPaid ? 'Pago' : 'Pendente',
+          paidValueBRL: paidBrl,
+          paidValueUSD: paidUsd,
+          status: finalStatus,
           payerId: ticket.payerId || 'all',
           responsibleTravelerId: ticket.payerId || 'all',
           travelerIds: ticket.travelerIds || ['all'],
@@ -1782,7 +1816,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           updatedBy: cUser.name || 'Sistema',
         };
 
-        const existingIdx = updatedExpenses.findIndex((e) => e.id === expId || e.id === `exp-ticket-${ticket.id}`);
         if (existingIdx >= 0) {
           updatedExpenses[existingIdx] = {
             ...updatedExpenses[existingIdx],
@@ -1803,8 +1836,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       const isZero = isZeroCost(flight.ticketCostUSD, flight.ticketCostBRL);
 
       if (isZero) {
-        // Regra obrigatória: se a cobrança for zero nas duas moedas, nenhuma despesa vinculada
-        // a este voo pode existir no Financeiro (mesmo que paymentStatus seja 'Pago')
         for (let i = updatedExpenses.length - 1; i >= 0; i--) {
           const e = updatedExpenses[i];
           if (
@@ -1819,31 +1850,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         const usd = Number(flight.ticketCostUSD) || 0;
         const brl = Number(flight.ticketCostBRL) || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
         const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
-        const isPaid = flight.paymentStatus
-          ? flight.paymentStatus === 'Pago'
-          : flight.status === 'Pago';
+
         const flightTitle = `Passagem: ${flight.airline || 'Voo'} (${flight.typeLabel || 'Voo'}${flight.flightNumber ? ' ' + flight.flightNumber : ''})`.trim();
         const flightNotes = `Trecho: ${flight.originCity || flight.originAirport || 'Origem'} ➔ ${flight.destinationCity || flight.destinationAirport || 'Destino'}${flight.departureDate ? ' (' + flight.departureDate + ')' : ''}`;
-
-        const expData: ExpenseItem = {
-          id: expId,
-          title: flightTitle,
-          category: 'Passagens',
-          estimatedValueUSD: finalUsd,
-          estimatedValueBRL: brl,
-          paidValueBRL: isPaid ? brl : 0,
-          paidValueUSD: isPaid ? finalUsd : 0,
-          status: isPaid ? 'Pago' : 'Pendente',
-          payerId: flight.payerId || 'all',
-          responsibleTravelerId: flight.payerId || 'all',
-          travelerIds: flight.travelerIds || ['all'],
-          sourceType: 'flight',
-          sourceId: flight.id,
-          excluded: false,
-          notes: flightNotes,
-          updatedAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-          updatedBy: cUser.name || 'Sistema',
-        };
 
         const matchingIndices: number[] = [];
         updatedExpenses.forEach((e, idx) => {
@@ -1856,8 +1865,39 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           }
         });
 
-        if (matchingIndices.length > 0) {
-          const primaryIdx = matchingIndices[0];
+        const primaryIdx = matchingIndices.length > 0 ? matchingIndices[0] : -1;
+        const existingExp = primaryIdx >= 0 ? updatedExpenses[primaryIdx] : undefined;
+
+        const { status: finalStatus, paidBrl, paidUsd } = computePaymentValues(
+          flight.paymentStatus || flight.status,
+          existingExp,
+          brl,
+          finalUsd,
+          flight.paidValueBRL,
+          flight.paidValueUSD
+        );
+
+        const expData: ExpenseItem = {
+          id: expId,
+          title: flightTitle,
+          category: 'Passagens',
+          estimatedValueUSD: finalUsd,
+          estimatedValueBRL: brl,
+          paidValueBRL: paidBrl,
+          paidValueUSD: paidUsd,
+          status: finalStatus,
+          payerId: flight.payerId || 'all',
+          responsibleTravelerId: flight.payerId || 'all',
+          travelerIds: flight.travelerIds || ['all'],
+          sourceType: 'flight',
+          sourceId: flight.id,
+          excluded: false,
+          notes: flightNotes,
+          updatedAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+          updatedBy: cUser.name || 'Sistema',
+        };
+
+        if (primaryIdx >= 0) {
           updatedExpenses[primaryIdx] = {
             ...updatedExpenses[primaryIdx],
             ...expData,
@@ -1880,8 +1920,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       const isZero = isZeroCost(acc.costUSD, acc.costBRL);
 
       if (isZero) {
-        // Regra obrigatória: se a cobrança for zero nas duas moedas, nenhuma despesa vinculada
-        // a esta acomodação pode existir no Financeiro (mesmo que paymentStatus seja 'Pago')
         for (let i = updatedExpenses.length - 1; i >= 0; i--) {
           const e = updatedExpenses[i];
           if (
@@ -1896,29 +1934,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         const usd = Number(acc.costUSD) || 0;
         const brl = Number(acc.costBRL) || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
         const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
-        const isPaid = isAccommodationPaid(acc);
+
         const accTitle = `Hospedagem: ${acc.name || 'Reserva de Hotel / Airbnb'}`.trim();
         const accNotes = `Check-in: ${acc.checkInDate || '---'} | Check-out: ${acc.checkOutDate || '---'}${acc.address ? ' (' + acc.address + ')' : ''}`;
-
-        const expData: ExpenseItem = {
-          id: expId,
-          title: accTitle,
-          category: 'Hospedagem',
-          estimatedValueUSD: finalUsd,
-          estimatedValueBRL: brl,
-          paidValueBRL: isPaid ? brl : 0,
-          paidValueUSD: isPaid ? finalUsd : 0,
-          status: isPaid ? 'Pago' : 'Pendente',
-          payerId: acc.payerId || 'all',
-          responsibleTravelerId: acc.payerId || 'all',
-          travelerIds: acc.travelerIds || ['all'],
-          sourceType: 'accommodation',
-          sourceId: acc.id,
-          excluded: false,
-          notes: accNotes,
-          updatedAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-          updatedBy: cUser.name || 'Sistema',
-        };
 
         const matchingIndices: number[] = [];
         updatedExpenses.forEach((e, idx) => {
@@ -1931,17 +1949,44 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           }
         });
 
-        if (matchingIndices.length > 0) {
-          const primaryIdx = matchingIndices[0];
+        const primaryIdx = matchingIndices.length > 0 ? matchingIndices[0] : -1;
+        const existingExp = primaryIdx >= 0 ? updatedExpenses[primaryIdx] : undefined;
+
+        const { status: finalStatus, paidBrl, paidUsd } = computePaymentValues(
+          acc.paymentStatus || acc.status,
+          existingExp,
+          brl,
+          finalUsd,
+          acc.paidValueBRL,
+          acc.paidValueUSD
+        );
+
+        const expData: ExpenseItem = {
+          id: expId,
+          title: accTitle,
+          category: 'Hospedagem',
+          estimatedValueUSD: finalUsd,
+          estimatedValueBRL: brl,
+          paidValueBRL: paidBrl,
+          paidValueUSD: paidUsd,
+          status: finalStatus,
+          payerId: acc.payerId || 'all',
+          responsibleTravelerId: acc.payerId || 'all',
+          travelerIds: acc.travelerIds || ['all'],
+          sourceType: 'accommodation',
+          sourceId: acc.id,
+          excluded: false,
+          notes: accNotes,
+          updatedAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+          updatedBy: cUser.name || 'Sistema',
+        };
+
+        if (primaryIdx >= 0) {
           const prevExp = updatedExpenses[primaryIdx];
-          const finalPaid = isPaid;
           updatedExpenses[primaryIdx] = {
             ...prevExp,
             ...expData,
             id: expId,
-            status: finalPaid ? 'Pago' : 'Pendente',
-            paidValueBRL: finalPaid ? brl : 0,
-            paidValueUSD: finalPaid ? finalUsd : 0,
             payerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevExp.payerId || expData.payerId),
             responsibleTravelerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevExp.responsibleTravelerId || expData.payerId),
             excluded: prevExp.excluded,
@@ -1962,8 +2007,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       const isZero = isZeroCost(rental.costUSD, rental.costBRL);
 
       if (isZero) {
-        // Regra obrigatória: se a cobrança for zero nas duas moedas, nenhuma despesa vinculada
-        // a este aluguel de veículo pode existir no Financeiro (mesmo que paymentStatus seja 'Pago')
         for (let i = updatedExpenses.length - 1; i >= 0; i--) {
           const e = updatedExpenses[i];
           if (
@@ -1978,29 +2021,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         const usd = Number(rental.costUSD) || 0;
         const brl = Number(rental.costBRL) || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
         const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
-        const isPaid = isCarRentalPaid(rental);
+
         const rentalTitle = `Transporte: Aluguel de Carro (${rental.company || 'Locadora'})`.trim();
         const rentalNotes = `Período: ${rental.pickupDate || '---'} a ${rental.dropoffDate || '---'}${rental.category ? ' (' + rental.category + ')' : ''}`;
-
-        const expData: ExpenseItem = {
-          id: expId,
-          title: rentalTitle,
-          category: 'Transporte',
-          estimatedValueUSD: finalUsd,
-          estimatedValueBRL: brl,
-          paidValueBRL: isPaid ? brl : 0,
-          paidValueUSD: isPaid ? finalUsd : 0,
-          status: isPaid ? 'Pago' : 'Pendente',
-          payerId: rental.payerId || 'all',
-          responsibleTravelerId: rental.payerId || 'all',
-          travelerIds: rental.travelerIds || ['all'],
-          sourceType: 'car_rental',
-          sourceId: rental.id,
-          excluded: false,
-          notes: rentalNotes,
-          updatedAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-          updatedBy: cUser.name || 'Sistema',
-        };
 
         const matchingIndices: number[] = [];
         updatedExpenses.forEach((e, idx) => {
@@ -2013,17 +2036,44 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           }
         });
 
-        if (matchingIndices.length > 0) {
-          const primaryIdx = matchingIndices[0];
+        const primaryIdx = matchingIndices.length > 0 ? matchingIndices[0] : -1;
+        const existingExp = primaryIdx >= 0 ? updatedExpenses[primaryIdx] : undefined;
+
+        const { status: finalStatus, paidBrl, paidUsd } = computePaymentValues(
+          rental.paymentStatus || rental.status,
+          existingExp,
+          brl,
+          finalUsd,
+          rental.paidValueBRL,
+          rental.paidValueUSD
+        );
+
+        const expData: ExpenseItem = {
+          id: expId,
+          title: rentalTitle,
+          category: 'Transporte',
+          estimatedValueUSD: finalUsd,
+          estimatedValueBRL: brl,
+          paidValueBRL: paidBrl,
+          paidValueUSD: paidUsd,
+          status: finalStatus,
+          payerId: rental.payerId || 'all',
+          responsibleTravelerId: rental.payerId || 'all',
+          travelerIds: rental.travelerIds || ['all'],
+          sourceType: 'car_rental',
+          sourceId: rental.id,
+          excluded: false,
+          notes: rentalNotes,
+          updatedAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+          updatedBy: cUser.name || 'Sistema',
+        };
+
+        if (primaryIdx >= 0) {
           const prevExp = updatedExpenses[primaryIdx];
-          const finalPaid = isPaid;
           updatedExpenses[primaryIdx] = {
             ...prevExp,
             ...expData,
             id: expId,
-            status: finalPaid ? 'Pago' : 'Pendente',
-            paidValueBRL: finalPaid ? brl : 0,
-            paidValueUSD: finalPaid ? finalUsd : 0,
             payerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevExp.payerId || expData.payerId),
             responsibleTravelerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevExp.responsibleTravelerId || expData.payerId),
             excluded: prevExp.excluded,
@@ -3012,14 +3062,24 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
     const expStatus = updates.status || prevItem.status;
     const isPaidStatus = expStatus === 'Pago';
+    const isParcialStatus = expStatus === 'Parcial';
     const estBRL = updates.estimatedValueBRL !== undefined ? updates.estimatedValueBRL : prevItem.estimatedValueBRL;
     const estUSD = updates.estimatedValueUSD !== undefined ? updates.estimatedValueUSD : prevItem.estimatedValueUSD;
-    const paidBRL = isPaidStatus ? estBRL : (updates.paidValueBRL !== undefined ? updates.paidValueBRL : (prevItem.paidValueBRL || 0));
-    const paidUSD = isPaidStatus ? estUSD : (updates.paidValueUSD !== undefined ? updates.paidValueUSD : (prevItem.paidValueUSD || 0));
+    
+    let paidBRL = 0;
+    let paidUSD = 0;
+    if (isPaidStatus) {
+      paidBRL = estBRL;
+      paidUSD = estUSD;
+    } else if (isParcialStatus) {
+      paidBRL = updates.paidValueBRL !== undefined ? updates.paidValueBRL : (prevItem.paidValueBRL || 0);
+      paidUSD = updates.paidValueUSD !== undefined ? updates.paidValueUSD : (prevItem.paidValueUSD || 0);
+    }
 
     const updatedItem: ExpenseItem = {
       ...prevItem,
       ...updates,
+      status: expStatus,
       paidValueBRL: paidBRL,
       paidValueUSD: paidUSD,
       updatedAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
@@ -3050,7 +3110,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       try {
         const res = await SupabaseService.saveExpense(activeTripId, updatedItem, fallbackTrip);
         if (res && !res.success) {
-          // Rollback optimistic update
           setExpenses((prev) => prev.map((item) => (item.id === id ? prevItem : item)));
           setTrips((prevTrips) =>
             prevTrips.map((t) =>
@@ -3065,7 +3124,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           return { success: false, error: res.error || 'Falha ao atualizar despesa no Supabase' };
         }
       } catch (err: any) {
-        // Rollback optimistic update
         setExpenses((prev) => prev.map((item) => (item.id === id ? prevItem : item)));
         setTrips((prevTrips) =>
           prevTrips.map((t) =>
@@ -3080,7 +3138,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         return { success: false, error: err?.message || 'Erro inesperado ao atualizar despesa' };
       }
 
-      const nextPaymentStatus = expStatus === 'Pago' ? 'Pago' : 'Pendente';
+      const nextPaymentStatus = expStatus;
       const sourceType = updatedItem.sourceType;
       const sourceId = updatedItem.sourceId;
 
@@ -3098,6 +3156,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
                 costBRL: updatedItem.estimatedValueBRL ?? acc.costBRL,
                 costUSD: updatedItem.estimatedValueUSD ?? acc.costUSD,
                 paymentStatus: nextPaymentStatus as any,
+                paidValueBRL: paidBRL,
+                paidValueUSD: paidUSD,
                 payerId: updatedItem.payerId || acc.payerId,
                 travelerIds: updatedItem.travelerIds || acc.travelerIds,
               };
@@ -3147,6 +3207,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
                 ticketCostBRL: updatedItem.estimatedValueBRL ?? flight.ticketCostBRL,
                 ticketCostUSD: updatedItem.estimatedValueUSD ?? flight.ticketCostUSD,
                 paymentStatus: nextPaymentStatus as any,
+                paidValueBRL: paidBRL,
+                paidValueUSD: paidUSD,
                 payerId: updatedItem.payerId || flight.payerId,
                 travelerIds: updatedItem.travelerIds || flight.travelerIds,
               };
@@ -3196,6 +3258,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
                 costBRL: updatedItem.estimatedValueBRL ?? car.costBRL,
                 costUSD: updatedItem.estimatedValueUSD ?? car.costUSD,
                 paymentStatus: nextPaymentStatus as any,
+                paidValueBRL: paidBRL,
+                paidValueUSD: paidUSD,
                 payerId: updatedItem.payerId || car.payerId,
                 travelerIds: updatedItem.travelerIds || car.travelerIds,
               };
@@ -3245,6 +3309,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
                 costBRL: updatedItem.estimatedValueBRL ?? tkt.costBRL,
                 costUSD: updatedItem.estimatedValueUSD ?? tkt.costUSD,
                 paymentStatus: nextPaymentStatus as any,
+                paidValueBRL: paidBRL,
+                paidValueUSD: paidUSD,
                 payerId: updatedItem.payerId || tkt.payerId,
                 travelerIds: updatedItem.travelerIds || tkt.travelerIds,
               };
@@ -4500,7 +4566,27 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       return { success: true };
     }
 
-    const isPaid = flight.paymentStatus === 'Pago';
+    const pStatus = flight.paymentStatus || flight.status || 'Pendente';
+    let expStatus: ExpenseItem['status'] = 'Pendente';
+    let paidBrl = 0;
+    let paidUsd = 0;
+    if (pStatus === 'Pago') {
+      expStatus = 'Pago';
+      paidBrl = brl;
+      paidUsd = finalUsd;
+    } else if (pStatus === 'Parcial') {
+      expStatus = 'Parcial';
+      paidBrl = flight.paidValueBRL ?? 0;
+      paidUsd = flight.paidValueUSD ?? 0;
+    } else if (pStatus === 'Não informado') {
+      expStatus = 'Não informado';
+      paidBrl = 0;
+      paidUsd = 0;
+    } else {
+      expStatus = 'Pendente';
+      paidBrl = 0;
+      paidUsd = 0;
+    }
 
     const flightTitle = `Passagem: ${flight.airline || 'Voo'} (${flight.typeLabel || 'Voo'}${flight.flightNumber ? ' ' + flight.flightNumber : ''})`.trim();
     const flightNotes = `Trecho: ${flight.originCity || flight.originAirport || 'Origem'} ➔ ${flight.destinationCity || flight.destinationAirport || 'Destino'}${flight.departureDate ? ' (' + flight.departureDate + ')' : ''}`;
@@ -4511,9 +4597,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       category: 'Passagens',
       estimatedValueUSD: finalUsd,
       estimatedValueBRL: brl,
-      paidValueBRL: isPaid ? brl : 0,
-      paidValueUSD: isPaid ? finalUsd : 0,
-      status: isPaid ? 'Pago' : 'Pendente',
+      paidValueBRL: paidBrl,
+      paidValueUSD: paidUsd,
+      status: expStatus,
       payerId: flight.payerId || 'all',
       responsibleTravelerId: flight.payerId || 'all',
       travelerIds: flight.travelerIds || ['all'],
@@ -4540,9 +4626,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           title: flightTitle,
           estimatedValueUSD: finalUsd,
           estimatedValueBRL: brl,
-          paidValueBRL: isPaid ? brl : 0,
-          paidValueUSD: isPaid ? finalUsd : 0,
-          status: isPaid ? 'Pago' : 'Pendente',
+          paidValueBRL: paidBrl,
+          paidValueUSD: paidUsd,
+          status: expStatus,
           payerId: expData.payerId,
           responsibleTravelerId: expData.responsibleTravelerId,
           travelerIds: expData.travelerIds,
@@ -4621,7 +4707,28 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       return { success: true };
     }
 
-    const isPaid = isAccommodationPaid(acc);
+    const pStatusAcc = acc.paymentStatus || acc.status || 'Pendente';
+    let expStatusAcc: ExpenseItem['status'] = 'Pendente';
+    let paidBrlAcc = 0;
+    let paidUsdAcc = 0;
+    if (pStatusAcc === 'Pago') {
+      expStatusAcc = 'Pago';
+      paidBrlAcc = brl;
+      paidUsdAcc = finalUsd;
+    } else if (pStatusAcc === 'Parcial') {
+      expStatusAcc = 'Parcial';
+      paidBrlAcc = acc.paidValueBRL ?? 0;
+      paidUsdAcc = acc.paidValueUSD ?? 0;
+    } else if (pStatusAcc === 'Não informado') {
+      expStatusAcc = 'Não informado';
+      paidBrlAcc = 0;
+      paidUsdAcc = 0;
+    } else {
+      expStatusAcc = 'Pendente';
+      paidBrlAcc = 0;
+      paidUsdAcc = 0;
+    }
+
     const accTitle = `Hospedagem: ${acc.name || 'Reserva de Hotel / Airbnb'}`.trim();
     const accNotes = `Check-in: ${acc.checkInDate || '---'} | Check-out: ${acc.checkOutDate || '---'}${acc.address ? ' (' + acc.address + ')' : ''}`;
 
@@ -4631,9 +4738,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       category: 'Hospedagem',
       estimatedValueUSD: finalUsd,
       estimatedValueBRL: brl,
-      paidValueBRL: isPaid ? brl : 0,
-      paidValueUSD: isPaid ? finalUsd : 0,
-      status: isPaid ? 'Pago' : 'Pendente',
+      paidValueBRL: paidBrlAcc,
+      paidValueUSD: paidUsdAcc,
+      status: expStatusAcc,
       payerId: acc.payerId || 'all',
       responsibleTravelerId: acc.payerId || 'all',
       travelerIds: acc.travelerIds || ['all'],
@@ -4656,15 +4763,14 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       if (existingIndex >= 0) {
         const updated = [...prev];
         const prevItem = updated[existingIndex];
-        const finalPaid = isPaid;
         updated[existingIndex] = {
           ...prevItem,
           title: accTitle,
           estimatedValueUSD: finalUsd > 0 ? finalUsd : (prevItem.estimatedValueUSD || 0),
           estimatedValueBRL: brl > 0 ? brl : (prevItem.estimatedValueBRL || 0),
-          paidValueBRL: finalPaid ? brl : 0,
-          paidValueUSD: finalPaid ? finalUsd : 0,
-          status: finalPaid ? 'Pago' : 'Pendente',
+          paidValueBRL: paidBrlAcc,
+          paidValueUSD: paidUsdAcc,
+          status: expStatusAcc,
           payerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevItem.payerId || expData.payerId),
           responsibleTravelerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevItem.responsibleTravelerId || expData.payerId),
           travelerIds: expData.travelerIds,
@@ -4748,7 +4854,28 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       return { success: true };
     }
 
-    const isPaid = isCarRentalPaid(rental);
+    const pStatusCar = rental.paymentStatus || rental.status || 'Pendente';
+    let expStatusCar: ExpenseItem['status'] = 'Pendente';
+    let paidBrlCar = 0;
+    let paidUsdCar = 0;
+    if (pStatusCar === 'Pago') {
+      expStatusCar = 'Pago';
+      paidBrlCar = brl;
+      paidUsdCar = finalUsd;
+    } else if (pStatusCar === 'Parcial') {
+      expStatusCar = 'Parcial';
+      paidBrlCar = rental.paidValueBRL ?? 0;
+      paidUsdCar = rental.paidValueUSD ?? 0;
+    } else if (pStatusCar === 'Não informado') {
+      expStatusCar = 'Não informado';
+      paidBrlCar = 0;
+      paidUsdCar = 0;
+    } else {
+      expStatusCar = 'Pendente';
+      paidBrlCar = 0;
+      paidUsdCar = 0;
+    }
+
     const rentalTitle = `Transporte: Aluguel de Carro (${rental.company || 'Locadora'})`.trim();
     const rentalNotes = `Período: ${rental.pickupDate || '---'} a ${rental.dropoffDate || '---'}${rental.category ? ' (' + rental.category + ')' : ''}`;
 
@@ -4758,9 +4885,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       category: 'Transporte',
       estimatedValueUSD: finalUsd,
       estimatedValueBRL: brl,
-      paidValueBRL: isPaid ? brl : 0,
-      paidValueUSD: isPaid ? finalUsd : 0,
-      status: isPaid ? 'Pago' : 'Pendente',
+      paidValueBRL: paidBrlCar,
+      paidValueUSD: paidUsdCar,
+      status: expStatusCar,
       payerId: rental.payerId || 'all',
       responsibleTravelerId: rental.payerId || 'all',
       travelerIds: rental.travelerIds || ['all'],
@@ -4783,15 +4910,14 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       if (existingIndex >= 0) {
         const updated = [...prev];
         const prevItem = updated[existingIndex];
-        const finalPaid = isPaid;
         updated[existingIndex] = {
           ...prevItem,
           title: rentalTitle,
           estimatedValueUSD: finalUsd > 0 ? finalUsd : (prevItem.estimatedValueUSD || 0),
           estimatedValueBRL: brl > 0 ? brl : (prevItem.estimatedValueBRL || 0),
-          paidValueBRL: finalPaid ? brl : 0,
-          paidValueUSD: finalPaid ? finalUsd : 0,
-          status: finalPaid ? 'Pago' : 'Pendente',
+          paidValueBRL: paidBrlCar,
+          paidValueUSD: paidUsdCar,
+          status: expStatusCar,
           payerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevItem.payerId || expData.payerId),
           responsibleTravelerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevItem.responsibleTravelerId || expData.payerId),
           travelerIds: expData.travelerIds,
@@ -6012,7 +6138,28 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       return { success: true };
     }
 
-    const isPaid = ticket.paymentStatus === 'Pago';
+    const pStatusTicket = ticket.paymentStatus || 'Pendente';
+    let expStatusTicket: ExpenseItem['status'] = 'Pendente';
+    let paidBrlTicket = 0;
+    let paidUsdTicket = 0;
+    if (pStatusTicket === 'Pago') {
+      expStatusTicket = 'Pago';
+      paidBrlTicket = brl;
+      paidUsdTicket = finalUsd;
+    } else if (pStatusTicket === 'Parcial') {
+      expStatusTicket = 'Parcial';
+      paidBrlTicket = ticket.paidValueBRL ?? 0;
+      paidUsdTicket = ticket.paidValueUSD ?? 0;
+    } else if (pStatusTicket === 'Não informado') {
+      expStatusTicket = 'Não informado';
+      paidBrlTicket = 0;
+      paidUsdTicket = 0;
+    } else {
+      expStatusTicket = 'Pendente';
+      paidBrlTicket = 0;
+      paidUsdTicket = 0;
+    }
+
     const ticketTitle = `Ingresso: ${ticket.title || 'Ingresso de Parques'}`.trim();
     const parksStr = ticket.parksIncluded && ticket.parksIncluded.length > 0 ? ticket.parksIncluded.join(', ') : ticket.complex;
     
@@ -6038,9 +6185,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       category: 'Ingressos',
       estimatedValueUSD: finalUsd,
       estimatedValueBRL: brl,
-      paidValueBRL: isPaid ? brl : 0,
-      paidValueUSD: isPaid ? finalUsd : 0,
-      status: isPaid ? 'Pago' : 'Pendente',
+      paidValueBRL: paidBrlTicket,
+      paidValueUSD: paidUsdTicket,
+      status: expStatusTicket,
       payerId: ticket.payerId || 'all',
       responsibleTravelerId: ticket.payerId || 'all',
       travelerIds: ticket.travelerIds || ['all'],
@@ -6082,9 +6229,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           title: ticketTitle,
           estimatedValueUSD: finalUsd,
           estimatedValueBRL: brl,
-          paidValueBRL: isPaid ? brl : 0,
-          paidValueUSD: isPaid ? finalUsd : 0,
-          status: isPaid ? 'Pago' : 'Pendente',
+          paidValueBRL: paidBrlTicket,
+          paidValueUSD: paidUsdTicket,
+          status: expStatusTicket,
           payerId: expData.payerId,
           responsibleTravelerId: expData.responsibleTravelerId,
           travelerIds: expData.travelerIds,

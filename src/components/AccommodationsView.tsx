@@ -158,6 +158,8 @@ export const AccommodationsView: React.FC = () => {
       roomType: '',
       costUSD: 0,
       costBRL: 0,
+      paidValueBRL: 0,
+      paidValueUSD: 0,
       status: 'Reservado / Confirmado',
       paymentStatus: 'Não informado',
       payerId: settings.currentUserId || 'all',
@@ -175,8 +177,6 @@ export const AccommodationsView: React.FC = () => {
     setEditingAcc(acc);
     setValidationError(null);
 
-    // Validate if the accommodation dates fall within current active trip's allowed window
-    // If not (e.g. from an old template/trip), adjust to the valid trip dates so the calendar opens on the correct month with allowed days active
     const validCheckIn = (acc.checkInDate && acc.checkInDate >= tripMinDate && acc.checkInDate <= tripMaxDate)
       ? acc.checkInDate
       : tripMinDate;
@@ -185,14 +185,12 @@ export const AccommodationsView: React.FC = () => {
       ? acc.checkOutDate
       : (tripMaxDate >= validCheckIn ? tripMaxDate : validCheckIn);
 
-    // Preservar rigorosamente o status operacional legado da acomodação
     let operationalStatus = acc.status || 'Reservado / Confirmado';
     if (operationalStatus === 'Pago' || operationalStatus === 'Pendente' || operationalStatus === 'Não informado') {
       operationalStatus = 'Reservado / Confirmado';
     }
 
-    // Identificar status de pagamento dedicado sem presumir pago para confirmações operacionais
-    let paymentStatus: 'Pago' | 'Pendente' | 'Não informado' = 'Não informado';
+    let paymentStatus: 'Pago' | 'Pendente' | 'Parcial' | 'Não informado' = 'Não informado';
     if (acc.paymentStatus) {
       paymentStatus = acc.paymentStatus;
     } else if (acc.status === 'Pago') {
@@ -215,6 +213,8 @@ export const AccommodationsView: React.FC = () => {
       roomType: acc.roomType || '',
       costUSD: acc.costUSD || 0,
       costBRL: acc.costBRL || (acc.costUSD ? acc.costUSD * (settings.dollarRate || 5.75) : 0),
+      paidValueBRL: acc.paidValueBRL || 0,
+      paidValueUSD: acc.paidValueUSD || 0,
       status: operationalStatus,
       paymentStatus,
       payerId: acc.payerId || 'all',
@@ -243,6 +243,27 @@ export const AccommodationsView: React.FC = () => {
   const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
     if (accSubmitLockRef.current || isSavingAcc) return;
+
+    if (formData.paymentStatus === 'Parcial') {
+      const totBRL = formData.costBRL || 0;
+      const totUSD = formData.costUSD || 0;
+      const pBRL = formData.paidValueBRL || 0;
+      const pUSD = formData.paidValueUSD || 0;
+
+      const hasBRL = totBRL > 0;
+      const hasUSD = totUSD > 0;
+
+      let isValid = true;
+      if (hasBRL && (pBRL <= 0 || pBRL >= totBRL)) isValid = false;
+      if (hasUSD && (pUSD <= 0 || pUSD >= totUSD)) isValid = false;
+      if (!hasBRL && !hasUSD) isValid = false;
+
+      if (!isValid) {
+        setValidationError('Para pagamento Parcial, o valor pago deve ser maior que zero e menor que o valor total.');
+        return;
+      }
+    }
+
     accSubmitLockRef.current = true;
     setIsSavingAcc(true);
     try {
@@ -1257,6 +1278,15 @@ export const AccommodationsView: React.FC = () => {
                   setFormData((prev) => ({
                     ...prev,
                     paymentStatus: status,
+                  }));
+                }}
+                paidValueBRL={formData.paidValueBRL}
+                paidValueUSD={formData.paidValueUSD}
+                onChangePaidValues={(pBRL, pUSD) => {
+                  setFormData((prev) => ({
+                    ...prev,
+                    paidValueBRL: pBRL,
+                    paidValueUSD: pUSD,
                   }));
                 }}
                 payerId={formData.payerId || 'all'}

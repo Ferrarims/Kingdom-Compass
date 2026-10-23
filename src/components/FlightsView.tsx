@@ -165,6 +165,7 @@ export const FlightsView: React.FC = () => {
   const [isSaving, setIsSaving] = useState(false);
   const handleOpenAddModal = () => {
     setEditingFlight(null);
+    setSaveError(null);
     setFormData({
       type: 'outbound',
       typeLabel: 'Voo de Ida',
@@ -199,6 +200,8 @@ export const FlightsView: React.FC = () => {
       paymentStatus: 'Não informado',
       ticketCostUSD: 0,
       ticketCostBRL: 0,
+      paidValueBRL: 0,
+      paidValueUSD: 0,
       notes: '',
       travelerIds: ['all'],
       passengers: (settings.travelers || []).map((t) => t?.name || 'Viajante'),
@@ -210,6 +213,7 @@ export const FlightsView: React.FC = () => {
 
   const handleOpenEditModal = (flight: FlightSegment) => {
     setEditingFlight(flight);
+    setSaveError(null);
 
     // Safeguard legacy data: operational status must only be valid flight status options
     const validOperationalStatuses: FlightOperationalStatus[] = [
@@ -261,6 +265,8 @@ export const FlightsView: React.FC = () => {
       paymentStatus: resolvedPaymentStatus,
       ticketCostUSD: flight.ticketCostUSD || 0,
       ticketCostBRL: flight.ticketCostBRL || 0,
+      paidValueBRL: flight.paidValueBRL || 0,
+      paidValueUSD: flight.paidValueUSD || 0,
       notes: flight.notes || '',
       travelerIds: flight.travelerIds || ['all'],
       passengers: flight.passengers || (settings.travelers || []).map((t) => t?.name || 'Viajante'),
@@ -278,7 +284,29 @@ export const FlightsView: React.FC = () => {
   const handleSaveFlight = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSaving) return;
+
+    if (formData.paymentStatus === 'Parcial') {
+      const totBRL = formData.ticketCostBRL || 0;
+      const totUSD = formData.ticketCostUSD || 0;
+      const pBRL = formData.paidValueBRL || 0;
+      const pUSD = formData.paidValueUSD || 0;
+
+      const hasBRL = totBRL > 0;
+      const hasUSD = totUSD > 0;
+
+      let isValid = true;
+      if (hasBRL && (pBRL <= 0 || pBRL >= totBRL)) isValid = false;
+      if (hasUSD && (pUSD <= 0 || pUSD >= totUSD)) isValid = false;
+      if (!hasBRL && !hasUSD) isValid = false;
+
+      if (!isValid) {
+        setSaveError('Para pagamento Parcial, o valor pago deve ser maior que zero e menor que o valor total.');
+        return;
+      }
+    }
+
     setIsSaving(true);
+    setSaveError(null);
     
     const flightNum = formData.flightNumber.trim() || 'VOO-001';
 
@@ -1728,6 +1756,15 @@ export const FlightsView: React.FC = () => {
                     setFormData({
                       ...formData,
                       paymentStatus: status,
+                    });
+                  }}
+                  paidValueBRL={formData.paidValueBRL}
+                  paidValueUSD={formData.paidValueUSD}
+                  onChangePaidValues={(pBRL, pUSD) => {
+                    setFormData({
+                      ...formData,
+                      paidValueBRL: pBRL,
+                      paidValueUSD: pUSD,
                     });
                   }}
                   payerId={formData.payerId || 'all'}

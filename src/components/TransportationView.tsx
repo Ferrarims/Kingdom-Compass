@@ -161,6 +161,8 @@ export const TransportationView: React.FC = () => {
       dropoffTime: defaultDropoffTime,
       costUSD: 0,
       costBRL: 0,
+      paidValueBRL: 0,
+      paidValueUSD: 0,
       status: 'Reservado / Confirmado',
       paymentStatus: 'Não informado',
       payerId: settings.currentUserId || 'all',
@@ -191,6 +193,8 @@ export const TransportationView: React.FC = () => {
       dropoffTime: rental.dropoffTime || '',
       costUSD: rental.costUSD ?? 0,
       costBRL: rental.costBRL ?? 0,
+      paidValueBRL: rental.paidValueBRL || 0,
+      paidValueUSD: rental.paidValueUSD || 0,
       status: rental.status || 'Reservado / Confirmado',
       paymentStatus: (rental.paymentStatus as PaymentStatusType) || (rental.status === 'Pago' ? 'Pago' : 'Não informado'),
       payerId: rental.payerId || 'all',
@@ -226,6 +230,26 @@ export const TransportationView: React.FC = () => {
     if (formData.dropoffDate < formData.pickupDate) {
       setValidationError('A data de devolução não pode ser anterior à data de retirada.');
       return;
+    }
+
+    if (formData.paymentStatus === 'Parcial') {
+      const totBRL = formData.costBRL || 0;
+      const totUSD = formData.costUSD || 0;
+      const pBRL = formData.paidValueBRL || 0;
+      const pUSD = formData.paidValueUSD || 0;
+
+      const hasBRL = totBRL > 0;
+      const hasUSD = totUSD > 0;
+
+      let isValid = true;
+      if (hasBRL && (pBRL <= 0 || pBRL >= totBRL)) isValid = false;
+      if (hasUSD && (pUSD <= 0 || pUSD >= totUSD)) isValid = false;
+      if (!hasBRL && !hasUSD) isValid = false;
+
+      if (!isValid) {
+        setValidationError('Para pagamento Parcial, o valor pago deve ser maior que zero e menor que o valor total.');
+        return;
+      }
     }
 
     setValidationError(null);
@@ -1665,6 +1689,15 @@ export const TransportationView: React.FC = () => {
                     setFormData((prev) => ({
                       ...prev,
                       paymentStatus: status,
+                    }));
+                  }}
+                  paidValueBRL={formData.paidValueBRL}
+                  paidValueUSD={formData.paidValueUSD}
+                  onChangePaidValues={(pBRL, pUSD) => {
+                    setFormData((prev) => ({
+                      ...prev,
+                      paidValueBRL: pBRL,
+                      paidValueUSD: pUSD,
                     }));
                   }}
                   payerId={formData.payerId || 'all'}
