@@ -4369,14 +4369,50 @@ export function ensureHourlyScheduleItems(
  * Audita dados da viagem garantindo integridade dos dias sem inventar
  * voos, acomodações ou horários fictícios no banco.
  */
+export function hydrateTripBookingsFromExpenses(trip: any): any {
+  if (!trip) return trip;
+  const expenses = trip.expenses || [];
+  if (expenses.length === 0) return trip;
+
+  const hydrateItem = (item: any, sourceType: string) => {
+    const matchingExp = expenses.find((e: any) => 
+      (e.sourceType === sourceType && e.sourceId === item.id) ||
+      e.id === generateDeterministicUUID(
+        sourceType === 'flight' ? 'flight-expense' :
+        sourceType === 'accommodation' ? 'acc-expense' :
+        sourceType === 'car_rental' ? 'car-expense' : 'ticket-expense',
+        item.id
+      )
+    );
+    if (matchingExp) {
+      return {
+        ...item,
+        paymentStatus: matchingExp.status || item.paymentStatus || 'Não informado',
+        paidValueBRL: matchingExp.paidValueBRL !== undefined && matchingExp.paidValueBRL !== null ? matchingExp.paidValueBRL : item.paidValueBRL,
+        paidValueUSD: matchingExp.paidValueUSD !== undefined && matchingExp.paidValueUSD !== null ? matchingExp.paidValueUSD : item.paidValueUSD,
+      };
+    }
+    return item;
+  };
+
+  return {
+    ...trip,
+    flights: (trip.flights || []).map((f: any) => hydrateItem(f, 'flight')),
+    accommodations: (trip.accommodations || []).map((a: any) => hydrateItem(a, 'accommodation')),
+    carRentals: (trip.carRentals || []).map((c: any) => hydrateItem(c, 'car_rental')),
+    parkTickets: (trip.parkTickets || []).map((t: any) => hydrateItem(t, 'park_ticket')),
+  };
+}
+
 export function auditAndCorrectTrip(trip: any): any {
   if (!trip) return trip;
-  const startDate = trip.startDate || '2026-12-27';
-  const durationDays = Math.max(1, trip.durationDays || (trip.rawDays?.length || 16));
+  const hydratedTrip = hydrateTripBookingsFromExpenses(trip);
+  const startDate = hydratedTrip.startDate || '2026-12-27';
+  const durationDays = Math.max(1, hydratedTrip.durationDays || (hydratedTrip.rawDays?.length || 16));
 
-  const flights = trip.flights || [];
-  const accommodations = trip.accommodations || [];
-  let rawDays = trip.rawDays || [];
+  const flights = hydratedTrip.flights || [];
+  const accommodations = hydratedTrip.accommodations || [];
+  let rawDays = hydratedTrip.rawDays || [];
 
   if (rawDays.length === 0 && durationDays > 0) {
     rawDays = Array.from({ length: durationDays }, (_, i) => {
@@ -4400,14 +4436,14 @@ export function auditAndCorrectTrip(trip: any): any {
   }
 
   return {
-    ...trip,
+    ...hydratedTrip,
     startDate,
     durationDays,
     flights,
     accommodations,
     rawDays: rawDays.map((day: any) => ({
       ...day,
-      hourlySchedule: syncAllEventsToHourlySchedule(day, trip)
+      hourlySchedule: syncAllEventsToHourlySchedule(day, hydratedTrip)
     })),
   };
 }

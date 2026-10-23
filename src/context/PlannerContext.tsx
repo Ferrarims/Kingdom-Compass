@@ -4691,9 +4691,16 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       paidBrl = brl;
       paidUsd = finalUsd;
     } else if (pStatus === 'Parcial') {
+      const pBrl = Number(flight.paidValueBRL) || 0;
+      const pUsd = Number(flight.paidValueUSD) || (pBrl > 0 ? Math.round((pBrl / rate) * 100) / 100 : 0);
+      const hasValidBrl = brl > 0 && pBrl > 0 && pBrl < brl;
+      const hasValidUsd = finalUsd > 0 && pUsd > 0 && pUsd < finalUsd;
+      if (!hasValidBrl && !hasValidUsd) {
+        return { success: false, error: 'Para pagamento Parcial, o valor pago deve ser maior que zero e menor que o valor total.' };
+      }
       expStatus = 'Parcial';
-      paidBrl = flight.paidValueBRL ?? 0;
-      paidUsd = flight.paidValueUSD ?? 0;
+      paidBrl = pBrl;
+      paidUsd = pUsd;
     } else if (pStatus === 'Não informado') {
       expStatus = 'Não informado';
       paidBrl = 0;
@@ -4832,9 +4839,16 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       paidBrlAcc = brl;
       paidUsdAcc = finalUsd;
     } else if (pStatusAcc === 'Parcial') {
+      const pBrl = Number(acc.paidValueBRL) || 0;
+      const pUsd = Number(acc.paidValueUSD) || (pBrl > 0 ? Math.round((pBrl / rate) * 100) / 100 : 0);
+      const hasValidBrl = brl > 0 && pBrl > 0 && pBrl < brl;
+      const hasValidUsd = finalUsd > 0 && pUsd > 0 && pUsd < finalUsd;
+      if (!hasValidBrl && !hasValidUsd) {
+        return { success: false, error: 'Para pagamento Parcial, o valor pago deve ser maior que zero e menor que o valor total.' };
+      }
       expStatusAcc = 'Parcial';
-      paidBrlAcc = acc.paidValueBRL ?? 0;
-      paidUsdAcc = acc.paidValueUSD ?? 0;
+      paidBrlAcc = pBrl;
+      paidUsdAcc = pUsd;
     } else if (pStatusAcc === 'Não informado') {
       expStatusAcc = 'Não informado';
       paidBrlAcc = 0;
@@ -4979,9 +4993,16 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       paidBrlCar = brl;
       paidUsdCar = finalUsd;
     } else if (pStatusCar === 'Parcial') {
+      const pBrl = Number(rental.paidValueBRL) || 0;
+      const pUsd = Number(rental.paidValueUSD) || (pBrl > 0 ? Math.round((pBrl / rate) * 100) / 100 : 0);
+      const hasValidBrl = brl > 0 && pBrl > 0 && pBrl < brl;
+      const hasValidUsd = finalUsd > 0 && pUsd > 0 && pUsd < finalUsd;
+      if (!hasValidBrl && !hasValidUsd) {
+        return { success: false, error: 'Para pagamento Parcial, o valor pago deve ser maior que zero e menor que o valor total.' };
+      }
       expStatusCar = 'Parcial';
-      paidBrlCar = rental.paidValueBRL ?? 0;
-      paidUsdCar = rental.paidValueUSD ?? 0;
+      paidBrlCar = pBrl;
+      paidUsdCar = pUsd;
     } else if (pStatusCar === 'Não informado') {
       expStatusCar = 'Não informado';
       paidBrlCar = 0;
@@ -6263,9 +6284,16 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       paidBrlTicket = brl;
       paidUsdTicket = finalUsd;
     } else if (pStatusTicket === 'Parcial') {
+      const pBrl = Number(ticket.paidValueBRL) || 0;
+      const pUsd = Number(ticket.paidValueUSD) || (pBrl > 0 ? Math.round((pBrl / rate) * 100) / 100 : 0);
+      const hasValidBrl = brl > 0 && pBrl > 0 && pBrl < brl;
+      const hasValidUsd = finalUsd > 0 && pUsd > 0 && pUsd < finalUsd;
+      if (!hasValidBrl && !hasValidUsd) {
+        return { success: false, error: 'Para pagamento Parcial, o valor pago deve ser maior que zero e menor que o valor total.' };
+      }
       expStatusTicket = 'Parcial';
-      paidBrlTicket = ticket.paidValueBRL ?? 0;
-      paidUsdTicket = ticket.paidValueUSD ?? 0;
+      paidBrlTicket = pBrl;
+      paidUsdTicket = pUsd;
     } else if (pStatusTicket === 'Não informado') {
       expStatusTicket = 'Não informado';
       paidBrlTicket = 0;
