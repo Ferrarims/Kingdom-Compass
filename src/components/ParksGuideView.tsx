@@ -220,9 +220,12 @@ export const ParksGuideView: React.FC = () => {
 
   useConfirmationKeyboard({
     isOpen: !!ticketToDelete,
-    onConfirm: () => {
+    onConfirm: async () => {
       if (ticketToDelete) {
-        deleteParkTicket(ticketToDelete.id);
+        const res = await deleteParkTicket(ticketToDelete.id);
+        if (res && !res.success) {
+          return;
+        }
         setTicketToDelete(null);
       }
     },
@@ -1852,8 +1855,11 @@ export const ParksGuideView: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  deleteParkTicket(ticketToDelete.id);
+                onClick={async () => {
+                  const res = await deleteParkTicket(ticketToDelete.id);
+                  if (res && !res.success) {
+                    return;
+                  }
                   setTicketToDelete(null);
                 }}
                 className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-sm transition-colors cursor-pointer flex items-center gap-1.5"

@@ -3120,26 +3120,181 @@ export const SupabaseService = {
   },
 
   /**
-   * Delete Park Ticket and its linked expense
+   * Delete Park Ticket with snapshot capture & compensation rollback
    */
-  async deleteParkTicket(id: string): Promise<boolean> {
+  async deleteParkTicket(id: string, tripId?: string): Promise<{ success: boolean; error?: string }> {
     try {
-      if (!id) return false;
-      const cleanId = ensureValidUUID(id, 'ticket', id);
-      const expId = generateDeterministicUUID('ticket-expense', cleanId);
-      const expIdOld = generateDeterministicUUID('ticket-expense', id);
-      
-      await Promise.allSettled([
-        supabase.from('park_ticket_purchases').delete().eq('id', cleanId),
-        supabase.from('park_ticket_purchases').delete().eq('id', id),
-        supabase.from('expenses').delete().eq('id', expId),
-        supabase.from('expenses').delete().eq('id', expIdOld),
-        supabase.from('expenses').delete().eq('source_id', cleanId),
-        supabase.from('expenses').delete().eq('source_id', id),
-      ]);
-      return true;
-    } catch {
-      return false;
+      if (!id) return { success: false, error: 'ID do ingresso não informado' };
+
+      // 1. Instantâneo de segurança antes de qualquer exclusão
+      let snapshotExpenses: any[] = [];
+      let snapshotSchedules: any[] = [];
+      let snapshotTicket: any = null;
+
+      if (tripId) {
+        const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+        const expId = generateDeterministicUUID('ticket-expense', id);
+        const legacyId = `exp-ticket-${id}`;
+
+        // Capturar snapshot do próprio ingresso caso seja necessária restauração
+        const { data: ticketRow, error: ticketFetchErr } = await supabase
+          .from('park_ticket_purchases')
+          .select('*')
+          .eq('trip_id', cleanTripId)
+          .eq('id', id)
+          .maybeSingle();
+
+        if (ticketFetchErr && !isSupabaseMissingTableError(ticketFetchErr)) {
+          return { success: false, error: `Falha ao carregar instantâneo do ingresso: ${ticketFetchErr.message}` };
+        }
+        if (ticketRow) {
+          snapshotTicket = ticketRow;
+        }
+
+        // Capturar despesas estritamente por (trip_id, source_type = 'park_ticket' e source_id = id)
+        const { data: expRows1, error: expErr1 } = await supabase
+          .from('expenses')
+          .select('*')
+          .eq('trip_id', cleanTripId)
+          .eq('source_type', 'park_ticket')
+          .eq('source_id', id);
+
+        if (expErr1 && !isSupabaseMissingTableError(expErr1)) {
+          return { success: false, error: `Falha ao carregar instantâneo de despesas por origem: ${expErr1.message}` };
+        }
+
+        // Capturar despesas por ID determinístico ou legado dentro da mesma viagem (trip_id)
+        const { data: expRows2, error: expErr2 } = await supabase
+          .from('expenses')
+          .select('*')
+          .eq('trip_id', cleanTripId)
+          .in('id', [expId, legacyId]);
+
+        if (expErr2 && !isSupabaseMissingTableError(expErr2)) {
+          return { success: false, error: `Falha ao carregar instantâneo de despesas por ID: ${expErr2.message}` };
+        }
+
+        // Unificar e deduplicar snapshots de despesas
+        const combinedExpenses = [...(expRows1 || []), ...(expRows2 || [])];
+        const seenExpIds = new Set<string>();
+        for (const e of combinedExpenses) {
+          if (e && e.id && !seenExpIds.has(e.id)) {
+            seenExpIds.add(e.id);
+            snapshotExpenses.push(e);
+          }
+        }
+
+        // Capturar horários associados ao ingresso (source_type = 'ticket')
+        const { data: schedRows, error: schedErr } = await supabase
+          .from('hourly_schedules')
+          .select('*')
+          .eq('trip_id', cleanTripId)
+          .eq('source_type', 'ticket')
+          .eq('source_id', id);
+
+        if (schedErr && !isSupabaseMissingTableError(schedErr)) {
+          return { success: false, error: `Falha ao carregar instantâneo de horários: ${schedErr.message}` };
+        }
+
+        if (schedRows) snapshotSchedules = schedRows;
+      }
+
+      // Função de restauração compensatória caso alguma etapa subsequente falhe
+      const rollbackAll = async (restoreExpenses: boolean, restoreSchedules: boolean, restoreTicket: boolean) => {
+        const errors: string[] = [];
+        if (restoreTicket && snapshotTicket) {
+          const { error: tktErr } = await supabase.from('park_ticket_purchases').upsert(snapshotTicket, { onConflict: 'id' });
+          if (tktErr && !isSupabaseMissingTableError(tktErr)) {
+            errors.push(`Restauração do ingresso falhou: ${tktErr.message}`);
+          }
+        }
+        if (restoreExpenses && snapshotExpenses.length > 0) {
+          const { error: expErr } = await supabase.from('expenses').upsert(snapshotExpenses, { onConflict: 'id' });
+          if (expErr && !isSupabaseMissingTableError(expErr)) {
+            errors.push(`Restauração de despesas falhou: ${expErr.message}`);
+          }
+        }
+        if (restoreSchedules && snapshotSchedules.length > 0) {
+          const { error: schedErr } = await supabase.from('hourly_schedules').upsert(snapshotSchedules, { onConflict: 'id' });
+          if (schedErr && !isSupabaseMissingTableError(schedErr)) {
+            errors.push(`Restauração de horários falhou: ${schedErr.message}`);
+          }
+        }
+        return {
+          success: errors.length === 0,
+          error: errors.length > 0 ? errors.join('; ') : undefined,
+        };
+      };
+
+      // 2. Sequência de exclusões com compensação confiável
+      if (tripId) {
+        const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+
+        // Etapa A: Excluir despesas financeiras restritas por trip_id e source_type = 'park_ticket'
+        const expDelRes = await deleteExpensesBySourceInDb(cleanTripId, 'park_ticket', id);
+        if (!expDelRes.success) {
+          return { success: false, error: expDelRes.error || 'Falha ao excluir despesas financeiras do ingresso' };
+        }
+
+        // Etapa B: Excluir horários da agenda (source_type = 'ticket')
+        const schedDelRes = await this.deleteHourlySchedulesBySource(cleanTripId, id, 'ticket');
+        if (!schedDelRes.success) {
+          // Compensação: Restaurar despesas excluídas na Etapa A
+          const rollRes = await rollbackAll(true, false, false);
+          if (!rollRes.success) {
+            return {
+              success: false,
+              error: `Falha ao excluir horários do ingresso (${schedDelRes.error}). A restauração das despesas falhou parcialmente: ${rollRes.error}. O banco de dados pode estar em estado inconsistente.`,
+            };
+          }
+          return { success: false, error: `${schedDelRes.error || 'Falha ao excluir horários do ingresso'}. As despesas foram restauradas com sucesso no banco.` };
+        }
+      }
+
+      // Etapa C: Excluir o registro em park_ticket_purchases restrito por trip_id e id, e verificar linhas afetadas
+      let ticketQuery = supabase.from('park_ticket_purchases').delete().eq('id', id);
+      if (tripId) {
+        const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+        ticketQuery = ticketQuery.eq('trip_id', cleanTripId);
+      }
+      const { data: deletedTicketRows, error: ticketErr } = await ticketQuery.select('id');
+
+      // Tratar QUALQUER erro na tabela principal (inclusive tabela ausente) como falha
+      if (ticketErr) {
+        const rollRes = await rollbackAll(true, true, false);
+        const errDetail = isSupabaseMissingTableError(ticketErr)
+          ? 'Tabela park_ticket_purchases não encontrada ou aguardando criação no Supabase'
+          : ticketErr.message;
+        if (!rollRes.success) {
+          return {
+            success: false,
+            error: `Falha ao excluir ingresso (${errDetail}). A restauração dos dados associados falhou parcialmente: ${rollRes.error}. O banco de dados pode estar em estado inconsistente.`,
+          };
+        }
+        return {
+          success: false,
+          error: `Falha ao excluir ingresso (${errDetail}). Registros associados (despesas e horários) foram restaurados com sucesso no banco.`,
+        };
+      }
+
+      // Confirmar que pelo menos 1 linha foi efetivamente removida
+      if (!deletedTicketRows || deletedTicketRows.length === 0) {
+        const rollRes = await rollbackAll(true, true, false);
+        if (!rollRes.success) {
+          return {
+            success: false,
+            error: `Nenhum ingresso foi removido do Supabase (0 linhas afetadas para esta viagem). A restauração dos dados associados falhou parcialmente: ${rollRes.error}. O banco de dados pode estar em estado inconsistente.`,
+          };
+        }
+        return {
+          success: false,
+          error: `Nenhum ingresso foi removido do Supabase (0 linhas afetadas para esta viagem). Registros associados (despesas e horários) foram restaurados com sucesso no banco.`,
+        };
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro ao excluir ingresso' };
     }
   },
 
@@ -3228,11 +3383,15 @@ export const SupabaseService = {
         const toDelete = existing.map((r: any) => r.id).filter((id: string) => !currentIds.includes(id));
         if (toDelete.length > 0) {
           await supabase.from('park_ticket_purchases').delete().eq('trip_id', cleanTripId).in('id', toDelete);
-          // Delete related expenses
+          // Delete related expenses with strict trip_id and source_type scoping
           for (const delId of toDelete) {
-            const expId = generateDeterministicUUID('ticket-expense', delId);
-            await supabase.from('expenses').delete().eq('id', expId);
-            await supabase.from('expenses').delete().eq('source_id', delId);
+            await deleteExpensesBySourceInDb(cleanTripId, 'park_ticket', delId);
+            await supabase
+              .from('hourly_schedules')
+              .delete()
+              .eq('trip_id', cleanTripId)
+              .eq('source_type', 'ticket')
+              .eq('source_id', delId);
           }
         }
       }
@@ -3270,6 +3429,7 @@ export const SupabaseService = {
 
   /**
    * Save or Update a single Park Ticket Purchase in Supabase
+   * Note: Financial expense synchronization is handled exclusively by PlannerContext to prevent race conditions and duplicate writes.
    */
   async saveParkTicket(
     tripId: string,
@@ -3336,23 +3496,6 @@ export const SupabaseService = {
           return { success: false, error: 'Tabela park_ticket_purchases aguardando criação no Supabase.' };
         }
         return { success: false, error: upsertErr.message };
-      }
-
-      // Sincronizar automaticamente com a tabela de expenses
-      const cleanTicketId = dbRow.id || ensureValidUUID(ticket.id, 'ticket', cleanTripId + '-' + ticket.title);
-      const syncRes = await syncToExpenses(cleanTripId, 'park_ticket', cleanTicketId, {
-        title: `Ingresso: ${ticket.title || 'Ingresso de Parques'}`,
-        category: 'Ingressos',
-        usd: ticket.costUSD || 0,
-        brl: ticket.costBRL || 0,
-        payerId: ticket.payerId || 'all',
-        travelerIds: ticket.travelerIds || ['all'],
-        status: ticket.paymentStatus === 'Pago' ? 'Pago' : 'Pendente',
-        notes: `Voucher: ${ticket.confirmationCode || '---'} | Qtd: ${ticket.quantity || 1}`
-      }, fallbackTrip);
-
-      if (!syncRes.success) {
-        return { success: false, error: syncRes.error || 'Erro ao sincronizar despesa do ingresso' };
       }
 
       return { success: true };
