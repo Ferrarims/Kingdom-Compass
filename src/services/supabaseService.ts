@@ -350,6 +350,36 @@ export async function deleteExpensesBySourceInDb(
 }
 
 /**
+ * Auxiliar para restauração de compensação em caso de falha em etapas de exclusão.
+ * Verifica os erros de cada operação de upsert e confirma se a restauração foi bem-sucedida.
+ */
+async function rollbackCompensation(
+  snapshotExpenses: any[],
+  snapshotSchedules: any[]
+): Promise<{ success: boolean; error?: string }> {
+  const errors: string[] = [];
+
+  if (snapshotExpenses && snapshotExpenses.length > 0) {
+    const { error: expErr } = await supabase.from('expenses').upsert(snapshotExpenses, { onConflict: 'id' });
+    if (expErr && !isSupabaseMissingTableError(expErr)) {
+      errors.push(`Restauração de despesas falhou: ${expErr.message}`);
+    }
+  }
+
+  if (snapshotSchedules && snapshotSchedules.length > 0) {
+    const { error: schedErr } = await supabase.from('hourly_schedules').upsert(snapshotSchedules, { onConflict: 'id' });
+    if (schedErr && !isSupabaseMissingTableError(schedErr)) {
+      errors.push(`Restauração de horários falhou: ${schedErr.message}`);
+    }
+  }
+
+  if (errors.length > 0) {
+    return { success: false, error: errors.join('; ') };
+  }
+  return { success: true };
+}
+
+/**
  * Sincroniza um gasto de outra tabela (voos, hotéis, etc.) com a tabela de expenses central.
  * Regra obrigatória: se o valor for zero nas duas moedas (USD e BRL), a despesa vinculada
  * é imediatamente excluída da tabela de expenses, mesmo se o status estiver como "Pago".
@@ -2200,26 +2230,60 @@ export const SupabaseService = {
     try {
       if (!id) return { success: false, error: 'ID do voo não informado' };
 
-      // 1. Instantâneo de segurança antes das exclusões
+      // 1. Instantâneo de segurança antes de qualquer exclusão
       let snapshotExpenses: any[] = [];
       let snapshotSchedules: any[] = [];
 
       if (tripId) {
         const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
-        const { data: expRows } = await supabase
+        const expId = generateDeterministicUUID('flight-expense', id);
+        const legacyId = `exp-flight-${id}`;
+
+        // Capturar despesas por (source_type = 'flight' e source_id = id)
+        const { data: expRows1, error: expErr1 } = await supabase
           .from('expenses')
           .select('*')
           .eq('trip_id', cleanTripId)
           .eq('source_type', 'flight')
           .eq('source_id', id);
-        if (expRows) snapshotExpenses = expRows;
 
-        const { data: schedRows } = await supabase
+        if (expErr1 && !isSupabaseMissingTableError(expErr1)) {
+          return { success: false, error: `Falha ao carregar instantâneo de despesas por origem: ${expErr1.message}` };
+        }
+
+        // Capturar despesas por ID determinístico ou legado
+        const { data: expRows2, error: expErr2 } = await supabase
+          .from('expenses')
+          .select('*')
+          .eq('trip_id', cleanTripId)
+          .in('id', [expId, legacyId]);
+
+        if (expErr2 && !isSupabaseMissingTableError(expErr2)) {
+          return { success: false, error: `Falha ao carregar instantâneo de despesas por ID: ${expErr2.message}` };
+        }
+
+        // Unificar e deduplicar snapshots de despesas
+        const combinedExpenses = [...(expRows1 || []), ...(expRows2 || [])];
+        const seenExpIds = new Set<string>();
+        for (const e of combinedExpenses) {
+          if (e && e.id && !seenExpIds.has(e.id)) {
+            seenExpIds.add(e.id);
+            snapshotExpenses.push(e);
+          }
+        }
+
+        // Capturar horários associados ao voo
+        const { data: schedRows, error: schedErr } = await supabase
           .from('hourly_schedules')
           .select('*')
           .eq('trip_id', cleanTripId)
           .eq('source_type', 'flight')
           .eq('source_id', id);
+
+        if (schedErr && !isSupabaseMissingTableError(schedErr)) {
+          return { success: false, error: `Falha ao carregar instantâneo de horários: ${schedErr.message}` };
+        }
+
         if (schedRows) snapshotSchedules = schedRows;
       }
 
@@ -2235,10 +2299,14 @@ export const SupabaseService = {
         const schedDelRes = await this.deleteHourlySchedulesBySource(tripId, id, 'flight');
         if (!schedDelRes.success) {
           // Compensação: Restaurar despesas excluídas na Etapa A
-          if (snapshotExpenses.length > 0) {
-            await supabase.from('expenses').upsert(snapshotExpenses);
+          const rollRes = await rollbackCompensation(snapshotExpenses, []);
+          if (!rollRes.success) {
+            return {
+              success: false,
+              error: `Falha ao excluir horários do voo (${schedDelRes.error}). A restauração das despesas falhou parcialmente: ${rollRes.error}. O banco de dados pode estar em estado inconsistente.`,
+            };
           }
-          return { success: false, error: schedDelRes.error || 'Falha ao excluir horários do voo no roteiro' };
+          return { success: false, error: `${schedDelRes.error || 'Falha ao excluir horários do voo'}. As despesas foram restauradas com sucesso no banco.` };
         }
       }
 
@@ -2246,13 +2314,14 @@ export const SupabaseService = {
       const { error: flightErr } = await supabase.from('flight_segments').delete().eq('id', id);
       if (flightErr && !isSupabaseMissingTableError(flightErr)) {
         // Compensação: Restaurar despesas e horários excluídos
-        if (snapshotExpenses.length > 0) {
-          await supabase.from('expenses').upsert(snapshotExpenses);
+        const rollRes = await rollbackCompensation(snapshotExpenses, snapshotSchedules);
+        if (!rollRes.success) {
+          return {
+            success: false,
+            error: `Falha ao excluir voo (${flightErr.message}). A restauração dos dados associados falhou parcialmente: ${rollRes.error}. O banco de dados pode estar em estado inconsistente.`,
+          };
         }
-        if (snapshotSchedules.length > 0) {
-          await supabase.from('hourly_schedules').upsert(snapshotSchedules);
-        }
-        return { success: false, error: flightErr.message };
+        return { success: false, error: `${flightErr.message}. Registros associados (despesas e horários) foram restaurados com sucesso no banco.` };
       }
 
       return { success: true };
@@ -2425,26 +2494,60 @@ export const SupabaseService = {
     try {
       if (!id) return { success: false, error: 'ID da hospedagem não informado' };
 
-      // 1. Instantâneo de segurança antes das exclusões
+      // 1. Instantâneo de segurança antes de qualquer exclusão
       let snapshotExpenses: any[] = [];
       let snapshotSchedules: any[] = [];
 
       if (tripId) {
         const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
-        const { data: expRows } = await supabase
+        const expId = generateDeterministicUUID('acc-expense', id);
+        const legacyId = `exp-acc-${id}`;
+
+        // Capturar despesas por (source_type = 'accommodation' e source_id = id)
+        const { data: expRows1, error: expErr1 } = await supabase
           .from('expenses')
           .select('*')
           .eq('trip_id', cleanTripId)
           .eq('source_type', 'accommodation')
           .eq('source_id', id);
-        if (expRows) snapshotExpenses = expRows;
 
-        const { data: schedRows } = await supabase
+        if (expErr1 && !isSupabaseMissingTableError(expErr1)) {
+          return { success: false, error: `Falha ao carregar instantâneo de despesas por origem: ${expErr1.message}` };
+        }
+
+        // Capturar despesas por ID determinístico ou legado
+        const { data: expRows2, error: expErr2 } = await supabase
+          .from('expenses')
+          .select('*')
+          .eq('trip_id', cleanTripId)
+          .in('id', [expId, legacyId]);
+
+        if (expErr2 && !isSupabaseMissingTableError(expErr2)) {
+          return { success: false, error: `Falha ao carregar instantâneo de despesas por ID: ${expErr2.message}` };
+        }
+
+        // Unificar e deduplicar snapshots de despesas
+        const combinedExpenses = [...(expRows1 || []), ...(expRows2 || [])];
+        const seenExpIds = new Set<string>();
+        for (const e of combinedExpenses) {
+          if (e && e.id && !seenExpIds.has(e.id)) {
+            seenExpIds.add(e.id);
+            snapshotExpenses.push(e);
+          }
+        }
+
+        // Capturar horários associados à hospedagem
+        const { data: schedRows, error: schedErr } = await supabase
           .from('hourly_schedules')
           .select('*')
           .eq('trip_id', cleanTripId)
           .eq('source_type', 'accommodation')
           .eq('source_id', id);
+
+        if (schedErr && !isSupabaseMissingTableError(schedErr)) {
+          return { success: false, error: `Falha ao carregar instantâneo de horários: ${schedErr.message}` };
+        }
+
         if (schedRows) snapshotSchedules = schedRows;
       }
 
@@ -2460,10 +2563,14 @@ export const SupabaseService = {
         const schedDelRes = await this.deleteHourlySchedulesBySource(tripId, id, 'accommodation');
         if (!schedDelRes.success) {
           // Compensação: Restaurar despesas excluídas na Etapa A
-          if (snapshotExpenses.length > 0) {
-            await supabase.from('expenses').upsert(snapshotExpenses);
+          const rollRes = await rollbackCompensation(snapshotExpenses, []);
+          if (!rollRes.success) {
+            return {
+              success: false,
+              error: `Falha ao excluir horários da hospedagem (${schedDelRes.error}). A restauração das despesas falhou parcialmente: ${rollRes.error}. O banco de dados pode estar em estado inconsistente.`,
+            };
           }
-          return { success: false, error: schedDelRes.error || 'Falha ao excluir horários da hospedagem no roteiro' };
+          return { success: false, error: `${schedDelRes.error || 'Falha ao excluir horários da hospedagem'}. As despesas foram restauradas com sucesso no banco.` };
         }
       }
 
@@ -2471,13 +2578,14 @@ export const SupabaseService = {
       const { error: accErr } = await supabase.from('accommodations').delete().eq('id', id);
       if (accErr && !isSupabaseMissingTableError(accErr)) {
         // Compensação: Restaurar despesas e horários excluídos
-        if (snapshotExpenses.length > 0) {
-          await supabase.from('expenses').upsert(snapshotExpenses);
+        const rollRes = await rollbackCompensation(snapshotExpenses, snapshotSchedules);
+        if (!rollRes.success) {
+          return {
+            success: false,
+            error: `Falha ao excluir hospedagem (${accErr.message}). A restauração dos dados associados falhou parcialmente: ${rollRes.error}. O banco de dados pode estar em estado inconsistente.`,
+          };
         }
-        if (snapshotSchedules.length > 0) {
-          await supabase.from('hourly_schedules').upsert(snapshotSchedules);
-        }
-        return { success: false, error: accErr.message };
+        return { success: false, error: `${accErr.message}. Registros associados (despesas e horários) foram restaurados com sucesso no banco.` };
       }
 
       return { success: true };
