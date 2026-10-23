@@ -3457,8 +3457,11 @@ export const SupabaseService = {
         .select('id')
         .eq('trip_id', cleanTripId);
 
-      if (existingErr && !isSupabaseMissingTableError(existingErr)) {
-        return { success: false, error: `Falha ao carregar ingressos existentes: ${existingErr.message}` };
+      if (existingErr) {
+        const errReason = isSupabaseMissingTableError(existingErr)
+          ? 'Tabela park_ticket_purchases não encontrada ou aguardando criação no Supabase'
+          : existingErr.message;
+        return { success: false, error: `Falha ao carregar ingressos existentes: ${errReason}` };
       }
 
       if (existing && existing.length > 0) {
@@ -3471,8 +3474,11 @@ export const SupabaseService = {
             .eq('trip_id', cleanTripId)
             .in('id', toDelete);
 
-          if (tktFetchErr && !isSupabaseMissingTableError(tktFetchErr)) {
-            return { success: false, error: `Falha ao carregar instantâneo de ingressos para sincronização: ${tktFetchErr.message}` };
+          if (tktFetchErr) {
+            const errReason = isSupabaseMissingTableError(tktFetchErr)
+              ? 'Tabela park_ticket_purchases não encontrada ou aguardando criação no Supabase'
+              : tktFetchErr.message;
+            return { success: false, error: `Falha ao carregar instantâneo de ingressos para sincronização: ${errReason}` };
           }
 
           const { data: expRows1, error: expErr1 } = await supabase
@@ -3640,16 +3646,43 @@ export const SupabaseService = {
             }
           }
 
-          // Etapa 3: Excluir os registros de ingressos obsoletos no Supabase
-          const { error: delErr } = await supabase
+          // Etapa 3: Excluir os registros de ingressos obsoletos no Supabase e validar linhas afetadas
+          const { data: deletedTicketRows, error: delErr } = await supabase
             .from('park_ticket_purchases')
             .delete()
             .eq('trip_id', cleanTripId)
-            .in('id', toDelete);
+            .in('id', toDelete)
+            .select('id');
 
-          if (delErr && !isSupabaseMissingTableError(delErr)) {
-            const primaryError = `Falha ao excluir ingressos obsoletos: ${delErr.message}`;
+          // Tratar QUALQUER erro (inclusive tabela ausente) como falha
+          if (delErr) {
+            const errDetail = isSupabaseMissingTableError(delErr)
+              ? 'Tabela park_ticket_purchases não encontrada ou aguardando criação no Supabase'
+              : delErr.message;
+            const primaryError = `Falha ao excluir ingressos obsoletos: ${errDetail}`;
             const rollRes = await rollbackSync(true, true, false);
+            if (!rollRes.success) {
+              return {
+                success: false,
+                error: `${primaryError}. ${rollRes.details} O banco de dados pode estar em estado parcialmente inconsistente.`,
+              };
+            }
+            return {
+              success: false,
+              error: `${primaryError}. ${rollRes.details}`,
+            };
+          }
+
+          // Confirmar que TODOS os IDs esperados em toDelete foram efetivamente removidos
+          const deletedIds = new Set((deletedTicketRows || []).map((r: any) => r?.id).filter(Boolean));
+          const missingIds = toDelete.filter((id) => !deletedIds.has(id));
+
+          if (missingIds.length > 0) {
+            const confirmedCount = deletedIds.size;
+            const expectedCount = toDelete.length;
+            const primaryError = `Exclusão em lote incompleta: esperava-se remover ${expectedCount} ingressos, mas ${confirmedCount} foram confirmados (não removidos: ${missingIds.join(', ')})`;
+            // Restaurar despesas, horários e ingressos do snapshot
+            const rollRes = await rollbackSync(true, true, true);
             if (!rollRes.success) {
               return {
                 success: false,
