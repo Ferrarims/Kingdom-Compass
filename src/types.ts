@@ -435,6 +435,16 @@ export interface CarRentalBooking {
   notes?: string;
 }
 
+export type AccommodationOperationalStatus =
+  | 'Reservado / Confirmado'
+  | 'Confirmado'
+  | 'Check-in Realizado'
+  | 'Concluído'
+  | 'Cancelado'
+  | string;
+
+export type AccommodationPaymentStatus = 'Pago' | 'Pendente' | 'Não informado';
+
 export interface AccommodationBooking {
   id: string;
   type: 'hotel' | 'resort' | 'airbnb' | 'house' | 'other';
@@ -448,7 +458,8 @@ export interface AccommodationBooking {
   roomType?: string; // e.g., "2 Quartos Standard Preferred"
   costUSD?: number;
   costBRL?: number;
-  status: 'Reservado / Confirmado' | 'Pago' | 'Pendente' | 'Concluído' | 'Não informado' | string;
+  status: AccommodationOperationalStatus;
+  paymentStatus?: AccommodationPaymentStatus;
   payerId?: string;
   travelerIds?: string[];
   guestName?: string; // e.g., "Nome do Titular"

@@ -54,6 +54,7 @@ export const AccommodationsView: React.FC = () => {
     supabaseStatus,
     settings,
     openOverviewModal,
+    addNotification,
   } = usePlanner();
 
   // Determine min and max allowed dates for the active trip
@@ -112,7 +113,8 @@ export const AccommodationsView: React.FC = () => {
     roomType: '',
     costUSD: 0,
     costBRL: 0,
-    status: 'Não informado',
+    status: 'Reservado / Confirmado',
+    paymentStatus: 'Não informado',
     payerId: settings.currentUserId || 'all',
     travelerIds: ['all'],
     guestName: '',
@@ -157,7 +159,8 @@ export const AccommodationsView: React.FC = () => {
       roomType: '',
       costUSD: 0,
       costBRL: 0,
-      status: 'Não informado',
+      status: 'Reservado / Confirmado',
+      paymentStatus: 'Não informado',
       payerId: settings.currentUserId || 'all',
       travelerIds: ['all'],
       guestName: '',
@@ -183,14 +186,22 @@ export const AccommodationsView: React.FC = () => {
       ? acc.checkOutDate
       : (tripMaxDate >= validCheckIn ? tripMaxDate : validCheckIn);
 
-    // Identificar status de pagamento sem presumir pago para confirmações operacionais
-    let initialPaymentStatus: 'Pago' | 'Pendente' | 'Não informado' = 'Não informado';
-    if (acc.status === 'Pago') {
-      initialPaymentStatus = 'Pago';
+    // Preservar rigorosamente o status operacional legado da acomodação
+    let operationalStatus = acc.status || 'Reservado / Confirmado';
+    if (operationalStatus === 'Pago' || operationalStatus === 'Pendente' || operationalStatus === 'Não informado') {
+      operationalStatus = 'Reservado / Confirmado';
+    }
+
+    // Identificar status de pagamento dedicado sem presumir pago para confirmações operacionais
+    let paymentStatus: 'Pago' | 'Pendente' | 'Não informado' = 'Não informado';
+    if (acc.paymentStatus) {
+      paymentStatus = acc.paymentStatus;
+    } else if (acc.status === 'Pago') {
+      paymentStatus = 'Pago';
     } else if (acc.status === 'Pendente' || acc.status === 'Falta Pagar') {
-      initialPaymentStatus = 'Pendente';
+      paymentStatus = 'Pendente';
     } else {
-      initialPaymentStatus = 'Não informado';
+      paymentStatus = 'Não informado';
     }
 
     setFormData({
@@ -205,7 +216,8 @@ export const AccommodationsView: React.FC = () => {
       roomType: acc.roomType || '',
       costUSD: acc.costUSD || 0,
       costBRL: acc.costBRL || (acc.costUSD ? acc.costUSD * (settings.dollarRate || 5.75) : 0),
-      status: initialPaymentStatus,
+      status: operationalStatus,
+      paymentStatus,
       payerId: acc.payerId || 'all',
       travelerIds: acc.travelerIds || ['all'],
       guestName: acc.guestName || '',
@@ -263,7 +275,7 @@ export const AccommodationsView: React.FC = () => {
 
       setValidationError(null);
 
-      let res: { success: boolean; error?: string };
+      let res: { success: boolean; error?: string; warning?: string };
       if (editingAcc) {
         res = await updateAccommodation(editingAcc.id, dataToSave);
       } else {
@@ -273,6 +285,10 @@ export const AccommodationsView: React.FC = () => {
       if (res && res.success === false) {
         setValidationError(res.error || 'Erro ao salvar hospedagem no Supabase.');
         return;
+      }
+
+      if (res?.warning) {
+        addNotification(`⚠️ ${res.warning}`);
       }
 
       setIsModalOpen(false);
@@ -859,11 +875,22 @@ export const AccommodationsView: React.FC = () => {
                           </span>
                         </div>
                       </div>
-                      <span className="text-[10px] text-amber-800 font-bold bg-amber-100/70 px-2 py-0.5 rounded-md border border-amber-200 w-fit">
-                        {acc.payerId && acc.payerId !== 'all'
-                          ? `Pago: ${settings.travelers.find((t) => t.id === acc.payerId)?.name || 'Viajante'}`
-                          : 'Rateio do Grupo'}
-                      </span>
+                      <div className="flex items-center gap-1.5 flex-wrap pt-1.5 border-t border-slate-200/70">
+                        <span className="text-[10px] text-amber-800 font-bold bg-amber-100/70 px-2 py-0.5 rounded-md border border-amber-200 w-fit">
+                          {acc.payerId && acc.payerId !== 'all'
+                            ? `Pago: ${settings.travelers.find((t) => t.id === acc.payerId)?.name || 'Viajante'}`
+                            : 'Rateio do Grupo'}
+                        </span>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border w-fit ${
+                          acc.paymentStatus === 'Pago'
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : acc.paymentStatus === 'Pendente'
+                            ? 'bg-amber-50 text-amber-700 border-amber-200'
+                            : 'bg-slate-100 text-slate-600 border-slate-200'
+                        }`}>
+                          {acc.paymentStatus === 'Pago' ? '● Pago' : acc.paymentStatus === 'Pendente' ? '○ Pendente' : '– Não informado'}
+                        </span>
+                      </div>
                     </div>
                   </div>
 
@@ -961,7 +988,7 @@ export const AccommodationsView: React.FC = () => {
                     })}
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div className="space-y-1">
                       <label className="text-xs font-bold text-slate-700 block">Nome do Hotel / Propriedade *</label>
                       <input
@@ -983,6 +1010,21 @@ export const AccommodationsView: React.FC = () => {
                         className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-semibold font-mono uppercase focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] bg-white"
                         placeholder="Ex: RES-DIS-98421"
                       />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs font-bold text-slate-700 block">Status da Reserva (Operacional)</label>
+                      <select
+                        value={formData.status}
+                        onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                        className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-bold focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] bg-white text-slate-800 cursor-pointer"
+                      >
+                        <option value="Reservado / Confirmado">Reservado / Confirmado</option>
+                        <option value="Confirmado">Confirmado</option>
+                        <option value="Check-in Realizado">Check-in Realizado</option>
+                        <option value="Concluído">Concluído</option>
+                        <option value="Cancelado">Cancelado</option>
+                      </select>
                     </div>
                   </div>
                 </div>
@@ -1195,17 +1237,11 @@ export const AccommodationsView: React.FC = () => {
                     costBRL: totalBRL ?? 0,
                   }));
                 }}
-                paymentStatus={
-                  formData.status === 'Pago'
-                    ? 'Pago'
-                    : formData.status === 'Pendente' || formData.status === 'Falta Pagar'
-                    ? 'Pendente'
-                    : 'Não informado'
-                }
+                paymentStatus={formData.paymentStatus || 'Não informado'}
                 onChangePaymentStatus={(status: PaymentStatusType) => {
                   setFormData((prev) => ({
                     ...prev,
-                    status,
+                    paymentStatus: status,
                   }));
                 }}
                 payerId={formData.payerId || 'all'}

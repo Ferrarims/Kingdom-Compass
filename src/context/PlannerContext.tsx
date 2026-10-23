@@ -1689,9 +1689,15 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   }, [accommodations]);
 
   // Helper para verificar se uma hospedagem é considerada paga
-  const isAccommodationPaid = (status?: string): boolean => {
-    if (!status) return false;
-    const s = status.trim().toLowerCase();
+  const isAccommodationPaid = (accOrStatus?: AccommodationBooking | string): boolean => {
+    if (!accOrStatus) return false;
+    if (typeof accOrStatus === 'object') {
+      if (accOrStatus.paymentStatus) {
+        return accOrStatus.paymentStatus === 'Pago';
+      }
+      return accOrStatus.status === 'Pago';
+    }
+    const s = accOrStatus.trim().toLowerCase();
     return s === 'pago';
   };
 
@@ -1828,7 +1834,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
 
       if (brl > 0 || finalUsd > 0) {
-        const isPaid = isAccommodationPaid(acc.status);
+        const isPaid = isAccommodationPaid(acc);
         const accTitle = `Hospedagem: ${acc.name || 'Reserva de Hotel / Airbnb'}`.trim();
         const accNotes = `Check-in: ${acc.checkInDate || '---'} | Check-out: ${acc.checkOutDate || '---'}${acc.address ? ' (' + acc.address + ')' : ''}`;
 
@@ -2956,12 +2962,13 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           const next = prevAccs.map((acc) => {
             const matches = (accSourceId && acc.id === accSourceId) || generateDeterministicUUID('acc-expense', acc.id) === id;
             if (matches) {
-              const newStatus = (updatedItem as ExpenseItem).status === 'Pago' ? 'Reservado / Confirmado' : ((updatedItem as ExpenseItem).status === 'Pendente' ? 'Pendente' : acc.status);
+              const expStatus = (updatedItem as ExpenseItem).status;
+              const nextPaymentStatus = expStatus === 'Pago' ? 'Pago' : 'Pendente';
               const upAcc: AccommodationBooking = {
                 ...acc,
                 costBRL: (updatedItem as ExpenseItem).estimatedValueBRL ?? acc.costBRL,
                 costUSD: (updatedItem as ExpenseItem).estimatedValueUSD ?? acc.costUSD,
-                status: newStatus as any,
+                paymentStatus: nextPaymentStatus as any,
                 payerId: (updatedItem as ExpenseItem).payerId,
                 travelerIds: (updatedItem as ExpenseItem).travelerIds,
               };
@@ -4246,7 +4253,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     const brl = acc.costBRL || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
     const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
 
-    const isPaid = isAccommodationPaid(acc.status);
+    const isPaid = isAccommodationPaid(acc);
     const accTitle = `Hospedagem: ${acc.name || 'Reserva de Hotel / Airbnb'}`.trim();
     const accNotes = `Check-in: ${acc.checkInDate || '---'} | Check-out: ${acc.checkOutDate || '---'}${acc.address ? ' (' + acc.address + ')' : ''}`;
 
@@ -5157,12 +5164,13 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   // Accommodation & Hotel / Airbnb Handlers
-  const addAccommodation = async (acc: Omit<AccommodationBooking, 'id'>): Promise<{ success: boolean; error?: string }> => {
+  const addAccommodation = async (acc: Omit<AccommodationBooking, 'id'>): Promise<{ success: boolean; error?: string; warning?: string }> => {
     const newAcc: AccommodationBooking = {
       ...acc,
       id: generateUUID(),
     };
 
+    let saveWarning: string | undefined;
     if (activeTripId) {
       const fallbackTrip = activeTrip || {
         id: activeTripId,
@@ -5177,6 +5185,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         const errMsg = saveRes.error || 'Erro ao salvar hospedagem no Supabase';
         addNotification(`❌ Falha ao salvar hospedagem: ${errMsg}`);
         return { success: false, error: errMsg };
+      }
+      if (saveRes.warning) {
+        saveWarning = saveRes.warning;
+        addNotification(`⚠️ ${saveRes.warning}`);
       }
     }
 
@@ -5195,18 +5207,19 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
 
     addNotification(`Cadastrou hospedagem (${acc.name}), sincronizou no roteiro diário e no banco de dados`);
-    return { success: true };
+    return { success: true, warning: saveWarning };
   };
 
   const updateAccommodation = async (
     id: string,
     updates: Partial<AccommodationBooking>
-  ): Promise<{ success: boolean; error?: string }> => {
+  ): Promise<{ success: boolean; error?: string; warning?: string }> => {
     const oldAcc = accommodations.find((a) => a.id === id);
     if (!oldAcc) return { success: false, error: 'Hospedagem não encontrada' };
 
     const updatedAcc = { ...oldAcc, ...updates };
 
+    let saveWarning: string | undefined;
     if (activeTripId) {
       const fallbackTrip = activeTrip || {
         id: activeTripId,
@@ -5221,6 +5234,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         const errMsg = saveRes.error || 'Erro ao atualizar hospedagem no Supabase';
         addNotification(`❌ Falha ao atualizar hospedagem: ${errMsg}`);
         return { success: false, error: errMsg };
+      }
+      if (saveRes.warning) {
+        saveWarning = saveRes.warning;
+        addNotification(`⚠️ ${saveRes.warning}`);
       }
     }
 
@@ -5239,7 +5256,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
 
     addNotification(`Atualizou informações da hospedagem e sincronizou no roteiro`);
-    return { success: true };
+    return { success: true, warning: saveWarning };
   };
 
   const deleteAccommodation = async (id: string): Promise<{ success: boolean; error?: string }> => {

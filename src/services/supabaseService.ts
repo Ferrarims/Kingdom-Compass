@@ -764,8 +764,10 @@ export function mapAccommodationToDb(a: AccommodationBooking, tripId: string): R
   const validTypes = ['hotel', 'resort', 'airbnb', 'house', 'other'];
   const type = validTypes.includes(a.type) ? a.type : 'hotel';
 
-  const validStatuses = ['Reservado / Confirmado', 'Pago', 'Pendente', 'Concluído', 'Não informado'];
-  const status = validStatuses.includes(a.status) ? a.status : (a.status || 'Não informado');
+  const operationalStatus =
+    a.status && a.status !== 'Pago' && a.status !== 'Pendente' && a.status !== 'Não informado'
+      ? a.status
+      : 'Reservado / Confirmado';
 
   const checkIn = sanitizeDate(a.checkInDate) || '2026-12-30';
   const checkOut = sanitizeDate(a.checkOutDate) || '2027-01-10';
@@ -783,7 +785,8 @@ export function mapAccommodationToDb(a: AccommodationBooking, tripId: string): R
     room_type: a.roomType || null,
     cost_usd: a.costUSD !== undefined && a.costUSD !== null && !isNaN(Number(a.costUSD)) ? Number(a.costUSD) : null,
     cost_brl: a.costBRL !== undefined && a.costBRL !== null && !isNaN(Number(a.costBRL)) ? Number(a.costBRL) : null,
-    status,
+    status: operationalStatus,
+    payment_status: a.paymentStatus && a.paymentStatus !== 'Não informado' ? a.paymentStatus : null,
     payer_id: sanitizeTravelerForeignKey(a.payerId),
     guest_name: a.guestName || null,
     total_guests: typeof a.totalGuests === 'number' && !isNaN(a.totalGuests) && a.totalGuests > 0 ? Math.floor(a.totalGuests) : 1,
@@ -802,6 +805,23 @@ export function mapAccommodationToDb(a: AccommodationBooking, tripId: string): R
 }
 
 export function mapDbToAccommodation(row: any): AccommodationBooking {
+  let operationalStatus: string = row.status || 'Reservado / Confirmado';
+  let paymentStatus: 'Pago' | 'Pendente' | 'Não informado' = 'Não informado';
+
+  if (row.payment_status) {
+    if (row.payment_status === 'Pago') paymentStatus = 'Pago';
+    else if (row.payment_status === 'Pendente') paymentStatus = 'Pendente';
+    else paymentStatus = 'Não informado';
+  } else if (row.status === 'Pago') {
+    paymentStatus = 'Pago';
+    operationalStatus = 'Reservado / Confirmado';
+  } else if (row.status === 'Pendente' || row.status === 'Falta Pagar') {
+    paymentStatus = 'Pendente';
+    operationalStatus = 'Reservado / Confirmado';
+  } else {
+    paymentStatus = 'Não informado';
+  }
+
   return {
     id: row.id,
     type: row.type || 'hotel',
@@ -815,7 +835,8 @@ export function mapDbToAccommodation(row: any): AccommodationBooking {
     roomType: row.room_type || undefined,
     costUSD: row.cost_usd !== null && row.cost_usd !== undefined ? Number(row.cost_usd) : undefined,
     costBRL: row.cost_brl !== null && row.cost_brl !== undefined ? Number(row.cost_brl) : undefined,
-    status: row.status || 'Reservado / Confirmado',
+    status: operationalStatus,
+    paymentStatus,
     payerId: row.payer_id || 'all',
     guestName: row.guest_name || undefined,
     totalGuests: row.total_guests !== null && row.total_guests !== undefined ? Number(row.total_guests) : 1,
@@ -2311,7 +2332,16 @@ export const SupabaseService = {
 
       if (accommodations && accommodations.length > 0) {
         const dbRows = accommodations.map((a) => mapAccommodationToDb(a, tripId));
-        const { error: upsertErr } = await supabase.from('accommodations').upsert(dbRows, { onConflict: 'id' });
+        let { error: upsertErr } = await supabase.from('accommodations').upsert(dbRows, { onConflict: 'id' });
+        if (upsertErr && (upsertErr.message?.includes('payment_status') || upsertErr.details?.includes('payment_status') || upsertErr.code === 'PGRST204')) {
+          const fallbackRows = dbRows.map((r) => {
+            const copy = { ...r };
+            delete copy.payment_status;
+            return copy;
+          });
+          const retry = await supabase.from('accommodations').upsert(fallbackRows, { onConflict: 'id' });
+          upsertErr = retry.error;
+        }
         if (upsertErr) {
           if (isSupabaseMissingTableError(upsertErr)) {
             return { success: false, error: 'Tabela accommodations aguardando criação no Supabase.' };
@@ -2333,7 +2363,7 @@ export const SupabaseService = {
     tripId: string,
     accommodation: AccommodationBooking,
     fallbackTrip?: Partial<Trip>
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; error?: string; warning?: string }> {
     try {
       if (!tripId || !accommodation) {
         return { success: false, error: 'tripId ou dados da acomodação ausentes' };
@@ -2379,9 +2409,21 @@ export const SupabaseService = {
 
       // 2. Upsert accommodation
       const dbRow = mapAccommodationToDb(accommodation, tripId);
-      const { error } = await supabase
+      let { error } = await supabase
         .from('accommodations')
         .upsert(dbRow, { onConflict: 'id' });
+
+      let paymentStatusNotPersisted = false;
+      // Fallback gracioso se a coluna payment_status ainda não foi criada no Supabase via migração SQL
+      if (error && (error.message?.includes('payment_status') || error.details?.includes('payment_status') || error.code === 'PGRST204')) {
+        const fallbackRow = { ...dbRow };
+        delete fallbackRow.payment_status;
+        const retryRes = await supabase.from('accommodations').upsert(fallbackRow, { onConflict: 'id' });
+        error = retryRes.error;
+        if (!error) {
+          paymentStatusNotPersisted = true;
+        }
+      }
 
       if (error) {
         if (isSupabaseMissingTableError(error)) {
@@ -2390,7 +2432,8 @@ export const SupabaseService = {
         return { success: false, error: error.message };
       }
 
-      // 3. Sincronizar com a tabela de expenses
+      // 3. Sincronizar com a tabela de expenses usando o status de pagamento real
+      const expenseStatus = accommodation.paymentStatus === 'Pago' ? 'Pago' : 'Pendente';
       await syncToExpenses(tripId, 'accommodation', accommodation.id, {
         title: `Hospedagem: ${accommodation.name || 'Reserva'}`,
         category: 'Hospedagem',
@@ -2398,9 +2441,16 @@ export const SupabaseService = {
         brl: accommodation.costBRL || 0,
         payerId: accommodation.payerId || 'all',
         travelerIds: accommodation.travelerIds || ['all'],
-        status: accommodation.status === 'Pago' ? 'Pago' : 'Pendente',
+        status: expenseStatus,
         notes: `Check-in: ${accommodation.checkInDate || '---'} | Check-out: ${accommodation.checkOutDate || '---'}`
       }, fallbackTrip);
+
+      if (paymentStatusNotPersisted) {
+        return {
+          success: true,
+          warning: 'A hospedagem foi salva, mas o status de pagamento não pôde ser persistido porque a coluna "payment_status" ainda não existe no Supabase. Execute o script SQL de migração.'
+        };
+      }
 
       return { success: true };
     } catch (err: any) {
