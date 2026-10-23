@@ -1720,13 +1720,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       if (rentalOrStatus.paymentStatus) {
         return rentalOrStatus.paymentStatus === 'Pago';
       }
-      return isCarRentalPaid(rentalOrStatus.status);
+      // Migração legada explícita: somente se o status legado for exatamente 'Pago'
+      return rentalOrStatus.status === 'Pago';
     }
-    const s = rentalOrStatus.trim().toLowerCase();
-    if (s.includes('pendente') || s.includes('falta pagar') || s.includes('não informado') || s.includes('nao informado') || s.includes('planejado') || s.includes('previsão')) {
-      return false;
-    }
-    return s.includes('pago');
+    const s = rentalOrStatus.trim();
+    return s === 'Pago';
   };
 
   // Função utilitária para reconciliar e garantir que todos os itens comprados (voos, hotéis, carros, ingressos)
@@ -4537,7 +4535,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     return { success: true };
   };
 
-  const syncCarRentalExpense = async (rental: CarRentalBooking, rate: number): Promise<{ success: boolean; error?: string }> => {
+  const syncCarRentalExpense = async (
+    rental: CarRentalBooking,
+    rate: number,
+    options?: { skipRemoteSync?: boolean }
+  ): Promise<{ success: boolean; error?: string }> => {
     const expId = generateDeterministicUUID('car-expense', rental.id);
     const legacyId = `exp-car-${rental.id}`;
     const usd = Number(rental.costUSD) || 0;
@@ -4562,7 +4564,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         return nextExpenses;
       });
 
-      if (activeTripId) {
+      if (!options?.skipRemoteSync && activeTripId) {
         const delRes = await SupabaseService.deleteExpensesBySource(activeTripId, 'car_rental', rental.id);
         if (!delRes.success) {
           return { success: false, error: delRes.error || 'Erro ao excluir despesa do aluguel de veículo no Supabase' };
@@ -4643,7 +4645,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       return nextExpenses;
     });
 
-    if (activeTripId) {
+    if (!options?.skipRemoteSync && activeTripId) {
       const fallbackTrip = activeTrip || {
         id: activeTripId,
         tripName: settings.tripName,
@@ -5182,31 +5184,17 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     if (activeTripId) {
       try {
-        // 1. Primária: car_rentals
+        // 1. Primária: car_rentals e sincronização financeira em saveCarRental
         const res = await SupabaseService.saveCarRental(activeTripId, newRental, activeTrip || undefined);
         if (!res || !res.success) {
           setCarRentals(previousRentals);
           return { success: false, error: res?.error || 'Falha ao salvar aluguel de veículo no Supabase' };
         }
 
-        // 2. Secundária 1: despesa
-        const expRes = await syncCarRentalExpense(newRental, settings.dollarRate || 5.75);
-        if (!expRes.success) {
-          setCarRentals(previousRentals);
-          setExpenses(previousExpensesList);
-          const delRentalOk = await SupabaseService.deleteCarRental(newRental.id);
-          const expId = generateDeterministicUUID('car-expense', newRental.id);
-          const delExpOk = await SupabaseService.deleteExpense(expId);
-          const compFailures: string[] = [];
-          if (!delRentalOk) compFailures.push('car_rentals (remoção do aluguel falhou)');
-          if (!delExpOk) compFailures.push('expenses (remoção da despesa falhou)');
-          const compMsg = compFailures.length > 0
-            ? ` Atenção: limpeza compensatória incompleta no banco (${compFailures.join(', ')}).`
-            : ` O aluguel recém-criado foi limpo do banco de dados.`;
-          return { success: false, error: `Aluguel salvo, mas falhou ao registrar despesa: ${expRes.error}.${compMsg}` };
-        }
+        // 2. Sincronização no estado React local (skipRemoteSync para evitar roundtrip duplicado ao Supabase)
+        await syncCarRentalExpense(newRental, settings.dollarRate || 5.75, { skipRemoteSync: true });
 
-        // 3. Secundária 2: cronograma do roteiro
+        // 3. Secundária: cronograma do roteiro
         const itinRes = await syncCarRentalToItineraryDays(newRental);
         if (!itinRes.success) {
           setCarRentals(previousRentals);
@@ -5215,6 +5203,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           const delRentalOk = await SupabaseService.deleteCarRental(newRental.id);
           const expId = generateDeterministicUUID('car-expense', newRental.id);
           const delExpOk = await SupabaseService.deleteExpense(expId);
+          await SupabaseService.deleteExpensesBySource(activeTripId, 'car_rental', newRental.id);
           const compFailures: string[] = [];
           if (!delRentalOk) compFailures.push('car_rentals (remoção do aluguel falhou)');
           if (!delExpOk) compFailures.push('expenses (remoção da despesa falhou)');
@@ -5255,40 +5244,26 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     if (activeTripId) {
       try {
-        // 1. Primária: car_rentals
+        // 1. Primária: car_rentals e sincronização financeira em saveCarRental
         const res = await SupabaseService.saveCarRental(activeTripId, updated, activeTrip || undefined);
         if (!res || !res.success) {
           setCarRentals(previousRentals);
           return { success: false, error: res?.error || 'Falha ao atualizar aluguel no Supabase' };
         }
 
-        // 2. Secundária 1: despesa
-        const expRes = await syncCarRentalExpense(updated, settings.dollarRate || 5.75);
-        if (!expRes.success) {
-          setCarRentals(previousRentals);
-          setExpenses(previousExpensesList);
-          const revRental = await SupabaseService.saveCarRental(activeTripId, previous, activeTrip || undefined);
-          const revExp = await syncCarRentalExpense(previous, settings.dollarRate || 5.75);
-          const compFailures: string[] = [];
-          if (!revRental.success) compFailures.push(`car_rentals (${revRental.error || 'falha na restauração'})`);
-          if (!revExp.success) compFailures.push(`expenses (${revExp.error || 'falha na restauração'})`);
-          const compMsg = compFailures.length > 0
-            ? ` Atenção: restauração do aluguel/despesa falhou em: ${compFailures.join(', ')}.`
-            : ` O aluguel e despesa anteriores foram restaurados no banco de dados.`;
-          return { success: false, error: `Falha ao sincronizar despesa de locação: ${expRes.error}.${compMsg}` };
-        }
+        // 2. Sincronização no estado React local (skipRemoteSync para evitar roundtrip duplicado ao Supabase)
+        await syncCarRentalExpense(updated, settings.dollarRate || 5.75, { skipRemoteSync: true });
 
-        // 3. Secundária 2: cronograma do roteiro
+        // 3. Secundária: cronograma do roteiro
         const itinRes = await syncCarRentalToItineraryDays(updated);
         if (!itinRes.success) {
           setCarRentals(previousRentals);
           setExpenses(previousExpensesList);
           setRawDays(previousDays);
           const revRental = await SupabaseService.saveCarRental(activeTripId, previous, activeTrip || undefined);
-          const revExp = await syncCarRentalExpense(previous, settings.dollarRate || 5.75);
+          await syncCarRentalExpense(previous, settings.dollarRate || 5.75, { skipRemoteSync: true });
           const compFailures: string[] = [];
-          if (!revRental.success) compFailures.push(`car_rentals (${revRental.error || 'falha na restauração'})`);
-          if (!revExp.success) compFailures.push(`expenses (${revExp.error || 'falha na restauração'})`);
+          if (!revRental.success) compFailures.push(`car_rentals/expenses (${revRental.error || 'falha na restauração'})`);
           const compMsg = compFailures.length > 0
             ? ` Atenção: restauração do aluguel/despesa falhou em: ${compFailures.join(', ')}.`
             : ` O aluguel e despesa anteriores foram restaurados no banco de dados.`;
@@ -5316,7 +5291,14 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     setCarRentals((prev) => prev.filter((c) => c.id !== id));
     
     const expId = generateDeterministicUUID('car-expense', id);
-    setExpenses((prev) => prev.filter((e) => e.id !== expId && e.id !== `exp-car-${id}`));
+    setExpenses((prev) =>
+      prev.filter(
+        (e) =>
+          e.id !== expId &&
+          e.id !== `exp-car-${id}` &&
+          !(e.sourceType === 'car_rental' && e.sourceId === id)
+      )
+    );
     
     setRawDays((prevDays) =>
       prevDays.map((d) => ({
@@ -5330,6 +5312,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     SupabaseService.deleteExpense(expId);
     SupabaseService.deleteExpense(`exp-car-${id}`);
     if (activeTripId) {
+      SupabaseService.deleteExpensesBySource(activeTripId, 'car_rental', id);
       SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'car_rental');
     }
     if (rental) {

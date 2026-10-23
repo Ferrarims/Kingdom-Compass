@@ -3107,20 +3107,30 @@ export const SupabaseService = {
         return { success: false, error: upsertErr.message };
       }
 
-      // Sincronizar com a tabela de expenses usando o status financeiro
+      // Sincronizar com a tabela de expenses usando estritamente o status de pagamento
       const isPaid = rental.paymentStatus
         ? rental.paymentStatus === 'Pago'
-        : (rental.status === 'Pago' || rental.status === 'Concluído');
-      await syncToExpenses(tripId, 'car_rental', rental.id, {
-        title: `Transporte: Aluguel de Carro (${rental.company || 'Locadora'})`,
-        category: 'Transporte',
-        usd: rental.costUSD || 0,
-        brl: rental.costBRL || 0,
-        payerId: rental.payerId || 'all',
-        travelerIds: rental.travelerIds || ['all'],
-        status: isPaid ? 'Pago' : 'Pendente',
-        notes: `Período: ${rental.pickupDate || '---'} a ${rental.dropoffDate || '---'}`
-      });
+        : rental.status === 'Pago';
+      const syncRes = await syncToExpenses(
+        tripId,
+        'car_rental',
+        rental.id,
+        {
+          title: `Transporte: Aluguel de Carro (${rental.company || 'Locadora'})`,
+          category: 'Transporte',
+          usd: rental.costUSD || 0,
+          brl: rental.costBRL || 0,
+          payerId: rental.payerId || 'all',
+          travelerIds: rental.travelerIds || ['all'],
+          status: isPaid ? 'Pago' : 'Pendente',
+          notes: `Período: ${rental.pickupDate || '---'} a ${rental.dropoffDate || '---'}`
+        },
+        fallbackTrip
+      );
+
+      if (!syncRes.success) {
+        return { success: false, error: syncRes.error || 'Falha ao sincronizar despesa de locação de veículo no Supabase' };
+      }
 
       return { success: true };
     } catch (err: any) {
