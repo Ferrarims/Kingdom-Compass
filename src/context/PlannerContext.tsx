@@ -5187,10 +5187,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         // 1. Primária: car_rentals e sincronização financeira em saveCarRental
         const res = await SupabaseService.saveCarRental(activeTripId, newRental, activeTrip || undefined);
         if (!res || !res.success) {
-          // Só reverte o estado local se a compensação tiver confirmado que o aluguel foi removido do banco.
-          // Se a compensação falhou no banco, os dados novos permaneceram gravados no Supabase,
-          // logo reverter localmente criaria divergência entre banco e interface.
-          if (res?.compensationSuccess !== false) {
+          // Só reverte o estado local se a compensação tiver sido confirmada como bem-sucedida (compensationSuccess === true).
+          // Se a compensação falhou no banco (compensationSuccess === false), os dados novos permaneceram gravados no Supabase,
+          // logo não devemos reverter o estado local para dados antigos divergentes.
+          if (res?.compensationSuccess === true) {
             setCarRentals(previousRentals);
             setExpenses(previousExpensesList);
           }
@@ -5277,7 +5277,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           // Só reverte o estado local se a compensação tiver confirmado que os dados anteriores foram restaurados no banco.
           // Se a compensação falhou no banco, os dados novos permaneceram gravados no Supabase,
           // logo reverter localmente criaria divergência entre banco e interface.
-          if (res?.compensationSuccess !== false) {
+          if (res?.compensationSuccess === true) {
             setCarRentals(previousRentals);
             setExpenses(previousExpensesList);
           }

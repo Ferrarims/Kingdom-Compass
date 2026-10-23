@@ -328,7 +328,7 @@ export async function deleteExpensesBySourceInDb(
       .eq('source_type', sourceType)
       .in('id', [expId, legacyId]);
 
-    if (err1 && !isSupabaseMissingTableError(err1)) {
+    if (err1) {
       return { success: false, error: err1.message };
     }
 
@@ -340,15 +340,12 @@ export async function deleteExpensesBySourceInDb(
       .eq('source_type', sourceType)
       .eq('source_id', sourceId);
 
-    if (err2 && !isSupabaseMissingTableError(err2)) {
+    if (err2) {
       return { success: false, error: err2.message };
     }
 
     return { success: true };
   } catch (err: any) {
-    if (!isSupabaseMissingTableError(err)) {
-      console.warn('deleteExpensesBySourceInDb notice:', err);
-    }
     return { success: false, error: err?.message || 'Erro ao excluir despesa' };
   }
 }
@@ -2526,9 +2523,6 @@ export const SupabaseService = {
       }
       const { error } = await query;
       if (error) {
-        if (isSupabaseMissingTableError(error)) {
-          return { success: true };
-        }
         return { success: false, error: error.message };
       }
       return { success: true };
@@ -3072,7 +3066,7 @@ export const SupabaseService = {
     previousSnapshot?: { rental?: CarRentalBooking | any; expenses?: any[] }
   ): Promise<{ success: boolean; error?: string; compensationSuccess?: boolean }> {
     try {
-      if (!tripId || !rental) return { success: false, error: 'Parâmetros inválidos' };
+      if (!tripId || !rental) return { success: false, error: 'Parâmetros inválidos', compensationSuccess: true };
       const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
       const cleanRentalId = ensureValidUUID(rental.id, 'car', tripId + '-' + rental.confirmationCode);
 
@@ -3082,58 +3076,74 @@ export const SupabaseService = {
       let dbPreviousExpenses: any[] = [];
       let isExistingRental = false;
 
-      try {
-        const { data: existingRentalRow, error: fetchRentalErr } = await supabase
-          .from('car_rentals')
-          .select('*')
-          .eq('trip_id', cleanTripId)
-          .eq('id', cleanRentalId)
-          .maybeSingle();
+      const { data: existingRentalRow, error: fetchRentalErr } = await supabase
+        .from('car_rentals')
+        .select('*')
+        .eq('trip_id', cleanTripId)
+        .eq('id', cleanRentalId)
+        .maybeSingle();
 
-        if (!fetchRentalErr && existingRentalRow) {
-          dbPreviousRental = existingRentalRow;
-          isExistingRental = true;
-        } else if (previousSnapshot?.rental) {
-          isExistingRental = true;
-        }
-      } catch (e) {
-        console.warn('Snapshot car rental fetch notice:', e);
+      if (fetchRentalErr) {
+        return {
+          success: false,
+          compensationSuccess: true, // Nenhuma gravação foi realizada
+          error: `Falha ao capturar registro anterior da locação para snapshot: ${fetchRentalErr.message}. Gravação interrompida.`
+        };
+      }
+
+      if (existingRentalRow) {
+        dbPreviousRental = existingRentalRow;
+        isExistingRental = true;
+      } else if (previousSnapshot?.rental) {
+        isExistingRental = true;
       }
 
       // Capturar despesas anteriores vinculadas a esta locação
-      try {
-        const expId = generateDeterministicUUID('car-expense', rental.id);
-        const legacyId = `exp-car-${rental.id}`;
+      const expId = generateDeterministicUUID('car-expense', rental.id);
+      const legacyId = `exp-car-${rental.id}`;
 
-        const { data: expBySource } = await supabase
-          .from('expenses')
-          .select('*')
-          .eq('trip_id', cleanTripId)
-          .eq('source_type', 'car_rental')
-          .eq('source_id', rental.id);
+      const { data: expBySource, error: errSource } = await supabase
+        .from('expenses')
+        .select('*')
+        .eq('trip_id', cleanTripId)
+        .eq('source_type', 'car_rental')
+        .eq('source_id', rental.id);
 
-        const { data: expById } = await supabase
-          .from('expenses')
-          .select('*')
-          .eq('trip_id', cleanTripId)
-          .in('id', [expId, legacyId]);
+      if (errSource) {
+        return {
+          success: false,
+          compensationSuccess: true, // Nenhuma gravação foi realizada
+          error: `Falha ao capturar despesas vinculadas por origem para snapshot: ${errSource.message}. Gravação interrompida.`
+        };
+      }
 
-        const seenExpIds = new Set<string>();
-        for (const exp of [...(expBySource || []), ...(expById || [])]) {
-          if (exp && exp.id && !seenExpIds.has(exp.id)) {
-            seenExpIds.add(exp.id);
-            dbPreviousExpenses.push(exp);
-          }
+      const { data: expById, error: errId } = await supabase
+        .from('expenses')
+        .select('*')
+        .eq('trip_id', cleanTripId)
+        .in('id', [expId, legacyId]);
+
+      if (errId) {
+        return {
+          success: false,
+          compensationSuccess: true, // Nenhuma gravação foi realizada
+          error: `Falha ao capturar despesas vinculadas por ID para snapshot: ${errId.message}. Gravação interrompida.`
+        };
+      }
+
+      const seenExpIds = new Set<string>();
+      for (const exp of [...(expBySource || []), ...(expById || [])]) {
+        if (exp && exp.id && !seenExpIds.has(exp.id)) {
+          seenExpIds.add(exp.id);
+          dbPreviousExpenses.push(exp);
         }
+      }
 
-        // Se o banco não retornou despesas mas o chamador forneceu snapshot em memória
-        if (dbPreviousExpenses.length === 0 && previousSnapshot?.expenses && previousSnapshot.expenses.length > 0) {
-          dbPreviousExpenses = previousSnapshot.expenses.map((e) =>
-            typeof e === 'object' && 'trip_id' in e ? e : mapExpenseToDb(e, cleanTripId)
-          );
-        }
-      } catch (e) {
-        console.warn('Snapshot car expenses fetch notice:', e);
+      // Se o banco não retornou despesas mas o chamador forneceu snapshot em memória
+      if (dbPreviousExpenses.length === 0 && previousSnapshot?.expenses && previousSnapshot.expenses.length > 0) {
+        dbPreviousExpenses = previousSnapshot.expenses.map((e) =>
+          typeof e === 'object' && 'trip_id' in e ? e : mapExpenseToDb(e, cleanTripId)
+        );
       }
 
       // 2. Ensure parent trip exists
@@ -3209,18 +3219,19 @@ export const SupabaseService = {
       if (!syncRes.success) {
         if (!isExistingRental) {
           // CADASTRO: remover locação recém-criada e despesas vinculadas com filtros estritos
+          const compFailures: string[] = [];
+
           const delRentalRes = await supabase
             .from('car_rentals')
             .delete()
             .eq('trip_id', cleanTripId)
             .eq('id', cleanRentalId);
 
-          const delExpRes = await deleteExpensesBySourceInDb(cleanTripId, 'car_rental', rental.id);
-
-          const compFailures: string[] = [];
-          if (delRentalRes.error && !isSupabaseMissingTableError(delRentalRes.error)) {
-            compFailures.push(`car_rentals (${delRentalRes.error.message})`);
+          if (delRentalRes.error) {
+            compFailures.push(`car_rentals (${delRentalRes.error.message || 'erro ao excluir'})`);
           }
+
+          const delExpRes = await deleteExpensesBySourceInDb(cleanTripId, 'car_rental', rental.id);
           if (!delExpRes.success) {
             compFailures.push(`expenses (${delExpRes.error || 'falha ao remover despesas'})`);
           }
@@ -3242,27 +3253,45 @@ export const SupabaseService = {
           // EDIÇÃO: restaurar os registros anteriores da locação e da despesa vinculada
           const compFailures: string[] = [];
 
-          // Restaurar locação anterior
+          // Restaurar locação anterior mantendo filtros estritos
           const previousDbRow = dbPreviousRental || (previousSnapshot?.rental ? mapCarRentalToDb(previousSnapshot.rental, cleanTripId) : null);
           if (previousDbRow) {
+            const sanitizedRentalToRestore = {
+              ...previousDbRow,
+              trip_id: cleanTripId,
+              id: cleanRentalId,
+            };
             const { error: restoreRentalErr } = await supabase
               .from('car_rentals')
-              .upsert(previousDbRow, { onConflict: 'id' });
-            if (restoreRentalErr && !isSupabaseMissingTableError(restoreRentalErr)) {
-              compFailures.push(`car_rentals (${restoreRentalErr.message})`);
+              .upsert(sanitizedRentalToRestore, { onConflict: 'id' });
+
+            if (restoreRentalErr) {
+              compFailures.push(`car_rentals (${restoreRentalErr.message || 'erro ao restaurar locação'})`);
             }
+          } else {
+            compFailures.push('car_rentals (snapshot anterior não disponível para restauração)');
           }
 
-          // Limpar eventuais despesas geradas pela tentativa falha
-          await deleteExpensesBySourceInDb(cleanTripId, 'car_rental', rental.id);
+          // Limpar eventuais despesas geradas pela tentativa falha e verificar o resultado antes de restaurar o snapshot
+          const cleanExpRes = await deleteExpensesBySourceInDb(cleanTripId, 'car_rental', rental.id);
+          if (!cleanExpRes.success) {
+            compFailures.push(`expenses (falha ao limpar despesas parciais: ${cleanExpRes.error})`);
+          }
 
-          // Restaurar despesas anteriores do snapshot
+          // Restaurar despesas anteriores do snapshot mantendo filtros estritos por trip_id e origem car_rental
           if (dbPreviousExpenses && dbPreviousExpenses.length > 0) {
+            const sanitizedExpensesToRestore = dbPreviousExpenses.map((exp) => ({
+              ...exp,
+              trip_id: cleanTripId,
+              source_type: 'car_rental',
+              source_id: rental.id,
+            }));
             const { error: restoreExpErr } = await supabase
               .from('expenses')
-              .upsert(dbPreviousExpenses, { onConflict: 'id' });
-            if (restoreExpErr && !isSupabaseMissingTableError(restoreExpErr)) {
-              compFailures.push(`expenses (${restoreExpErr.message})`);
+              .upsert(sanitizedExpensesToRestore, { onConflict: 'id' });
+
+            if (restoreExpErr) {
+              compFailures.push(`expenses (${restoreExpErr.message || 'erro ao restaurar despesas'})`);
             }
           }
 
