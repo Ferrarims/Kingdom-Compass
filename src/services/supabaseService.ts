@@ -2194,28 +2194,65 @@ export const SupabaseService = {
   },
 
   /**
-   * Delete Flight
+   * Delete Flight with snapshot capture & compensation rollback
    */
   async deleteFlight(id: string, tripId?: string): Promise<{ success: boolean; error?: string }> {
     try {
+      if (!id) return { success: false, error: 'ID do voo não informado' };
+
+      // 1. Instantâneo de segurança antes das exclusões
+      let snapshotExpenses: any[] = [];
+      let snapshotSchedules: any[] = [];
+
       if (tripId) {
-        // 1. Excluir despesas financeiras vinculadas no Supabase PRIMEIRO
+        const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+        const { data: expRows } = await supabase
+          .from('expenses')
+          .select('*')
+          .eq('trip_id', cleanTripId)
+          .eq('source_type', 'flight')
+          .eq('source_id', id);
+        if (expRows) snapshotExpenses = expRows;
+
+        const { data: schedRows } = await supabase
+          .from('hourly_schedules')
+          .select('*')
+          .eq('trip_id', cleanTripId)
+          .eq('source_type', 'flight')
+          .eq('source_id', id);
+        if (schedRows) snapshotSchedules = schedRows;
+      }
+
+      // 2. Sequência de exclusões com compensação confiável
+      if (tripId) {
+        // Etapa A: Excluir despesas financeiras
         const expDelRes = await deleteExpensesBySourceInDb(tripId, 'flight', id);
         if (!expDelRes.success) {
-          return { success: false, error: expDelRes.error || 'Falha ao excluir despesa do voo no Supabase' };
+          return { success: false, error: expDelRes.error || 'Falha ao excluir despesas financeiras do voo' };
         }
 
-        // 2. Excluir agendamentos no roteiro diário vinculados
+        // Etapa B: Excluir horários da agenda
         const schedDelRes = await this.deleteHourlySchedulesBySource(tripId, id, 'flight');
         if (!schedDelRes.success) {
+          // Compensação: Restaurar despesas excluídas na Etapa A
+          if (snapshotExpenses.length > 0) {
+            await supabase.from('expenses').upsert(snapshotExpenses);
+          }
           return { success: false, error: schedDelRes.error || 'Falha ao excluir horários do voo no roteiro' };
         }
       }
 
-      // 3. Excluir o trecho de voo em flight_segments
-      const { error } = await supabase.from('flight_segments').delete().eq('id', id);
-      if (error && !isSupabaseMissingTableError(error)) {
-        return { success: false, error: error.message };
+      // Etapa C: Excluir segmento em flight_segments
+      const { error: flightErr } = await supabase.from('flight_segments').delete().eq('id', id);
+      if (flightErr && !isSupabaseMissingTableError(flightErr)) {
+        // Compensação: Restaurar despesas e horários excluídos
+        if (snapshotExpenses.length > 0) {
+          await supabase.from('expenses').upsert(snapshotExpenses);
+        }
+        if (snapshotSchedules.length > 0) {
+          await supabase.from('hourly_schedules').upsert(snapshotSchedules);
+        }
+        return { success: false, error: flightErr.message };
       }
 
       return { success: true };
@@ -2382,28 +2419,65 @@ export const SupabaseService = {
   },
 
   /**
-   * Delete Accommodation
+   * Delete Accommodation with snapshot capture & compensation rollback
    */
   async deleteAccommodation(id: string, tripId?: string): Promise<{ success: boolean; error?: string }> {
     try {
+      if (!id) return { success: false, error: 'ID da hospedagem não informado' };
+
+      // 1. Instantâneo de segurança antes das exclusões
+      let snapshotExpenses: any[] = [];
+      let snapshotSchedules: any[] = [];
+
       if (tripId) {
-        // 1. Excluir despesas financeiras vinculadas no Supabase PRIMEIRO
+        const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+        const { data: expRows } = await supabase
+          .from('expenses')
+          .select('*')
+          .eq('trip_id', cleanTripId)
+          .eq('source_type', 'accommodation')
+          .eq('source_id', id);
+        if (expRows) snapshotExpenses = expRows;
+
+        const { data: schedRows } = await supabase
+          .from('hourly_schedules')
+          .select('*')
+          .eq('trip_id', cleanTripId)
+          .eq('source_type', 'accommodation')
+          .eq('source_id', id);
+        if (schedRows) snapshotSchedules = schedRows;
+      }
+
+      // 2. Sequência de exclusões com compensação confiável
+      if (tripId) {
+        // Etapa A: Excluir despesas financeiras
         const expDelRes = await deleteExpensesBySourceInDb(tripId, 'accommodation', id);
         if (!expDelRes.success) {
           return { success: false, error: expDelRes.error || 'Falha ao excluir despesa da hospedagem no Supabase' };
         }
 
-        // 2. Excluir agendamentos no roteiro diário vinculados
+        // Etapa B: Excluir horários da agenda
         const schedDelRes = await this.deleteHourlySchedulesBySource(tripId, id, 'accommodation');
         if (!schedDelRes.success) {
+          // Compensação: Restaurar despesas excluídas na Etapa A
+          if (snapshotExpenses.length > 0) {
+            await supabase.from('expenses').upsert(snapshotExpenses);
+          }
           return { success: false, error: schedDelRes.error || 'Falha ao excluir horários da hospedagem no roteiro' };
         }
       }
 
-      // 3. Excluir a reserva de hospedagem em accommodations
-      const { error } = await supabase.from('accommodations').delete().eq('id', id);
-      if (error && !isSupabaseMissingTableError(error)) {
-        return { success: false, error: error.message };
+      // Etapa C: Excluir a reserva em accommodations
+      const { error: accErr } = await supabase.from('accommodations').delete().eq('id', id);
+      if (accErr && !isSupabaseMissingTableError(accErr)) {
+        // Compensação: Restaurar despesas e horários excluídos
+        if (snapshotExpenses.length > 0) {
+          await supabase.from('expenses').upsert(snapshotExpenses);
+        }
+        if (snapshotSchedules.length > 0) {
+          await supabase.from('hourly_schedules').upsert(snapshotSchedules);
+        }
+        return { success: false, error: accErr.message };
       }
 
       return { success: true };

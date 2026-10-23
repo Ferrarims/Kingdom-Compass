@@ -4887,44 +4887,40 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     );
 
     // Re-sincronizar apenas os dias afetados
-    setRawDays((prevDays) => {
-      const result = syncFlightsWithItineraryDays({
-        days: prevDays,
-        flights: nextFlights,
-        accommodations,
-        carRentals,
-        startDate: settings.startDate,
-        durationDays: settings.durationDays,
+    const result = syncFlightsWithItineraryDays({
+      days: rawDays,
+      flights: nextFlights,
+      accommodations,
+      carRentals,
+      startDate: settings.startDate,
+      durationDays: settings.durationDays,
+    });
+
+    if (activeTripId) {
+      const promises = result.updatedDays.map((dayToSave, idx) => {
+        const prevDay = rawDays[idx];
+        const prevSched = prevDay?.hourlySchedule || [];
+        const nextSched = dayToSave.hourlySchedule || [];
+        const isAffected =
+          JSON.stringify(prevSched) !== JSON.stringify(nextSched) ||
+          prevDay?.title !== dayToSave.title;
+        if (isAffected) {
+          return SupabaseService.saveItineraryDay(activeTripId, dayToSave, activeTrip || undefined);
+        }
+        return Promise.resolve<{ success: boolean; error?: string }>({ success: true });
       });
 
-      if (activeTripId) {
-        const promises = result.updatedDays.map((dayToSave, idx) => {
-          const prevDay = prevDays[idx];
-          const prevSched = prevDay?.hourlySchedule || [];
-          const nextSched = dayToSave.hourlySchedule || [];
-          const isAffected =
-            JSON.stringify(prevSched) !== JSON.stringify(nextSched) ||
-            prevDay?.title !== dayToSave.title;
-          if (isAffected) {
-            return SupabaseService.saveItineraryDay(activeTripId, dayToSave, activeTrip || undefined);
-          }
-          return Promise.resolve<{ success: boolean; error?: string }>({ success: true });
-        });
-
-        Promise.all(promises).then((results) => {
-          const failed = results.find((r) => r && !r.success);
-          if (failed) {
-            addNotification(`❌ Falha ao salvar remoção do voo na agenda: ${failed.error}`);
-          }
-        });
+      const dayResults = await Promise.all(promises);
+      const failed = dayResults.find((r) => r && !r.success);
+      if (failed) {
+        addNotification(`⚠️ Voo removido, mas ocorreu aviso na atualização da agenda: ${failed.error}`);
       }
+    }
 
-      setTrips((prevTrips) =>
-        prevTrips.map((t) => (t.id === activeTripId ? { ...t, rawDays: result.updatedDays } : t))
-      );
-
-      return result.updatedDays;
-    });
+    setRawDays(result.updatedDays);
+    setTrips((prevTrips) =>
+      prevTrips.map((t) => (t.id === activeTripId ? { ...t, rawDays: result.updatedDays } : t))
+    );
 
     addNotification(`Removeu o voo ${flight.flightNumber || ''} e atualizou o roteiro`);
     return { success: true };
