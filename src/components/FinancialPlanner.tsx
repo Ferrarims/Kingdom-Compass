@@ -873,7 +873,7 @@ export const FinancialPlanner: React.FC = () => {
                         <option value="Pago">✅ Pago</option>
                         <option value="Pendente">⏳ Pendente</option>
                         <option value="Parcial">💰 Parcial</option>
-                        <option value="Não iniciado">⚪ Não iniciado</option>
+                        <option value="Não informado">⚪ Não informado</option>
                       </select>
                     </div>
                   </div>

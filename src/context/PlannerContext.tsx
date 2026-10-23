@@ -1742,6 +1742,16 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     const updatedExpenses = [...currentExpenses];
 
     // Helper para determinar status e valores pagos na reconciliação com ranking de status
+    const normalizeStatus = (st: string | undefined): ExpenseItem['status'] => {
+      if (!st) return 'Não informado';
+      const trimmed = st.trim();
+      if (trimmed === 'Não iniciado' || trimmed === 'Não informado') return 'Não informado';
+      if (trimmed === 'Não pago' || trimmed === 'Pendente') return 'Pendente';
+      if (trimmed === 'Parcial') return 'Parcial';
+      if (trimmed === 'Pago') return 'Pago';
+      return 'Pendente';
+    };
+
     const computePaymentValues = (
       pStatus: string | undefined,
       existingExp: ExpenseItem | undefined,
@@ -1750,22 +1760,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       bookingPaidBrl?: number,
       bookingPaidUsd?: number
     ): { status: ExpenseItem['status']; paidBrl: number; paidUsd: number } => {
-      const rawBookingStatus = pStatus || 'Pendente';
-      const existingStatus = existingExp?.status || 'Pendente';
-
-      const statusRank: Record<string, number> = {
-        'Pago': 4,
-        'Parcial': 3,
-        'Pendente': 2,
-        'Não informado': 1,
-        'Não iniciado': 1
-      };
-
-      const rankBooking = statusRank[rawBookingStatus] || 2;
-      const rankExisting = statusRank[existingStatus] || 2;
-
-      // Impede que um status financeiro atualizado volte ao valor anterior
-      const finalStatus = rankExisting > rankBooking ? existingStatus : (rawBookingStatus as ExpenseItem['status']);
+      const finalStatus = normalizeStatus(pStatus || existingExp?.status);
 
       let paidBrl = 0;
       let paidUsd = 0;
@@ -1773,8 +1768,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         paidBrl = totBrl;
         paidUsd = totUsd;
       } else if (finalStatus === 'Parcial') {
-        paidBrl = bookingPaidBrl ?? existingExp?.paidValueBRL ?? (totBrl > 0 ? totBrl / 2 : 0);
-        paidUsd = bookingPaidUsd ?? existingExp?.paidValueUSD ?? (totUsd > 0 ? totUsd / 2 : 0);
+        paidBrl = bookingPaidBrl ?? existingExp?.paidValueBRL ?? 0;
+        paidUsd = bookingPaidUsd ?? existingExp?.paidValueUSD ?? 0;
       } else {
         paidBrl = 0;
         paidUsd = 0;

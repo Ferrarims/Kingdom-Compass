@@ -204,8 +204,9 @@ export function mapExpenseToDb(item: ExpenseItem, tripId: string, fallbackTravel
   ];
   const category = validDbCategories.includes(item.category) ? item.category : 'Pacotes de Fotos';
 
-  const validStatuses = ['Pago', 'Pendente', 'Parcial', 'Não iniciado'];
-  const status = validStatuses.includes(item.status) ? item.status : 'Pendente';
+  const validStatuses = ['Pago', 'Pendente', 'Parcial', 'Não informado'];
+  let status = validStatuses.includes(item.status) ? item.status : 'Pendente';
+  if (item.status === 'Não iniciado') status = 'Não informado';
 
   const usd = item.estimatedValueUSD !== undefined && item.estimatedValueUSD !== null && !isNaN(Number(item.estimatedValueUSD))
     ? Number(item.estimatedValueUSD)
@@ -470,7 +471,8 @@ async function syncToExpenses(
     let expStatus: ExpenseItem['status'] = 'Pendente';
     if (data.status === 'Pago') expStatus = 'Pago';
     else if (data.status === 'Parcial') expStatus = 'Parcial';
-    else if (data.status === 'Não informado') expStatus = 'Não iniciado';
+    else if (data.status === 'Não informado' || data.status === 'Não iniciado') expStatus = 'Não informado';
+    else if (data.status === 'Pendente' || data.status === 'Não pago') expStatus = 'Pendente';
     else expStatus = 'Pendente';
 
     let paidBrl = 0;
