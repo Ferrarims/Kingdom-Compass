@@ -245,7 +245,7 @@ export const TransportationView: React.FC = () => {
         res = await addCarRental(cleanedData);
       }
       if (res && !res.success) {
-        setValidationError(`Erro ao salvar aluguel de veículo: ${res.error || 'Erro desconhecido'}`);
+        setValidationError(res.error || 'Erro ao salvar aluguel de veículo.');
         return;
       }
       setIsModalOpen(false);

@@ -3121,6 +3121,7 @@ export const SupabaseService = {
         .from('expenses')
         .select('*')
         .eq('trip_id', cleanTripId)
+        .eq('source_type', 'car_rental')
         .in('id', [expId, legacyId]);
 
       if (errId) {
@@ -3221,14 +3222,17 @@ export const SupabaseService = {
           // CADASTRO: remover locação recém-criada e despesas vinculadas com filtros estritos
           const compFailures: string[] = [];
 
-          const delRentalRes = await supabase
+          const { data: deletedRentalRows, error: delRentalErr } = await supabase
             .from('car_rentals')
             .delete()
             .eq('trip_id', cleanTripId)
-            .eq('id', cleanRentalId);
+            .eq('id', cleanRentalId)
+            .select('id');
 
-          if (delRentalRes.error) {
-            compFailures.push(`car_rentals (${delRentalRes.error.message || 'erro ao excluir'})`);
+          if (delRentalErr) {
+            compFailures.push(`car_rentals (${delRentalErr.message || 'erro ao excluir'})`);
+          } else if (!deletedRentalRows || deletedRentalRows.length === 0) {
+            compFailures.push('car_rentals (remoção da locação recém-criada não retornou linhas afetadas)');
           }
 
           const delExpRes = await deleteExpensesBySourceInDb(cleanTripId, 'car_rental', rental.id);
