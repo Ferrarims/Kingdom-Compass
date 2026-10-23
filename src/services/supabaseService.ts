@@ -2514,14 +2514,26 @@ export const SupabaseService = {
   },
 
   /**
-   * Delete Car Rental
+   * Delete Car Rental with tripId scope
    */
-  async deleteCarRental(id: string): Promise<boolean> {
+  async deleteCarRental(id: string, tripId?: string): Promise<{ success: boolean; error?: string }> {
     try {
-      const { error } = await supabase.from('car_rentals').delete().eq('id', id);
-      return !error;
-    } catch {
-      return false;
+      if (!id) return { success: false, error: 'ID do aluguel não informado' };
+      let query = supabase.from('car_rentals').delete().eq('id', id);
+      if (tripId) {
+        const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+        query = query.eq('trip_id', cleanTripId);
+      }
+      const { error } = await query;
+      if (error) {
+        if (isSupabaseMissingTableError(error)) {
+          return { success: true };
+        }
+        return { success: false, error: error.message };
+      }
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro ao excluir aluguel de veículo' };
     }
   },
 
@@ -3051,22 +3063,85 @@ export const SupabaseService = {
   },
 
   /**
-   * Save or Update a single Car Rental in Supabase
+   * Save or Update a single Car Rental in Supabase with snapshot capture & compensation rollback
    */
   async saveCarRental(
     tripId: string,
     rental: CarRentalBooking,
-    fallbackTrip?: Partial<Trip>
-  ): Promise<{ success: boolean; error?: string }> {
+    fallbackTrip?: Partial<Trip>,
+    previousSnapshot?: { rental?: CarRentalBooking | any; expenses?: any[] }
+  ): Promise<{ success: boolean; error?: string; compensationSuccess?: boolean }> {
     try {
       if (!tripId || !rental) return { success: false, error: 'Parâmetros inválidos' };
+      const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+      const cleanRentalId = ensureValidUUID(rental.id, 'car', tripId + '-' + rental.confirmationCode);
 
-      // Ensure parent trip exists
+      // 1. Instantâneo de segurança antes de qualquer gravação
+      // Capturar dados anteriores da locação no banco (se existir)
+      let dbPreviousRental: any = null;
+      let dbPreviousExpenses: any[] = [];
+      let isExistingRental = false;
+
       try {
-        const { data: tripCheck } = await supabase.from('trips').select('id').eq('id', tripId).maybeSingle();
+        const { data: existingRentalRow, error: fetchRentalErr } = await supabase
+          .from('car_rentals')
+          .select('*')
+          .eq('trip_id', cleanTripId)
+          .eq('id', cleanRentalId)
+          .maybeSingle();
+
+        if (!fetchRentalErr && existingRentalRow) {
+          dbPreviousRental = existingRentalRow;
+          isExistingRental = true;
+        } else if (previousSnapshot?.rental) {
+          isExistingRental = true;
+        }
+      } catch (e) {
+        console.warn('Snapshot car rental fetch notice:', e);
+      }
+
+      // Capturar despesas anteriores vinculadas a esta locação
+      try {
+        const expId = generateDeterministicUUID('car-expense', rental.id);
+        const legacyId = `exp-car-${rental.id}`;
+
+        const { data: expBySource } = await supabase
+          .from('expenses')
+          .select('*')
+          .eq('trip_id', cleanTripId)
+          .eq('source_type', 'car_rental')
+          .eq('source_id', rental.id);
+
+        const { data: expById } = await supabase
+          .from('expenses')
+          .select('*')
+          .eq('trip_id', cleanTripId)
+          .in('id', [expId, legacyId]);
+
+        const seenExpIds = new Set<string>();
+        for (const exp of [...(expBySource || []), ...(expById || [])]) {
+          if (exp && exp.id && !seenExpIds.has(exp.id)) {
+            seenExpIds.add(exp.id);
+            dbPreviousExpenses.push(exp);
+          }
+        }
+
+        // Se o banco não retornou despesas mas o chamador forneceu snapshot em memória
+        if (dbPreviousExpenses.length === 0 && previousSnapshot?.expenses && previousSnapshot.expenses.length > 0) {
+          dbPreviousExpenses = previousSnapshot.expenses.map((e) =>
+            typeof e === 'object' && 'trip_id' in e ? e : mapExpenseToDb(e, cleanTripId)
+          );
+        }
+      } catch (e) {
+        console.warn('Snapshot car expenses fetch notice:', e);
+      }
+
+      // 2. Ensure parent trip exists
+      try {
+        const { data: tripCheck } = await supabase.from('trips').select('id').eq('id', cleanTripId).maybeSingle();
         if (!tripCheck) {
           const tripToInsert: Partial<Trip> = {
-            id: tripId,
+            id: cleanTripId,
             tripCode: fallbackTrip?.tripCode || `ORL-${Math.floor(1000 + Math.random() * 9000)}`,
             tripName: fallbackTrip?.tripName || 'Minha Viagem',
             destination: fallbackTrip?.destination || 'Orlando, FL',
@@ -3089,7 +3164,8 @@ export const SupabaseService = {
         console.warn('Trip check in saveCarRental:', e);
       }
 
-      const dbRow = mapCarRentalToDb(rental, tripId);
+      // 3. Gravação da locação na tabela car_rentals
+      const dbRow = mapCarRentalToDb(rental, cleanTripId);
       let { error: upsertErr } = await supabase.from('car_rentals').upsert(dbRow, { onConflict: 'id' });
 
       // Fallback gracioso se a coluna payment_status ainda não foi criada no Supabase via migração SQL
@@ -3102,17 +3178,18 @@ export const SupabaseService = {
 
       if (upsertErr) {
         if (isSupabaseMissingTableError(upsertErr)) {
-          return { success: false, error: 'Tabela car_rentals aguardando criação no Supabase.' };
+          return { success: false, error: 'Tabela car_rentals aguardando criação no Supabase.', compensationSuccess: true };
         }
-        return { success: false, error: upsertErr.message };
+        return { success: false, error: upsertErr.message, compensationSuccess: true };
       }
 
-      // Sincronizar com a tabela de expenses usando estritamente o status de pagamento
+      // 4. Sincronizar com a tabela de expenses usando estritamente o status de pagamento
       const isPaid = rental.paymentStatus
         ? rental.paymentStatus === 'Pago'
         : rental.status === 'Pago';
+
       const syncRes = await syncToExpenses(
-        tripId,
+        cleanTripId,
         'car_rental',
         rental.id,
         {
@@ -3128,8 +3205,81 @@ export const SupabaseService = {
         fallbackTrip
       );
 
+      // 5. Compensação caso a sincronização financeira falhe
       if (!syncRes.success) {
-        return { success: false, error: syncRes.error || 'Falha ao sincronizar despesa de locação de veículo no Supabase' };
+        if (!isExistingRental) {
+          // CADASTRO: remover locação recém-criada e despesas vinculadas com filtros estritos
+          const delRentalRes = await supabase
+            .from('car_rentals')
+            .delete()
+            .eq('trip_id', cleanTripId)
+            .eq('id', cleanRentalId);
+
+          const delExpRes = await deleteExpensesBySourceInDb(cleanTripId, 'car_rental', rental.id);
+
+          const compFailures: string[] = [];
+          if (delRentalRes.error && !isSupabaseMissingTableError(delRentalRes.error)) {
+            compFailures.push(`car_rentals (${delRentalRes.error.message})`);
+          }
+          if (!delExpRes.success) {
+            compFailures.push(`expenses (${delExpRes.error || 'falha ao remover despesas'})`);
+          }
+
+          if (compFailures.length > 0) {
+            return {
+              success: false,
+              compensationSuccess: false,
+              error: `Aluguel salvo no banco, mas a sincronização financeira falhou: ${syncRes.error}. A compensação para remoção do aluguel/despesa falhou em: ${compFailures.join(', ')}. O banco de dados pode estar inconsistente.`
+            };
+          }
+
+          return {
+            success: false,
+            compensationSuccess: true,
+            error: `Falha ao sincronizar despesa de locação de veículo: ${syncRes.error}. A locação recém-criada e eventuais despesas parciais foram removidas do banco de dados com sucesso para manter a consistência.`
+          };
+        } else {
+          // EDIÇÃO: restaurar os registros anteriores da locação e da despesa vinculada
+          const compFailures: string[] = [];
+
+          // Restaurar locação anterior
+          const previousDbRow = dbPreviousRental || (previousSnapshot?.rental ? mapCarRentalToDb(previousSnapshot.rental, cleanTripId) : null);
+          if (previousDbRow) {
+            const { error: restoreRentalErr } = await supabase
+              .from('car_rentals')
+              .upsert(previousDbRow, { onConflict: 'id' });
+            if (restoreRentalErr && !isSupabaseMissingTableError(restoreRentalErr)) {
+              compFailures.push(`car_rentals (${restoreRentalErr.message})`);
+            }
+          }
+
+          // Limpar eventuais despesas geradas pela tentativa falha
+          await deleteExpensesBySourceInDb(cleanTripId, 'car_rental', rental.id);
+
+          // Restaurar despesas anteriores do snapshot
+          if (dbPreviousExpenses && dbPreviousExpenses.length > 0) {
+            const { error: restoreExpErr } = await supabase
+              .from('expenses')
+              .upsert(dbPreviousExpenses, { onConflict: 'id' });
+            if (restoreExpErr && !isSupabaseMissingTableError(restoreExpErr)) {
+              compFailures.push(`expenses (${restoreExpErr.message})`);
+            }
+          }
+
+          if (compFailures.length > 0) {
+            return {
+              success: false,
+              compensationSuccess: false,
+              error: `Falha ao sincronizar despesa de locação: ${syncRes.error}. Atenção: a restauração compensatória dos dados anteriores falhou no banco (${compFailures.join(', ')}). O banco de dados pode estar inconsistente.`
+            };
+          }
+
+          return {
+            success: false,
+            compensationSuccess: true,
+            error: `Falha ao sincronizar despesa de locação: ${syncRes.error}. Os dados anteriores da locação e da despesa foram restaurados com sucesso no banco de dados.`
+          };
+        }
       }
 
       return { success: true };
