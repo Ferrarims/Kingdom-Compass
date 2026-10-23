@@ -2310,8 +2310,14 @@ export const SupabaseService = {
         }
       }
 
-      // Etapa C: Excluir segmento em flight_segments
-      const { error: flightErr } = await supabase.from('flight_segments').delete().eq('id', id);
+      // Etapa C: Excluir segmento em flight_segments restrito por trip_id e id, e verificar linhas afetadas
+      let flightQuery = supabase.from('flight_segments').delete().eq('id', id);
+      if (tripId) {
+        const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+        flightQuery = flightQuery.eq('trip_id', cleanTripId);
+      }
+      const { data: deletedFlightRows, error: flightErr } = await flightQuery.select('id');
+
       if (flightErr && !isSupabaseMissingTableError(flightErr)) {
         // Compensação: Restaurar despesas e horários excluídos
         const rollRes = await rollbackCompensation(snapshotExpenses, snapshotSchedules);
@@ -2322,6 +2328,21 @@ export const SupabaseService = {
           };
         }
         return { success: false, error: `${flightErr.message}. Registros associados (despesas e horários) foram restaurados com sucesso no banco.` };
+      }
+
+      if (!isSupabaseMissingTableError(flightErr) && (!deletedFlightRows || deletedFlightRows.length === 0)) {
+        // Compensação: Restaurar despesas e horários excluídos
+        const rollRes = await rollbackCompensation(snapshotExpenses, snapshotSchedules);
+        if (!rollRes.success) {
+          return {
+            success: false,
+            error: `Nenhum voo foi removido do Supabase (0 linhas afetadas para esta viagem). A restauração dos dados associados falhou parcialmente: ${rollRes.error}. O banco de dados pode estar em estado inconsistente.`,
+          };
+        }
+        return {
+          success: false,
+          error: `Nenhum voo foi removido do Supabase (0 linhas afetadas para esta viagem). Registros associados (despesas e horários) foram restaurados com sucesso no banco.`,
+        };
       }
 
       return { success: true };
@@ -2574,8 +2595,14 @@ export const SupabaseService = {
         }
       }
 
-      // Etapa C: Excluir a reserva em accommodations
-      const { error: accErr } = await supabase.from('accommodations').delete().eq('id', id);
+      // Etapa C: Excluir a reserva em accommodations restrita por trip_id e id, e verificar linhas afetadas
+      let accQuery = supabase.from('accommodations').delete().eq('id', id);
+      if (tripId) {
+        const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+        accQuery = accQuery.eq('trip_id', cleanTripId);
+      }
+      const { data: deletedAccRows, error: accErr } = await accQuery.select('id');
+
       if (accErr && !isSupabaseMissingTableError(accErr)) {
         // Compensação: Restaurar despesas e horários excluídos
         const rollRes = await rollbackCompensation(snapshotExpenses, snapshotSchedules);
@@ -2586,6 +2613,21 @@ export const SupabaseService = {
           };
         }
         return { success: false, error: `${accErr.message}. Registros associados (despesas e horários) foram restaurados com sucesso no banco.` };
+      }
+
+      if (!isSupabaseMissingTableError(accErr) && (!deletedAccRows || deletedAccRows.length === 0)) {
+        // Compensação: Restaurar despesas e horários excluídos
+        const rollRes = await rollbackCompensation(snapshotExpenses, snapshotSchedules);
+        if (!rollRes.success) {
+          return {
+            success: false,
+            error: `Nenhuma hospedagem foi removida do Supabase (0 linhas afetadas para esta viagem). A restauração dos dados associados falhou parcialmente: ${rollRes.error}. O banco de dados pode estar em estado inconsistente.`,
+          };
+        }
+        return {
+          success: false,
+          error: `Nenhuma hospedagem foi removida do Supabase (0 linhas afetadas para esta viagem). Registros associados (despesas e horários) foram restaurados com sucesso no banco.`,
+        };
       }
 
       return { success: true };
