@@ -66,7 +66,12 @@ export function deduplicateById<T extends { id?: string }>(items: T[]): T[] {
   return result;
 }
 
-// Helper to autofill daily itineraries based on flight segments and park guides
+export function isZeroCost(usd?: number | null, brl?: number | null): boolean {
+  const numUsd = usd !== undefined && usd !== null ? Number(usd) : 0;
+  const numBrl = brl !== undefined && brl !== null ? Number(brl) : 0;
+  return numUsd <= 0 && numBrl <= 0;
+}
+
 export function getAutofillForDay(
   dayNumber: number,
   parkName: string,
@@ -5701,80 +5706,23 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   };
 
-  const syncParkTicketExpense = (ticket: ParkTicketPurchase, rate: number) => {
+  const syncParkTicketExpense = async (ticket: ParkTicketPurchase, rate: number): Promise<{ success: boolean; error?: string }> => {
     const expId = generateDeterministicUUID('ticket-expense', ticket.id);
-    const usd = ticket.costUSD || 0;
-    const brl = ticket.costBRL || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
+    const legacyId = `exp-ticket-${ticket.id}`;
+    const usd = Number(ticket.costUSD) || 0;
+    const brl = Number(ticket.costBRL) || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
     const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
 
-    if (brl > 0 || finalUsd > 0) {
-      const isPaid = ticket.paymentStatus === 'Pago';
-      const ticketTitle = `Ingresso: ${ticket.title || 'Ingresso de Parques'}`.trim();
-      const parksStr = ticket.parksIncluded && ticket.parksIncluded.length > 0 ? ticket.parksIncluded.join(', ') : ticket.complex;
-      
-      // Obter nomes dos viajantes para quem foi comprado
-      const ticketTravelerIds = ticket.travelerIds || [];
-      const travelersList = settings.travelers || [];
-      const isAll = ticketTravelerIds.includes('all') || ticketTravelerIds.length === 0 || (travelersList.length > 0 && ticketTravelerIds.length === travelersList.length);
-      const selectedTravelerNames = isAll 
-        ? 'Todos os Viajantes' 
-        : travelersList
-            .filter((t) => ticketTravelerIds.includes(t.id))
-            .map((t) => t.name)
-            .join(', ');
+    const isZero = isZeroCost(ticket.costUSD, ticket.costBRL);
 
-      const qty = ticket.quantity || 1;
-      const qtyText = `${qty} ${qty === 1 ? 'pacote/ingresso' : 'pacotes/ingressos'}`;
-
-      const ticketNotes = `${ticket.type === 'combo' ? 'Combo Multi-Parques / Multi-Dias' : 'Ingresso Individual'} (${ticket.daysCount} ${ticket.daysCount === 1 ? 'dia' : 'dias'}${ticket.ticketOption ? ' - ' + ticket.ticketOption : ''}) | Parques: ${parksStr}${ticket.confirmationCode ? ' | Voucher: ' + ticket.confirmationCode : ''} | Qtd: ${qtyText} | Para: ${selectedTravelerNames}`;
-      const responsible = ticket.travelerIds && ticket.travelerIds.length === 1 ? ticket.travelerIds[0] : 'all';
-
-      const expData: ExpenseItem = {
-        id: expId,
-        title: ticketTitle,
-        category: 'Ingressos',
-        estimatedValueUSD: finalUsd,
-        estimatedValueBRL: brl,
-        paidValueBRL: isPaid ? brl : 0,
-        paidValueUSD: isPaid ? finalUsd : 0,
-        status: isPaid ? 'Pago' : 'Pendente',
-        payerId: ticket.payerId || 'all',
-        responsibleTravelerId: ticket.payerId || 'all',
-        travelerIds: ticket.travelerIds || ['all'],
-        sourceType: 'park_ticket',
-        sourceId: ticket.id,
-        excluded: false,
-        notes: ticketNotes,
-        updatedAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-        updatedBy: currentUser.name,
-      };
-
+    if (isZero) {
       setExpenses((prev) => {
-        let nextExpenses: ExpenseItem[];
-        const existingIndex = prev.findIndex((e) => e.id === expId);
-        if (existingIndex >= 0) {
-          const updated = [...prev];
-          updated[existingIndex] = {
-            ...updated[existingIndex],
-            title: ticketTitle,
-            estimatedValueUSD: finalUsd,
-            estimatedValueBRL: brl,
-            paidValueBRL: isPaid ? brl : updated[existingIndex].paidValueBRL,
-            paidValueUSD: isPaid ? finalUsd : updated[existingIndex].paidValueUSD,
-            status: isPaid ? 'Pago' : updated[existingIndex].status,
-            payerId: expData.payerId,
-            responsibleTravelerId: expData.responsibleTravelerId,
-            travelerIds: expData.travelerIds,
-            sourceType: 'park_ticket',
-            sourceId: ticket.id,
-            notes: ticketNotes,
-            updatedAt: expData.updatedAt,
-            updatedBy: expData.updatedBy,
-          };
-          nextExpenses = updated;
-        } else {
-          nextExpenses = [expData, ...prev];
-        }
+        const nextExpenses = prev.filter(
+          (e) =>
+            e.id !== expId &&
+            e.id !== legacyId &&
+            !(e.sourceType === 'park_ticket' && e.sourceId === ticket.id)
+        );
         setTrips((prevTrips) =>
           prevTrips.map((t) => (t.id === activeTripId ? { ...t, expenses: nextExpenses } : t))
         );
@@ -5782,30 +5730,118 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       });
 
       if (activeTripId) {
-        const fallbackTrip = activeTrip || {
-          id: activeTripId,
-          tripName: settings.tripName,
-          destination: settings.destination,
-          startDate: settings.startDate,
-          durationDays: settings.durationDays,
-          travelers: settings.travelers,
-        };
-        SupabaseService.saveExpense(activeTripId, expData, fallbackTrip);
+        const delRes = await SupabaseService.deleteExpensesBySource(activeTripId, 'park_ticket', ticket.id);
+        if (!delRes.success) {
+          return { success: false, error: delRes.error || 'Erro ao excluir despesa do ingresso no Supabase' };
+        }
       }
-    } else {
-      setExpenses((prev) => {
-        const nextExpenses = prev.filter((e) => e.id !== expId);
-        setTrips((prevTrips) =>
-          prevTrips.map((t) => (t.id === activeTripId ? { ...t, expenses: nextExpenses } : t))
-        );
-        return nextExpenses;
-      });
-      SupabaseService.deleteExpense(expId);
+      return { success: true };
     }
+
+    const isPaid = ticket.paymentStatus === 'Pago';
+    const ticketTitle = `Ingresso: ${ticket.title || 'Ingresso de Parques'}`.trim();
+    const parksStr = ticket.parksIncluded && ticket.parksIncluded.length > 0 ? ticket.parksIncluded.join(', ') : ticket.complex;
+    
+    // Obter nomes dos viajantes para quem foi comprado
+    const ticketTravelerIds = ticket.travelerIds || [];
+    const travelersList = settings.travelers || [];
+    const isAll = ticketTravelerIds.includes('all') || ticketTravelerIds.length === 0 || (travelersList.length > 0 && ticketTravelerIds.length === travelersList.length);
+    const selectedTravelerNames = isAll 
+      ? 'Todos os Viajantes' 
+      : travelersList
+          .filter((t) => ticketTravelerIds.includes(t.id))
+          .map((t) => t.name)
+          .join(', ');
+
+    const qty = ticket.quantity || 1;
+    const qtyText = `${qty} ${qty === 1 ? 'pacote/ingresso' : 'pacotes/ingressos'}`;
+
+    const ticketNotes = `${ticket.type === 'combo' ? 'Combo Multi-Parques / Multi-Dias' : 'Ingresso Individual'} (${ticket.daysCount} ${ticket.daysCount === 1 ? 'dia' : 'dias'}${ticket.ticketOption ? ' - ' + ticket.ticketOption : ''}) | Parques: ${parksStr}${ticket.confirmationCode ? ' | Voucher: ' + ticket.confirmationCode : ''} | Qtd: ${qtyText} | Para: ${selectedTravelerNames}`;
+
+    const expData: ExpenseItem = {
+      id: expId,
+      title: ticketTitle,
+      category: 'Ingressos',
+      estimatedValueUSD: finalUsd,
+      estimatedValueBRL: brl,
+      paidValueBRL: isPaid ? brl : 0,
+      paidValueUSD: isPaid ? finalUsd : 0,
+      status: isPaid ? 'Pago' : 'Pendente',
+      payerId: ticket.payerId || 'all',
+      responsibleTravelerId: ticket.payerId || 'all',
+      travelerIds: ticket.travelerIds || ['all'],
+      sourceType: 'park_ticket',
+      sourceId: ticket.id,
+      excluded: false,
+      notes: ticketNotes,
+      updatedAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      updatedBy: currentUser.name,
+    };
+
+    setExpenses((prev) => {
+      let nextExpenses: ExpenseItem[];
+      const existingIndex = prev.findIndex(
+        (e) =>
+          e.id === expId ||
+          e.id === legacyId ||
+          (e.sourceType === 'park_ticket' && e.sourceId === ticket.id)
+      );
+      if (existingIndex >= 0) {
+        const updated = [...prev];
+        updated[existingIndex] = {
+          ...updated[existingIndex],
+          title: ticketTitle,
+          estimatedValueUSD: finalUsd,
+          estimatedValueBRL: brl,
+          paidValueBRL: isPaid ? brl : updated[existingIndex].paidValueBRL,
+          paidValueUSD: isPaid ? finalUsd : updated[existingIndex].paidValueUSD,
+          status: isPaid ? 'Pago' : updated[existingIndex].status,
+          payerId: expData.payerId,
+          responsibleTravelerId: expData.responsibleTravelerId,
+          travelerIds: expData.travelerIds,
+          sourceType: 'park_ticket',
+          sourceId: ticket.id,
+          notes: ticketNotes,
+          updatedAt: expData.updatedAt,
+          updatedBy: expData.updatedBy,
+        };
+        nextExpenses = updated.filter(
+          (e, idx) =>
+            idx === existingIndex ||
+            !(
+              e.id === expId ||
+              e.id === legacyId ||
+              (e.sourceType === 'park_ticket' && e.sourceId === ticket.id)
+            )
+        );
+      } else {
+        nextExpenses = [expData, ...prev];
+      }
+      setTrips((prevTrips) =>
+        prevTrips.map((t) => (t.id === activeTripId ? { ...t, expenses: nextExpenses } : t))
+      );
+      return nextExpenses;
+    });
+
+    if (activeTripId) {
+      const fallbackTrip = activeTrip || {
+        id: activeTripId,
+        tripName: settings.tripName,
+        destination: settings.destination,
+        startDate: settings.startDate,
+        durationDays: settings.durationDays,
+        travelers: settings.travelers,
+      };
+      const saveRes = await SupabaseService.saveExpense(activeTripId, expData, fallbackTrip);
+      if (!saveRes.success) {
+        return { success: false, error: saveRes.error || 'Erro ao salvar despesa do ingresso no Supabase' };
+      }
+    }
+    return { success: true };
   };
 
   // Park Tickets Handlers
-  const addParkTicket = (ticket: Omit<ParkTicketPurchase, 'id'>) => {
+  const addParkTicket = async (ticket: Omit<ParkTicketPurchase, 'id'>) => {
     const newTicket: ParkTicketPurchase = {
       ...ticket,
       id: generateUUID(),
@@ -5818,7 +5854,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       );
       return nextTickets;
     });
-    syncParkTicketExpense(newTicket, settings.dollarRate || 5.75);
     
     if (activeTripId) {
       const fallbackTrip: Partial<Trip> = activeTrip || {
@@ -5830,33 +5865,20 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         travelers: settings.travelers,
         dollarRate: settings.dollarRate,
       };
-      SupabaseService.saveParkTicket(activeTripId, newTicket, fallbackTrip);
+      await SupabaseService.saveParkTicket(activeTripId, newTicket, fallbackTrip);
     }
-    
+
+    await syncParkTicketExpense(newTicket, settings.dollarRate || 5.75);
     addNotification(`Cadastrou compra de ingresso (${ticket.title}) e sincronizou no financeiro`);
   };
 
-  const updateParkTicket = (id: string, updates: Partial<ParkTicketPurchase>) => {
+  const updateParkTicket = async (id: string, updates: Partial<ParkTicketPurchase>) => {
+    let updatedTicket: ParkTicketPurchase | undefined;
     setParkTickets((prev) => {
       const updatedList = prev.map((t) => {
         if (t.id === id) {
-          const updated = { ...t, ...updates };
-          syncParkTicketExpense(updated, settings.dollarRate || 5.75);
-          
-          if (activeTripId) {
-            const fallbackTrip: Partial<Trip> = activeTrip || {
-              id: activeTripId,
-              tripName: settings.tripName,
-              destination: settings.destination,
-              startDate: settings.startDate,
-              durationDays: settings.durationDays,
-              travelers: settings.travelers,
-              dollarRate: settings.dollarRate,
-            };
-            SupabaseService.saveParkTicket(activeTripId, updated, fallbackTrip);
-          }
-          
-          return updated;
+          updatedTicket = { ...t, ...updates };
+          return updatedTicket;
         }
         return t;
       });
@@ -5865,6 +5887,22 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       );
       return updatedList;
     });
+
+    if (updatedTicket) {
+      if (activeTripId) {
+        const fallbackTrip: Partial<Trip> = activeTrip || {
+          id: activeTripId,
+          tripName: settings.tripName,
+          destination: settings.destination,
+          startDate: settings.startDate,
+          durationDays: settings.durationDays,
+          travelers: settings.travelers,
+          dollarRate: settings.dollarRate,
+        };
+        await SupabaseService.saveParkTicket(activeTripId, updatedTicket, fallbackTrip);
+      }
+      await syncParkTicketExpense(updatedTicket, settings.dollarRate || 5.75);
+    }
     addNotification(`Atualizou informações de ingresso e orçamento`);
   };
 

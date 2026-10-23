@@ -2,31 +2,22 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Ticket,
   X,
-  Plus,
   Trash2,
-  DollarSign,
-  Calendar,
-  Layers,
-  Sparkles,
   Users,
   CheckCircle2,
-  Building2,
   Info,
-  ExternalLink,
-  ShieldCheck,
-  CreditCard,
-  FileText
 } from 'lucide-react';
 import { ParkTicketPurchase, Traveler } from '../types';
 import { usePlanner } from '../context/PlannerContext';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
-import { MoneyInput } from './MoneyInput';
+import { PaymentSection, PaymentStatusType } from './PaymentSection';
 
 interface ParkTicketModalProps {
   isOpen: boolean;
   onClose: () => void;
   ticketToEdit?: ParkTicketPurchase | null;
   onSave: (ticket: Omit<ParkTicketPurchase, 'id'>, editId?: string) => void;
+  onDelete?: (id: string) => void;
 }
 
 const COMPLEX_OPTIONS: {
@@ -535,7 +526,6 @@ const getPackagesForComplex = (
       recommendedUSD: '180',
     });
   } else {
-    // Default fallback combo
     list.push({
       id: 'other-combo',
       name: 'Combo Especial Multiatrações',
@@ -566,17 +556,17 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
   onClose,
   ticketToEdit,
   onSave,
+  onDelete,
 }) => {
-  const { settings } = usePlanner();
+  const { settings, deleteParkTicket } = usePlanner();
   const dollarRate = settings.dollarRate || 5.75;
-  const travelers = settings.travelers || [];
+  const travelers: Traveler[] = settings.travelers || [];
 
   // Form states
   const [complex, setComplex] = useState<ParkTicketPurchase['complex']>('Disney');
   const [title, setTitle] = useState('');
   const [type, setType] = useState<'individual' | 'combo'>('combo');
   const [parksIncluded, setParksIncluded] = useState<string[]>([]);
-  const [customParkInput, setCustomParkInput] = useState('');
   const [daysCount, setDaysCount] = useState<number>(4);
   const [ticketOption, setTicketOption] = useState<string>('Park Hopper');
   const [selectedTravelerIds, setSelectedTravelerIds] = useState<string[]>(['all']);
@@ -584,7 +574,7 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
   const [quantity, setQuantity] = useState<number>(travelers.length || 1);
   const [unitCostUSD, setUnitCostUSD] = useState<number | null>(null);
   const [unitCostBRL, setUnitCostBRL] = useState<number | null>(null);
-  const [paymentStatus, setPaymentStatus] = useState<ParkTicketPurchase['paymentStatus']>('Previsão (Planejamento)');
+  const [paymentStatus, setPaymentStatus] = useState<PaymentStatusType>('Pago');
   const [confirmationCode, setConfirmationCode] = useState<string>('');
   const [seller, setSeller] = useState<string>('');
   const [notes, setNotes] = useState<string>('');
@@ -597,17 +587,17 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
     return Array.from(new Set([...defaults, ...existing]));
   }, [currentComplexConfig.defaultParks, parksIncluded]);
 
-  // Dynamically get available packages for selected complex
   const availablePackages = React.useMemo(() => {
     return getPackagesForComplex(complex, currentComplexConfig.defaultParks);
   }, [complex, currentComplexConfig.defaultParks]);
 
   const currentPackageId = React.useMemo(() => {
-    const found = availablePackages.find((pkg) => 
-      title === pkg.name &&
-      type === pkg.type &&
-      daysCount === pkg.daysCount &&
-      ticketOption === pkg.ticketOption
+    const found = availablePackages.find(
+      (pkg) =>
+        title === pkg.name &&
+        type === pkg.type &&
+        daysCount === pkg.daysCount &&
+        ticketOption === pkg.ticketOption
     );
     return found ? found.id : 'custom';
   }, [availablePackages, title, type, daysCount, ticketOption]);
@@ -618,14 +608,12 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
     setDaysCount(pkg.daysCount);
     setTicketOption(pkg.ticketOption);
     setParksIncluded(pkg.parksIncluded);
-    
-    // Automatically pre-fill the cost recommendation as unit cost
+
     const num = parseFloat(pkg.recommendedUSD) || 0;
     setUnitCostUSD(num);
     setUnitCostBRL(Math.round(num * dollarRate * 100) / 100);
   };
 
-  // Switch complex
   const handleComplexChange = (newComplex: ParkTicketPurchase['complex']) => {
     setComplex(newComplex);
     const compConfig = COMPLEX_OPTIONS.find((c) => c.id === newComplex) || COMPLEX_OPTIONS[0];
@@ -644,7 +632,6 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
   const wasOpenRef = useRef<boolean>(false);
   const lastTicketIdRef = useRef<string | null | undefined>(undefined);
 
-  // Initialize or populate only on open transition or explicit ticket change
   useEffect(() => {
     if (isOpen) {
       const ticketId = ticketToEdit?.id || null;
@@ -661,23 +648,30 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
           setTicketOption(ticketToEdit.ticketOption || '');
           setSelectedTravelerIds(ticketToEdit.travelerIds || ['all']);
           setPayerId(ticketToEdit.payerId || 'all');
-          
+
           const q = ticketToEdit.quantity || travelers.length || 1;
           setQuantity(q);
 
-          // Back-calculate unit cost from total cost
-          if (ticketToEdit.costUSD !== undefined && ticketToEdit.costUSD !== null) {
+          if (ticketToEdit.costUSD !== undefined && ticketToEdit.costUSD !== null && ticketToEdit.costUSD > 0) {
             setUnitCostUSD(ticketToEdit.costUSD / q);
           } else {
             setUnitCostUSD(null);
           }
-          if (ticketToEdit.costBRL !== undefined && ticketToEdit.costBRL !== null) {
+          if (ticketToEdit.costBRL !== undefined && ticketToEdit.costBRL !== null && ticketToEdit.costBRL > 0) {
             setUnitCostBRL(ticketToEdit.costBRL / q);
           } else {
             setUnitCostBRL(null);
           }
 
-          setPaymentStatus(ticketToEdit.paymentStatus || 'Previsão (Planejamento)');
+          const rawStatus = ticketToEdit.paymentStatus;
+          if (rawStatus === 'Pago') {
+            setPaymentStatus('Pago');
+          } else if (rawStatus === 'Pendente') {
+            setPaymentStatus('Pendente');
+          } else {
+            setPaymentStatus('Não informado');
+          }
+
           setConfirmationCode(ticketToEdit.confirmationCode || '');
           setSeller(ticketToEdit.seller || '');
           setNotes(ticketToEdit.notes || '');
@@ -685,10 +679,10 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
           // Default new ticket
           setComplex('Disney');
           setPayerId('all');
-          
+
           const disneyObj = COMPLEX_OPTIONS.find((c) => c.id === 'Disney')!;
           const initialPackages = getPackagesForComplex('Disney', disneyObj.defaultParks);
-          
+
           const defaultQty = travelers.length || 1;
           setQuantity(defaultQty);
 
@@ -699,7 +693,7 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
             setDaysCount(firstPkg.daysCount);
             setTicketOption(firstPkg.ticketOption);
             setParksIncluded(firstPkg.parksIncluded);
-            
+
             const num = parseFloat(firstPkg.recommendedUSD) || 0;
             setUnitCostUSD(num);
             setUnitCostBRL(Math.round(num * dollarRate * 100) / 100);
@@ -733,27 +727,14 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
     }
   }, [isOpen, ticketToEdit, travelers.length, dollarRate]);
 
-  // Handle Unit USD Change with auto-calc BRL
-  const handleUnitUSDChange = (val: number | null) => {
-    setUnitCostUSD(val);
-    setUnitCostBRL(val !== null ? Math.round(val * dollarRate * 100) / 100 : null);
-  };
-
-  // Handle Unit BRL Change with auto-calc USD
-  const handleUnitBRLChange = (val: number | null) => {
-    setUnitCostBRL(val);
-    setUnitCostUSD(val !== null && dollarRate > 0 ? Math.round((val / dollarRate) * 100) / 100 : null);
-  };
-
   const totalUSD = React.useMemo(() => {
-    return unitCostUSD !== null ? unitCostUSD * quantity : null;
+    return unitCostUSD !== null && unitCostUSD > 0 ? unitCostUSD * quantity : null;
   }, [unitCostUSD, quantity]);
 
   const totalBRL = React.useMemo(() => {
-    return unitCostBRL !== null ? unitCostBRL * quantity : null;
+    return unitCostBRL !== null && unitCostBRL > 0 ? unitCostBRL * quantity : null;
   }, [unitCostBRL, quantity]);
 
-  // Toggle traveler
   const toggleTraveler = (tId: string) => {
     if (tId === 'all') {
       setSelectedTravelerIds(['all']);
@@ -777,6 +758,18 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
     }
   };
 
+  const handleDelete = () => {
+    if (!ticketToEdit?.id) return;
+    if (window.confirm(`Tem certeza que deseja excluir o pacote de ingressos "${ticketToEdit.title}"?`)) {
+      if (onDelete) {
+        onDelete(ticketToEdit.id);
+      } else {
+        deleteParkTicket(ticketToEdit.id);
+      }
+      onClose();
+    }
+  };
+
   const handleSave = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
 
@@ -794,7 +787,7 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
       quantity: Math.max(1, quantity),
       costUSD: usdVal > 0 ? usdVal : undefined,
       costBRL: brlVal > 0 ? brlVal : undefined,
-      paymentStatus,
+      paymentStatus: paymentStatus as any,
       payerId,
       confirmationCode: confirmationCode.trim() || undefined,
       seller: seller.trim() || undefined,
@@ -805,7 +798,6 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
     onClose();
   };
 
-  // Key shortcuts
   useModalKeyEvents({ isOpen, onClose, onSave: () => handleSave() });
 
   if (!isOpen) return null;
@@ -820,7 +812,7 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
       className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-xs overflow-hidden animate-in fade-in duration-200"
     >
       <div
-        className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-6xl h-[90vh] max-h-[92vh] flex flex-col overflow-hidden my-auto animate-in zoom-in-95 duration-150"
+        className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-5xl h-[90vh] max-h-[92vh] flex flex-col overflow-hidden my-auto animate-in zoom-in-95 duration-150"
         role="dialog"
         aria-modal="true"
         id="modal-park-ticket"
@@ -854,318 +846,334 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
 
         {/* Modal Form Body */}
         <form onSubmit={handleSave} className="flex flex-col flex-1 min-h-0 overflow-hidden text-slate-700">
-          <div className="p-5 sm:p-6 space-y-8 flex-1 overflow-y-auto min-h-0 custom-scrollbar">
-          {/* 1. SELEÇÃO DO COMPLEXO & PACOTES DE INGRESSOS */}
-          <div className="space-y-4">
-            <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-              1. Seleção do Complexo & Ingressos Disponíveis
-            </label>
-            <div className="bg-slate-50 p-4 sm:p-5 rounded-2xl border border-slate-200 space-y-4">
-              {/* Título / Complexo de Parques */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-700 block flex items-center justify-between">
-                  <span>Complexo / Título de Parques</span>
-                  <span className="text-[11px] font-normal text-slate-500">Selecione o complexo desejado</span>
-                </label>
-                <select
-                  value={complex}
-                  onChange={(e) => handleComplexChange(e.target.value as ParkTicketPurchase['complex'])}
-                  className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 cursor-pointer shadow-2xs"
-                  id="select-ticket-complex"
-                >
-                  {COMPLEX_OPTIONS.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.icon} {c.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Parques do Complexo Selecionado */}
-              <div className="space-y-2 pt-2 border-t border-slate-200/80">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                    <span>Parques do Complexo</span>
-                    <span className="px-1.5 py-0.2 rounded-full bg-slate-200 text-slate-700 text-[10px]">
-                      {currentComplexConfig.defaultParks.length}
-                    </span>
-                  </span>
-                  <span className="text-[10px] text-slate-400 font-medium">
-                    Elegíveis para alocação no roteiro
-                  </span>
+          <div className="p-5 sm:p-6 space-y-6 flex-1 overflow-y-auto min-h-0 custom-scrollbar">
+            
+            {/* 1. SELEÇÃO DO COMPLEXO & INGRESSOS DISPONÍVEIS */}
+            <div className="space-y-3">
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 block">
+                1. Complexo & Ingressos Disponíveis
+              </span>
+              <div className="bg-slate-50/80 p-4 sm:p-5 rounded-xl border border-slate-200/90 space-y-4">
+                {/* Complex Select */}
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-slate-700 block flex items-center justify-between">
+                    <span>Complexo / Título de Parques</span>
+                    <span className="text-[11px] font-normal text-slate-500">Selecione o complexo desejado</span>
+                  </label>
+                  <select
+                    value={complex}
+                    onChange={(e) => handleComplexChange(e.target.value as ParkTicketPurchase['complex'])}
+                    className="w-full bg-white border border-slate-200 rounded-lg px-3.5 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] cursor-pointer"
+                    id="select-ticket-complex"
+                  >
+                    {COMPLEX_OPTIONS.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.icon} {c.label}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {currentComplexConfig.defaultParks.map((pName) => (
-                    <div
-                      key={pName}
-                      className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-white text-slate-800 border border-slate-200/90 shadow-2xs flex items-center gap-1.5"
-                    >
-                      <span className="text-base leading-none">{getParkEmoji(pName)}</span>
-                      <span>{pName}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
 
-              {/* Ingressos & Pacotes Disponíveis */}
-              <div className="space-y-1.5 pt-2 border-t border-slate-200/80">
-                <label className="text-xs font-bold text-slate-700 block flex items-center justify-between">
-                  <span>Ingressos & Pacotes Disponíveis</span>
-                  <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200/70 px-2 py-0.5 rounded-md">
-                    {type === 'individual' ? 'Ingresso Individual (1 Dia)' : `Combo (${daysCount} Dias)`}
-                  </span>
-                </label>
-                <select
-                  value={currentPackageId}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    const pkg = availablePackages.find((p) => p.id === val);
-                    if (pkg) selectPackage(pkg);
-                  }}
-                  className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 cursor-pointer shadow-2xs"
-                  id="select-ticket-package"
-                >
-                  {availablePackages.map((pkg) => (
-                    <option key={pkg.id} value={pkg.id}>
-                      {pkg.name} — {pkg.daysCount} {pkg.daysCount === 1 ? 'Dia' : 'Dias'} (~ USD ${pkg.recommendedUSD})
-                    </option>
-                  ))}
-                </select>
-                {currentPackageId !== 'custom' && (
-                  <div className="text-[11px] text-slate-500 bg-white border border-slate-100 rounded-xl p-3 mt-1.5 leading-relaxed shadow-2xs">
-                    <span className="font-semibold text-slate-600 block mb-0.5 flex items-center gap-1">
-                      <Info className="w-3.5 h-3.5 text-blue-500" />
-                      Descrição do ingresso:
+                {/* Parks Badges */}
+                <div className="space-y-2 pt-2 border-t border-slate-200/80">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                      <span>Parques do Complexo</span>
+                      <span className="px-1.5 py-0.2 rounded-full bg-slate-200 text-slate-700 text-[10px]">
+                        {currentComplexConfig.defaultParks.length}
+                      </span>
                     </span>
-                    {availablePackages.find((p) => p.id === currentPackageId)?.description}
+                    <span className="text-[10px] text-slate-400 font-medium">
+                      Elegíveis para alocação no roteiro
+                    </span>
                   </div>
-                )}
+                  <div className="flex flex-wrap gap-2">
+                    {currentComplexConfig.defaultParks.map((pName) => (
+                      <div
+                        key={pName}
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium bg-white text-slate-800 border border-slate-200 flex items-center gap-1.5"
+                      >
+                        <span className="text-base leading-none">{getParkEmoji(pName)}</span>
+                        <span>{pName}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Available Packages */}
+                <div className="space-y-1.5 pt-2 border-t border-slate-200/80">
+                  <label className="text-xs font-semibold text-slate-700 block flex items-center justify-between">
+                    <span>Ingressos & Pacotes Disponíveis</span>
+                    <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 border border-amber-200/70 px-2 py-0.5 rounded-md">
+                      {type === 'individual' ? 'Ingresso Individual (1 Dia)' : `Combo (${daysCount} Dias)`}
+                    </span>
+                  </label>
+                  <select
+                    value={currentPackageId}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      const pkg = availablePackages.find((p) => p.id === val);
+                      if (pkg) selectPackage(pkg);
+                    }}
+                    className="w-full bg-white border border-slate-200 rounded-lg px-3.5 py-2 text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] cursor-pointer"
+                    id="select-ticket-package"
+                  >
+                    {availablePackages.map((pkg) => (
+                      <option key={pkg.id} value={pkg.id}>
+                        {pkg.name} — {pkg.daysCount} {pkg.daysCount === 1 ? 'Dia' : 'Dias'} (~ USD ${pkg.recommendedUSD})
+                      </option>
+                    ))}
+                  </select>
+                  {currentPackageId !== 'custom' && (
+                    <div className="text-[11px] text-slate-600 bg-white border border-slate-200/80 rounded-lg p-3 mt-1.5 leading-relaxed">
+                      <span className="font-semibold text-slate-700 block mb-0.5 flex items-center gap-1">
+                        <Info className="w-3.5 h-3.5 text-blue-500" />
+                        Descrição do ingresso:
+                      </span>
+                      {availablePackages.find((p) => p.id === currentPackageId)?.description}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
 
+            {/* 2. DETALHES DO INGRESSO & VOUCHER */}
+            <div className="space-y-3">
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 block">
+                2. Detalhes do Ingresso & Voucher
+              </span>
+              <div className="bg-slate-50/80 p-4 sm:p-5 rounded-xl border border-slate-200/90 space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <label className="text-xs font-semibold text-slate-700 block">
+                      Nome / Título do Pacote
+                    </label>
+                    <input
+                      type="text"
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      placeholder="Ex: Combo Disney 4 Dias Park Hopper"
+                      className="w-full bg-white border border-slate-200 rounded-lg px-3.5 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37]"
+                      id="input-ticket-title"
+                    />
+                  </div>
 
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-700 block">
+                      Tipo de Ingresso
+                    </label>
+                    <select
+                      value={type}
+                      onChange={(e) => setType(e.target.value as 'individual' | 'combo')}
+                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37] cursor-pointer"
+                      id="select-ticket-type"
+                    >
+                      <option value="combo">🎟️ Combo Multi-Parques / Multi-Dias</option>
+                      <option value="individual">🎫 Ingresso Individual (1 Dia)</option>
+                    </select>
+                  </div>
 
-          {/* 3. Viajantes do Pacote & Quantidade */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-                3. Viajantes do Pacote & Quantidade
-              </label>
-              <div className="flex items-center gap-1.5">
-                <span className="text-[10px] text-slate-500 font-bold uppercase">Qtd de ingressos:</span>
-                <input
-                  type="number"
-                  min="1"
-                  max="50"
-                  value={quantity}
-                  onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                  className="w-16 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold text-center text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-700 block">
+                      Quantidade de Dias de Parque
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="30"
+                      value={daysCount}
+                      onChange={(e) => setDaysCount(Math.max(1, parseInt(e.target.value) || 1))}
+                      className="w-full bg-white border border-slate-200 rounded-lg px-3.5 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37]"
+                      id="input-ticket-days"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5 sm:col-span-2">
+                    <label className="text-xs font-semibold text-slate-700 block">
+                      Opção / Modalidade
+                    </label>
+                    <input
+                      type="text"
+                      value={ticketOption}
+                      onChange={(e) => setTicketOption(e.target.value)}
+                      placeholder="Ex: Park Hopper, Park-to-Park, Com All-Day Dining"
+                      className="w-full bg-white border border-slate-200 rounded-lg px-3.5 py-2 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37]"
+                      id="input-ticket-option"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-700 block">
+                      Código da Reserva / Voucher
+                    </label>
+                    <input
+                      type="text"
+                      value={confirmationCode}
+                      onChange={(e) => setConfirmationCode(e.target.value)}
+                      placeholder="Ex: WDW-TKT-894129"
+                      className="w-full bg-white border border-slate-200 rounded-lg px-3.5 py-2 text-xs font-mono font-medium uppercase text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37]"
+                      id="input-ticket-code"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-slate-700 block">
+                      Onde Comprou (Vendedor / Agência)
+                    </label>
+                    <input
+                      type="text"
+                      value={seller}
+                      onChange={(e) => setSeller(e.target.value)}
+                      placeholder="Ex: Site Oficial Disney, Civitatis, Decolar"
+                      className="w-full bg-white border border-slate-200 rounded-lg px-3.5 py-2 text-xs text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37]"
+                      id="input-ticket-seller"
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 3. PARTICIPANTES DO PACOTE */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 block">
+                  3. Participantes do Pacote & Quantidade
+                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-500 font-medium">Qtd de ingressos:</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="50"
+                    value={quantity}
+                    onChange={(e) => setQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                    className="w-16 bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs font-semibold text-center text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
+                  />
+                </div>
+              </div>
+
+              <div className="bg-slate-50/80 p-4 sm:p-5 rounded-xl border border-slate-200/90 space-y-3">
+                <p className="text-xs text-slate-500">
+                  Selecione os viajantes incluídos neste pacote para divisão de custos e controle individual:
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => toggleTraveler('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
+                      selectedTravelerIds.includes('all')
+                        ? 'bg-[#1A2B4C] text-white shadow-xs'
+                        : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                    }`}
+                  >
+                    <Users className={`w-3.5 h-3.5 ${selectedTravelerIds.includes('all') ? 'text-[#D4AF37]' : 'text-slate-400'}`} />
+                    <span>Todos os Viajantes ({travelers.length})</span>
+                  </button>
+
+                  {travelers.map((trv) => {
+                    const isSelected = selectedTravelerIds.includes(trv.id) || selectedTravelerIds.includes('all');
+                    return (
+                      <button
+                        key={trv.id}
+                        type="button"
+                        onClick={() => toggleTraveler(trv.id)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 cursor-pointer ${
+                          isSelected && !selectedTravelerIds.includes('all')
+                            ? 'bg-blue-600 text-white shadow-xs'
+                            : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                        }`}
+                      >
+                        <span
+                          className="w-2 h-2 rounded-full"
+                          style={{ backgroundColor: trv.avatarColor || '#3B82F6' }}
+                        />
+                        <span>{trv?.name || 'Viajante'}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* 4. CUSTOS & PAGAMENTO */}
+            <PaymentSection
+              sectionNumber={4}
+              sectionTitle="CUSTOS & PAGAMENTO"
+              pricingMode="per_person"
+              dollarRate={dollarRate}
+              unitCostUSD={unitCostUSD}
+              unitCostBRL={unitCostBRL}
+              totalCostUSD={totalUSD}
+              totalCostBRL={totalBRL}
+              onChangeCosts={(unitUSD, unitBRL) => {
+                setUnitCostUSD(unitUSD);
+                setUnitCostBRL(unitBRL);
+              }}
+              paymentStatus={paymentStatus}
+              onChangePaymentStatus={(st) => setPaymentStatus(st)}
+              payerId={payerId}
+              onChangePayerId={(pId) => setPayerId(pId)}
+              travelers={travelers.map((t) => ({ id: t.id, name: t.name }))}
+              passengerCount={quantity}
+              passengerLabel="ingresso"
+              unitLabelUSD="Valor por Ingresso (US$)"
+              unitLabelBRL="Valor por Ingresso (R$)"
+              showPayerSelector={true}
+            />
+
+            {/* 5. OBSERVAÇÕES & INSTRUÇÕES */}
+            <div className="space-y-3">
+              <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 block">
+                5. Observações & Instruções
+              </span>
+              <div className="bg-slate-50/80 p-4 sm:p-5 rounded-xl border border-slate-200/90">
+                <textarea
+                  rows={3}
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="Ex: Ingressos vinculados nas contas My Disney Experience. Não precisa imprimir voucher físico..."
+                  className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs text-slate-800 font-medium placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 focus:border-[#D4AF37]"
+                  id="input-ticket-notes"
                 />
               </div>
             </div>
 
-            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-              <div className="flex flex-wrap gap-2">
+          </div>
+
+          {/* Modal Actions Footer */}
+          <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
+            <div>
+              {ticketToEdit && (
                 <button
                   type="button"
-                  onClick={() => toggleTraveler('all')}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
-                    selectedTravelerIds.includes('all')
-                      ? 'bg-[#1A2B4C] text-white shadow-sm'
-                      : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-                  }`}
+                  onClick={handleDelete}
+                  className="px-4 py-2 rounded-lg text-xs font-semibold text-rose-600 hover:bg-rose-50 border border-rose-200 transition-colors flex items-center gap-1.5 cursor-pointer"
+                  id="btn-delete-ticket"
                 >
-                  <Users className={`w-3.5 h-3.5 ${selectedTravelerIds.includes('all') ? 'text-[#D4AF37]' : 'text-slate-400'}`} />
-                  <span>Todos ({travelers.length})</span>
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Excluir</span>
                 </button>
-
-                {travelers.map((trv) => {
-                  const isSelected = selectedTravelerIds.includes(trv.id) || selectedTravelerIds.includes('all');
-                  return (
-                    <button
-                      key={trv.id}
-                      type="button"
-                      onClick={() => toggleTraveler(trv.id)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all flex items-center gap-1.5 ${
-                        isSelected && !selectedTravelerIds.includes('all')
-                          ? 'bg-blue-600 text-white shadow-sm'
-                          : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
-                      }`}
-                    >
-                      <span
-                        className="w-2 h-2 rounded-full"
-                        style={{ backgroundColor: trv.avatarColor || '#3B82F6' }}
-                      />
-                      <span>{trv?.name || 'Viajante'}</span>
-                    </button>
-                  );
-                })}
-              </div>
+              )}
             </div>
-          </div>
 
-          {/* 4. Pricing & Financials */}
-          <div className="space-y-4">
-            <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-              4. Valores & Pagamento
-            </label>
-            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-4">
-               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-slate-600 flex items-center justify-between">
-                    Valor a Pagar (US$)
-                    <span className="text-[9px] text-slate-400 font-mono">USD</span>
-                  </label>
-                  <MoneyInput
-                    currency="USD"
-                    value={unitCostUSD}
-                    onChange={handleUnitUSDChange}
-                    id="input-ticket-cost-usd"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-slate-600 flex items-center justify-between">
-                    Valor a Pagar (R$)
-                    <span className="text-[9px] text-slate-400 font-mono">BRL</span>
-                  </label>
-                  <MoneyInput
-                    currency="BRL"
-                    value={unitCostBRL}
-                    onChange={handleUnitBRLChange}
-                    id="input-ticket-cost-brl"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-slate-600 flex items-center justify-between">
-                    Status do Pagamento
-                    <span className="opacity-0 text-[9px] font-mono">_</span>
-                  </label>
-                  <select
-                    value={paymentStatus}
-                    onChange={(e) => setPaymentStatus(e.target.value as ParkTicketPurchase['paymentStatus'])}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 cursor-pointer h-[38px]"
-                    id="select-ticket-status"
-                  >
-                    <option value="Previsão (Planejamento)">💡 Planejamento</option>
-                    <option value="Pago">✅ Pago / Emitido</option>
-                    <option value="Pendente">⏳ Pendente</option>
-                    <option value="Reservado">📋 Reservado</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Summary Calculations */}
-              <div className="pt-3 border-t border-slate-200/60 space-y-3">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="text-[11px] text-slate-500 font-medium flex items-center gap-1.5">
-                    <Users className="w-3.5 h-3.5 text-[#2A437E]" />
-                    <span>Subtotal para <strong className="text-slate-800">{quantity}</strong> {quantity === 1 ? 'ingresso' : 'ingressos'}</span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200 flex flex-col items-end">
-                      <span className="text-[9px] text-slate-400 uppercase font-bold tracking-tight">Total USD</span>
-                      <span className="text-xs font-mono font-bold text-emerald-700">${totalUSD !== null ? totalUSD.toFixed(2) : '0.00'}</span>
-                    </div>
-                    <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200 flex flex-col items-end">
-                      <span className="text-[9px] text-slate-400 uppercase font-bold tracking-tight">Total BRL</span>
-                      <span className="text-xs font-mono font-bold text-[#1A2B4C]">R$ {totalBRL !== null ? totalBRL.toFixed(2).replace('.', ',') : '0,00'}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <CreditCard className="w-4 h-4 text-[#D4AF37]" />
-                    <label className="text-[11px] font-bold text-slate-700">Responsável pelo Pagamento</label>
-                  </div>
-                  <select
-                    value={payerId || 'all'}
-                    onChange={(e) => setPayerId(e.target.value)}
-                    className="bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-[11px] font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/30 min-w-[200px]"
-                  >
-                    <option value="all">👥 Dividido pelo grupo</option>
-                    {travelers.map((t) => (
-                      <option key={t.id} value={t.id}>👤 {t.name}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-5 py-2.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                id="btn-cancel-ticket"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="px-6 py-2.5 rounded-lg bg-[#1A2B4C] text-white text-xs font-semibold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-sm"
+                id="btn-save-ticket"
+              >
+                <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
+                <span>Salvar Ingresso</span>
+              </button>
             </div>
-          </div>
-
-          {/* 5. Voucher & Seller Info */}
-          <div className="space-y-4">
-            <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-              5. Voucher & Vendedor
-            </label>
-            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 block">Código da Reserva / Voucher</label>
-                  <input
-                    type="text"
-                    value={confirmationCode}
-                    onChange={(e) => setConfirmationCode(e.target.value)}
-                    placeholder="Ex: WDW-TKT-894129"
-                    className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold uppercase text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                    id="input-ticket-code"
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-slate-700 block">Onde Comprou (Vendedor)</label>
-                  <input
-                    type="text"
-                    value={seller}
-                    onChange={(e) => setSeller(e.target.value)}
-                    placeholder="Ex: Site Oficial Disney, Civitatis"
-                    className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 font-bold focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                    id="input-ticket-seller"
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* 6. Notes */}
-          <div className="space-y-4">
-            <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-              6. Observações & Instruções
-            </label>
-            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-              <textarea
-                rows={3}
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Ex: Ingressos já linkados nas contas My Disney Experience. Não precisa imprimir..."
-                className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs text-slate-800 font-medium placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50"
-                id="input-ticket-notes"
-              />
-            </div>
-          </div>
-          </div>
-
-          {/* Modal Actions */}
-          <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-3 shrink-0">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
-              id="btn-cancel-ticket"
-            >
-              Cancelar
-            </button>
-            <button
-              type="submit"
-              className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md"
-              id="btn-save-ticket"
-            >
-              <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
-              <span>Salvar</span>
-            </button>
           </div>
         </form>
       </div>
