@@ -1741,7 +1741,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   ): ExpenseItem[] => {
     const updatedExpenses = [...currentExpenses];
 
-    // Helper para determinar status e valores pagos na reconciliação
+    // Helper para determinar status e valores pagos na reconciliação com ranking de status
     const computePaymentValues = (
       pStatus: string | undefined,
       existingExp: ExpenseItem | undefined,
@@ -1750,19 +1750,36 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       bookingPaidBrl?: number,
       bookingPaidUsd?: number
     ): { status: ExpenseItem['status']; paidBrl: number; paidUsd: number } => {
-      const status = (pStatus || existingExp?.status || 'Pendente') as ExpenseItem['status'];
-      if (status === 'Pago') {
-        return { status: 'Pago', paidBrl: totBrl, paidUsd: totUsd };
+      const rawBookingStatus = pStatus || 'Pendente';
+      const existingStatus = existingExp?.status || 'Pendente';
+
+      const statusRank: Record<string, number> = {
+        'Pago': 4,
+        'Parcial': 3,
+        'Pendente': 2,
+        'Não informado': 1,
+        'Não iniciado': 1
+      };
+
+      const rankBooking = statusRank[rawBookingStatus] || 2;
+      const rankExisting = statusRank[existingStatus] || 2;
+
+      // Impede que um status financeiro atualizado volte ao valor anterior
+      const finalStatus = rankExisting > rankBooking ? existingStatus : (rawBookingStatus as ExpenseItem['status']);
+
+      let paidBrl = 0;
+      let paidUsd = 0;
+      if (finalStatus === 'Pago') {
+        paidBrl = totBrl;
+        paidUsd = totUsd;
+      } else if (finalStatus === 'Parcial') {
+        paidBrl = bookingPaidBrl ?? existingExp?.paidValueBRL ?? (totBrl > 0 ? totBrl / 2 : 0);
+        paidUsd = bookingPaidUsd ?? existingExp?.paidValueUSD ?? (totUsd > 0 ? totUsd / 2 : 0);
+      } else {
+        paidBrl = 0;
+        paidUsd = 0;
       }
-      if (status === 'Parcial') {
-        const pBrl = bookingPaidBrl ?? existingExp?.paidValueBRL ?? 0;
-        const pUsd = bookingPaidUsd ?? existingExp?.paidValueUSD ?? 0;
-        return { status: 'Parcial', paidBrl: pBrl, paidUsd: pUsd };
-      }
-      if (status === 'Não informado') {
-        return { status: 'Não informado', paidBrl: 0, paidUsd: 0 };
-      }
-      return { status: 'Pendente', paidBrl: 0, paidUsd: 0 };
+      return { status: finalStatus, paidBrl, paidUsd };
     };
 
     // 1. Ingressos de Parques
@@ -3147,6 +3164,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       const accSourceId = sourceId || (id.startsWith('exp-acc-') ? id.replace('exp-acc-', '') : undefined);
       if (isAcc) {
         let updatedAccList: AccommodationBooking[] = [];
+        const prevAccsSnapshot = [...accommodations];
         setAccommodations((prevAccs) => {
           const next = prevAccs.map((acc) => {
             const matches = (accSourceId && acc.id === accSourceId) || generateDeterministicUUID('acc-expense', acc.id) === id;
@@ -3186,8 +3204,33 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           for (const a of updatedAccList) {
             const saveRes = await SupabaseService.saveAccommodation(activeTripId, a, fallbackTrip);
             if (!saveRes.success) {
+              const restoreExpRes = await SupabaseService.saveExpense(activeTripId, prevItem, fallbackTrip);
+              const prevAcc = prevAccsSnapshot.find((acc) => acc.id === a.id);
+              let restoreAccOk = true;
+              if (prevAcc) {
+                const restoreAccRes = await SupabaseService.saveAccommodation(activeTripId, prevAcc, fallbackTrip);
+                restoreAccOk = restoreAccRes.success;
+              }
               setExpenses((prev) => prev.map((item) => (item.id === id ? prevItem : item)));
-              return { success: false, error: saveRes.error || 'Falha ao atualizar status na hospedagem' };
+              setAccommodations(prevAccsSnapshot);
+              setTrips((prevTrips) =>
+                prevTrips.map((t) =>
+                  t.id === activeTripId
+                    ? {
+                        ...t,
+                        expenses: (t.expenses || []).map((e) => (e.id === id ? prevItem : e)),
+                        accommodations: prevAccsSnapshot,
+                      }
+                    : t
+                )
+              );
+              if (!restoreExpRes.success || !restoreAccOk) {
+                return {
+                  success: false,
+                  error: `Falha ao atualizar hospedagem no Supabase: ${saveRes.error}. A restauração compensatória falhou no banco de dados. O banco de dados pode estar inconsistente.`
+                };
+              }
+              return { success: false, error: `${saveRes.error || 'Falha ao atualizar status na hospedagem'}. Os dados anteriores foram restaurados com sucesso no banco e no estado local.` };
             }
           }
         }
@@ -3198,6 +3241,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       const flightSourceId = sourceId || (id.startsWith('exp-flight-') ? id.replace('exp-flight-', '') : undefined);
       if (isFlight) {
         let updatedFlightList: FlightSegment[] = [];
+        const prevFlightsSnapshot = [...flights];
         setFlights((prevFlights) => {
           const next = prevFlights.map((flight) => {
             const matches = (flightSourceId && flight.id === flightSourceId) || generateDeterministicUUID('flight-expense', flight.id) === id;
@@ -3237,8 +3281,33 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           for (const f of updatedFlightList) {
             const saveRes = await SupabaseService.saveFlight(activeTripId, f, fallbackTrip);
             if (!saveRes.success) {
+              const restoreExpRes = await SupabaseService.saveExpense(activeTripId, prevItem, fallbackTrip);
+              const prevFlight = prevFlightsSnapshot.find((fl) => fl.id === f.id);
+              let restoreFlightOk = true;
+              if (prevFlight) {
+                const restoreFlightRes = await SupabaseService.saveFlight(activeTripId, prevFlight, fallbackTrip);
+                restoreFlightOk = restoreFlightRes.success;
+              }
               setExpenses((prev) => prev.map((item) => (item.id === id ? prevItem : item)));
-              return { success: false, error: saveRes.error || 'Falha ao atualizar status no voo' };
+              setFlights(prevFlightsSnapshot);
+              setTrips((prevTrips) =>
+                prevTrips.map((t) =>
+                  t.id === activeTripId
+                    ? {
+                        ...t,
+                        expenses: (t.expenses || []).map((e) => (e.id === id ? prevItem : e)),
+                        flights: prevFlightsSnapshot,
+                      }
+                    : t
+                )
+              );
+              if (!restoreExpRes.success || !restoreFlightOk) {
+                return {
+                  success: false,
+                  error: `Falha ao atualizar voo no Supabase: ${saveRes.error}. A restauração compensatória falhou no banco de dados. O banco de dados pode estar inconsistente.`
+                };
+              }
+              return { success: false, error: `${saveRes.error || 'Falha ao atualizar status no voo'}. Os dados anteriores foram restaurados com sucesso no banco e no estado local.` };
             }
           }
         }
@@ -3249,6 +3318,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       const carSourceId = sourceId || (id.startsWith('exp-car-') ? id.replace('exp-car-', '') : undefined);
       if (isCar) {
         let updatedCarList: CarRentalBooking[] = [];
+        const prevCarsSnapshot = [...carRentals];
         setCarRentals((prevCars) => {
           const next = prevCars.map((car) => {
             const matches = (carSourceId && car.id === carSourceId) || generateDeterministicUUID('car-expense', car.id) === id;
@@ -3288,8 +3358,33 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           for (const c of updatedCarList) {
             const saveRes = await SupabaseService.saveCarRental(activeTripId, c, fallbackTrip);
             if (!saveRes.success) {
+              const restoreExpRes = await SupabaseService.saveExpense(activeTripId, prevItem, fallbackTrip);
+              const prevCar = prevCarsSnapshot.find((car) => car.id === c.id);
+              let restoreCarOk = true;
+              if (prevCar) {
+                const restoreCarRes = await SupabaseService.saveCarRental(activeTripId, prevCar, fallbackTrip);
+                restoreCarOk = restoreCarRes.success;
+              }
               setExpenses((prev) => prev.map((item) => (item.id === id ? prevItem : item)));
-              return { success: false, error: saveRes.error || 'Falha ao atualizar status no aluguel de veículo' };
+              setCarRentals(prevCarsSnapshot);
+              setTrips((prevTrips) =>
+                prevTrips.map((t) =>
+                  t.id === activeTripId
+                    ? {
+                        ...t,
+                        expenses: (t.expenses || []).map((e) => (e.id === id ? prevItem : e)),
+                        carRentals: prevCarsSnapshot,
+                      }
+                    : t
+                )
+              );
+              if (!restoreExpRes.success || !restoreCarOk) {
+                return {
+                  success: false,
+                  error: `Falha ao atualizar aluguel de veículo no Supabase: ${saveRes.error}. A restauração compensatória falhou no banco de dados. O banco de dados pode estar inconsistente.`
+                };
+              }
+              return { success: false, error: `${saveRes.error || 'Falha ao atualizar status no aluguel de veículo'}. Os dados anteriores foram restaurados com sucesso no banco e no estado local.` };
             }
           }
         }
@@ -3300,6 +3395,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       const ticketSourceId = sourceId || (id.startsWith('exp-ticket-') ? id.replace('exp-ticket-', '') : undefined);
       if (isTicket) {
         let updatedTicketList: ParkTicketPurchase[] = [];
+        const prevTicketsSnapshot = [...parkTickets];
         setParkTickets((prevTickets) => {
           const next = prevTickets.map((tkt) => {
             const matches = (ticketSourceId && tkt.id === ticketSourceId) || generateDeterministicUUID('ticket-expense', tkt.id) === id;
@@ -3339,8 +3435,33 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           for (const tkt of updatedTicketList) {
             const saveRes = await SupabaseService.saveParkTicket(activeTripId, tkt, fallbackTrip);
             if (!saveRes.success) {
+              const restoreExpRes = await SupabaseService.saveExpense(activeTripId, prevItem, fallbackTrip);
+              const prevTkt = prevTicketsSnapshot.find((tk) => tk.id === tkt.id);
+              let restoreTktOk = true;
+              if (prevTkt) {
+                const restoreTktRes = await SupabaseService.saveParkTicket(activeTripId, prevTkt, fallbackTrip);
+                restoreTktOk = restoreTktRes.success;
+              }
               setExpenses((prev) => prev.map((item) => (item.id === id ? prevItem : item)));
-              return { success: false, error: saveRes.error || 'Falha ao atualizar status no ingresso' };
+              setParkTickets(prevTicketsSnapshot);
+              setTrips((prevTrips) =>
+                prevTrips.map((t) =>
+                  t.id === activeTripId
+                    ? {
+                        ...t,
+                        expenses: (t.expenses || []).map((e) => (e.id === id ? prevItem : e)),
+                        parkTickets: prevTicketsSnapshot,
+                      }
+                    : t
+                )
+              );
+              if (!restoreExpRes.success || !restoreTktOk) {
+                return {
+                  success: false,
+                  error: `Falha ao atualizar ingresso no Supabase: ${saveRes.error}. A restauração compensatória falhou no banco de dados. O banco de dados pode estar inconsistente.`
+                };
+              }
+              return { success: false, error: `${saveRes.error || 'Falha ao atualizar status no ingresso'}. Os dados anteriores foram restaurados com sucesso no banco e no estado local.` };
             }
           }
         }
