@@ -317,19 +317,22 @@ export async function deleteExpensesBySourceInDb(
       photo_package: 'photo-expense',
     };
     const expId = generateDeterministicUUID(typeMap[sourceType] || sourceType, sourceId);
-    const legacyPrefix = sourceType === 'accommodation' ? 'acc' : sourceType === 'flight' ? 'flight' : sourceType;
-    const legacyId = `exp-${legacyPrefix}-${sourceId}`;
+    const validUuids = [expId].filter((id) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+    );
 
-    // 1. Exclusão por ID determinístico e legado restritos à viagem e ao source_type
-    const { error: err1 } = await supabase
-      .from('expenses')
-      .delete()
-      .eq('trip_id', cleanTripId)
-      .eq('source_type', sourceType)
-      .in('id', [expId, legacyId]);
+    // 1. Exclusão por ID determinístico (UUID) restrito à viagem e ao source_type
+    if (validUuids.length > 0) {
+      const { error: err1 } = await supabase
+        .from('expenses')
+        .delete()
+        .eq('trip_id', cleanTripId)
+        .eq('source_type', sourceType)
+        .in('id', validUuids);
 
-    if (err1) {
-      return { success: false, error: err1.message };
+      if (err1) {
+        return { success: false, error: err1.message };
+      }
     }
 
     // 2. Exclusão restrita por trip_id + source_type + source_id
@@ -2249,6 +2252,10 @@ export const SupabaseService = {
    */
   async deleteExpense(id: string): Promise<boolean> {
     try {
+      if (!id) return true;
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id.trim())) {
+        return true; // Ignorar IDs com formato não-UUID (ex: legados 'exp-car-...') para evitar erro de sintaxe do PostgreSQL
+      }
       const { error } = await supabase.from('expenses').delete().eq('id', id);
       return !error;
     } catch {
@@ -3100,7 +3107,9 @@ export const SupabaseService = {
 
       // Capturar despesas anteriores vinculadas a esta locação
       const expId = generateDeterministicUUID('car-expense', rental.id);
-      const legacyId = `exp-car-${rental.id}`;
+      const validUuids = [expId].filter((id) =>
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+      );
 
       const { data: expBySource, error: errSource } = await supabase
         .from('expenses')
@@ -3117,19 +3126,23 @@ export const SupabaseService = {
         };
       }
 
-      const { data: expById, error: errId } = await supabase
-        .from('expenses')
-        .select('*')
-        .eq('trip_id', cleanTripId)
-        .eq('source_type', 'car_rental')
-        .in('id', [expId, legacyId]);
+      let expById: any[] = [];
+      if (validUuids.length > 0) {
+        const { data: idRows, error: errId } = await supabase
+          .from('expenses')
+          .select('*')
+          .eq('trip_id', cleanTripId)
+          .eq('source_type', 'car_rental')
+          .in('id', validUuids);
 
-      if (errId) {
-        return {
-          success: false,
-          compensationSuccess: true, // Nenhuma gravação foi realizada
-          error: `Falha ao capturar despesas vinculadas por ID para snapshot: ${errId.message}. Gravação interrompida.`
-        };
+        if (errId) {
+          return {
+            success: false,
+            compensationSuccess: true, // Nenhuma gravação foi realizada
+            error: `Falha ao capturar despesas vinculadas por ID para snapshot: ${errId.message}. Gravação interrompida.`
+          };
+        }
+        expById = idRows || [];
       }
 
       const seenExpIds = new Set<string>();
