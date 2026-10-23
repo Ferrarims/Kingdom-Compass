@@ -410,6 +410,17 @@ export interface FlightSegment {
   baggageAllowance?: BaggageAllowance;
 }
 
+export type CarRentalOperationalStatus =
+  | 'Reservado / Confirmado'
+  | 'Confirmado'
+  | 'Retirado / Em Uso'
+  | 'Concluído / Devolvido'
+  | 'Concluído'
+  | 'Cancelado'
+  | string;
+
+export type CarRentalPaymentStatus = 'Pago' | 'Pendente' | 'Não informado';
+
 export interface CarRentalBooking {
   id: string;
   company: string; // e.g. 'Alamo Rent A Car'
@@ -426,7 +437,8 @@ export interface CarRentalBooking {
   
   costUSD?: number;
   costBRL?: number;
-  status: 'Reservado / Confirmado' | 'Pago' | 'Pendente' | 'Concluído';
+  status: CarRentalOperationalStatus;
+  paymentStatus?: CarRentalPaymentStatus;
   payerId?: string;
   travelerIds?: string[];
   driverName?: string;

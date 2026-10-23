@@ -51,6 +51,10 @@ export interface PaymentSectionProps {
   pricingMode?: 'per_person' | 'total';
   /** Se deve exibir o seletor de responsável pelo pagamento */
   showPayerSelector?: boolean;
+  /** Título descritivo customizado para o resumo (ex: 'Resumo da Locação para ') */
+  summaryTitle?: string;
+  /** Descrição explicativa do valor fixo */
+  fixedCostDescription?: string;
 }
 
 export const PaymentSection: React.FC<PaymentSectionProps> = ({
@@ -73,6 +77,8 @@ export const PaymentSection: React.FC<PaymentSectionProps> = ({
   unitLabelUSD,
   unitLabelBRL,
   showPayerSelector = true,
+  summaryTitle,
+  fixedCostDescription,
 }) => {
   const rate = dollarRate > 0 ? dollarRate : 5.75;
   const count = passengerCount > 0 ? passengerCount : 1;
@@ -198,14 +204,14 @@ export const PaymentSection: React.FC<PaymentSectionProps> = ({
               <Users className="w-4 h-4 text-slate-400 shrink-0" />
               <div>
                 <span>
-                  {isTotalMode
-                    ? 'Resumo da Hospedagem para '
-                    : 'Total calculado para '}
+                  {summaryTitle || (isTotalMode
+                    ? 'Resumo da Reserva para '
+                    : 'Total calculado para ')}
                   <strong className="text-slate-800 font-semibold">{count}</strong> {pluralLabel}:
                 </span>
                 {isTotalMode ? (
                   <span className="block text-[10px] text-slate-400 font-normal">
-                    Valor total fixo da estadia (não multiplicado pelo nº de {pluralLabel})
+                    {fixedCostDescription || `Valor total fixo da reserva (não multiplicado pelo nº de ${pluralLabel})`}
                     {count > 1 && totalCostBRL ? (
                       <span className="ml-1 text-[#1A2B4C] font-medium">
                         • Rateio informativo: ~ R$ {((totalCostBRL || 0) / count).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} por {passengerLabel}

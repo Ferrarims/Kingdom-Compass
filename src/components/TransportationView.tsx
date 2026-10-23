@@ -2,9 +2,8 @@ import React, { useState, useRef } from 'react';
 import { usePlanner, calculateDateOffset } from '../context/PlannerContext';
 import { CarRentalBooking } from '../types';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
-import { parseInputToNumber, formatInputDisplay } from '../utils/currency';
 import { TravelerSelector } from './TravelerSelector';
-import { MoneyInput } from './MoneyInput';
+import { PaymentSection, PaymentStatusType } from './PaymentSection';
 import { LogisticsCardHeader } from './LogisticsCardHeader';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
 import {
@@ -36,6 +35,7 @@ import {
   Ticket,
   Eye,
   RefreshCw,
+  Users,
 } from 'lucide-react';
 
 export const TransportationView: React.FC = () => {
@@ -73,6 +73,7 @@ export const TransportationView: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRental, setEditingRental] = useState<CarRentalBooking | null>(null);
   const [rentalToDelete, setRentalToDelete] = useState<CarRentalBooking | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
 
   useConfirmationKeyboard({
     isOpen: !!rentalToDelete,
@@ -85,9 +86,6 @@ export const TransportationView: React.FC = () => {
     onCancel: () => setRentalToDelete(null),
   });
 
-  // Input formatting temporary states
-  const [focusedField, setFocusedField] = useState<string | null>(null);
-  const [tempValue, setTempValue] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const rentalFormSubmitLockRef = useRef(false);
 
@@ -124,13 +122,21 @@ export const TransportationView: React.FC = () => {
     costUSD: 0,
     costBRL: 0,
     status: 'Reservado / Confirmado',
+    paymentStatus: 'Não informado',
     payerId: settings.currentUserId || 'all',
     travelerIds: ['all'],
     driverName: '',
-    includedInsurances: [],
+    includedInsurances: [
+      'CDW / LDW (Proteção contra Colisão e Roubo)',
+      'SLI / ALI (Proteção contra Terceiros)',
+    ],
     tollOption: 'Visitor Toll Pass (Gratuito MCO)',
     notes: '',
   });
+
+  const participantCount = (formData.travelerIds || ['all']).includes('all')
+    ? (settings.travelers?.length || 1)
+    : (formData.travelerIds?.length || 1);
 
   const handleSelectModality = (modality: 'rental' | 'public' | 'uber') => {
     const nextModality = selectedModality === modality ? undefined : modality;
@@ -142,6 +148,7 @@ export const TransportationView: React.FC = () => {
 
   const handleOpenAddModal = () => {
     setEditingRental(null);
+    setValidationError(null);
     setFormData({
       company: '',
       confirmationCode: '',
@@ -155,10 +162,14 @@ export const TransportationView: React.FC = () => {
       costUSD: 0,
       costBRL: 0,
       status: 'Reservado / Confirmado',
+      paymentStatus: 'Não informado',
       payerId: settings.currentUserId || 'all',
       travelerIds: ['all'],
       driverName: '',
-      includedInsurances: [],
+      includedInsurances: [
+        'CDW / LDW (Proteção contra Colisão e Roubo)',
+        'SLI / ALI (Proteção contra Terceiros)',
+      ],
       tollOption: 'Visitor Toll Pass (Gratuito MCO)',
       notes: '',
     });
@@ -167,21 +178,23 @@ export const TransportationView: React.FC = () => {
 
   const handleOpenEditModal = (rental: CarRentalBooking) => {
     setEditingRental(rental);
+    setValidationError(null);
     setFormData({
-      company: rental.company,
-      confirmationCode: rental.confirmationCode,
-      category: rental.category,
-      pickupLocation: rental.pickupLocation,
-      pickupDate: rental.pickupDate,
-      pickupTime: rental.pickupTime,
-      dropoffLocation: rental.dropoffLocation,
-      dropoffDate: rental.dropoffDate,
-      dropoffTime: rental.dropoffTime,
-      costUSD: rental.costUSD || 0,
-      costBRL: rental.costBRL || 0,
-      status: rental.status,
+      company: rental.company || '',
+      confirmationCode: rental.confirmationCode || '',
+      category: rental.category || '',
+      pickupLocation: rental.pickupLocation || '',
+      pickupDate: rental.pickupDate || defaultPickupDate,
+      pickupTime: rental.pickupTime || '',
+      dropoffLocation: rental.dropoffLocation || '',
+      dropoffDate: rental.dropoffDate || defaultDropoffDate,
+      dropoffTime: rental.dropoffTime || '',
+      costUSD: rental.costUSD ?? 0,
+      costBRL: rental.costBRL ?? 0,
+      status: rental.status || 'Reservado / Confirmado',
+      paymentStatus: (rental.paymentStatus as PaymentStatusType) || (rental.status === 'Pago' ? 'Pago' : 'Não informado'),
       payerId: rental.payerId || 'all',
-      travelerIds: rental.travelerIds || ['all'],
+      travelerIds: rental.travelerIds && rental.travelerIds.length > 0 ? rental.travelerIds : ['all'],
       driverName: rental.driverName || '',
       includedInsurances: rental.includedInsurances || [],
       tollOption: rental.tollOption || 'Visitor Toll Pass (Gratuito MCO)',
@@ -193,6 +206,29 @@ export const TransportationView: React.FC = () => {
   const handleSubmitModal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (rentalFormSubmitLockRef.current || isSaving) return;
+
+    if (!formData.company?.trim()) {
+      setValidationError('Por favor, informe a empresa locadora.');
+      return;
+    }
+    if (!formData.category?.trim()) {
+      setValidationError('Por favor, informe a categoria ou modelo do veículo.');
+      return;
+    }
+    if (!formData.pickupDate) {
+      setValidationError('Por favor, informe a data de retirada.');
+      return;
+    }
+    if (!formData.dropoffDate) {
+      setValidationError('Por favor, informe a data de devolução.');
+      return;
+    }
+    if (formData.dropoffDate < formData.pickupDate) {
+      setValidationError('A data de devolução não pode ser anterior à data de retirada.');
+      return;
+    }
+
+    setValidationError(null);
     rentalFormSubmitLockRef.current = true;
     setIsSaving(true);
     try {
@@ -200,6 +236,7 @@ export const TransportationView: React.FC = () => {
         ...formData,
         pickupLocation: cleanAddressString(formData.pickupLocation),
         dropoffLocation: cleanAddressString(formData.dropoffLocation),
+        paymentStatus: formData.paymentStatus || 'Não informado',
       };
       let res: { success: boolean; error?: string } | undefined;
       if (editingRental) {
@@ -208,12 +245,12 @@ export const TransportationView: React.FC = () => {
         res = await addCarRental(cleanedData);
       }
       if (res && !res.success) {
-        alert(`Erro ao salvar aluguel de veículo: ${res.error || 'Erro desconhecido'}`);
+        setValidationError(`Erro ao salvar aluguel de veículo: ${res.error || 'Erro desconhecido'}`);
         return;
       }
       setIsModalOpen(false);
     } catch (err: any) {
-      alert(`Erro inesperado ao salvar aluguel de veículo: ${err?.message || 'Erro desconhecido'}`);
+      setValidationError(`Erro inesperado ao salvar aluguel de veículo: ${err?.message || 'Erro desconhecido'}`);
     } finally {
       rentalFormSubmitLockRef.current = false;
       setIsSaving(false);
@@ -1142,7 +1179,7 @@ export const TransportationView: React.FC = () => {
           onClick={handleRentalModalBackdrop}
           className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 z-50 animate-in fade-in duration-200 overflow-hidden"
         >
-          <div className="bg-white rounded-3xl max-w-6xl w-full p-0 flex flex-col shadow-2xl h-[90vh] max-h-[92vh] my-auto overflow-hidden animate-in zoom-in-95 duration-150">
+          <div className="bg-white rounded-3xl max-w-5xl w-full p-0 flex flex-col shadow-2xl h-[90vh] max-h-[92vh] my-auto overflow-hidden animate-in zoom-in-95 duration-150">
             {/* Modal Header */}
             <div className="bg-[#1A2B4C] text-white p-5 sm:p-6 flex items-center justify-between border-b border-[#D4AF37]/30 shrink-0">
               <div className="flex items-center gap-3">
@@ -1151,7 +1188,7 @@ export const TransportationView: React.FC = () => {
                 </div>
                 <div>
                   <span className="text-[10px] sm:text-xs font-bold uppercase tracking-wider text-[#D4AF37] block">
-                    {editingRental ? 'Edição de Aluguel' : 'Novo Aluguel de Veículo'} • Transporte em Orlando
+                    {editingRental ? 'Edição de Aluguel' : 'Novo Aluguel de Veículo'} • Transporte & Mobilidade
                   </span>
                   <h2 className="text-base sm:text-xl font-bold font-serif text-white tracking-tight">
                     {editingRental ? 'Editar Contrato de Locação' : 'Cadastrar Novo Aluguel de Veículo'}
@@ -1163,336 +1200,508 @@ export const TransportationView: React.FC = () => {
                 type="button"
                 onClick={() => setIsModalOpen(false)}
                 className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
-                aria-label="Fechar"
+                aria-label="Fechar modal"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleSubmitModal} className="flex flex-col flex-1 min-h-0 overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <div className="p-5 sm:p-6 space-y-8 flex-1 overflow-y-auto min-h-0 custom-scrollbar">
-              {/* 1. DADOS DA LOCAÇÃO */}
-              <div className="space-y-4">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-                  1. Dados da Locação
-                </label>
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] font-bold text-slate-700 block">Empresa Locadora</label>
+            <form onSubmit={handleSubmitModal} className="flex flex-col flex-1 min-h-0 overflow-hidden">
+              <div className="p-5 sm:p-6 space-y-6 flex-1 overflow-y-auto min-h-0 custom-scrollbar">
+                {/* Validation Error Banner */}
+                {validationError && (
+                  <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-start justify-between gap-3 animate-in fade-in">
+                    <div className="flex items-start gap-2.5">
+                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                      <span className="leading-relaxed">{validationError}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setValidationError(null)}
+                      className="text-rose-500 hover:text-rose-700 cursor-pointer p-0.5 rounded-md hover:bg-rose-100"
+                      aria-label="Fechar alerta de erro"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+
+                {/* 1. DADOS DA LOCAÇÃO, VEÍCULO & CONDUTOR */}
+                <div className="space-y-3">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
+                    1. Dados da Locação, Veículo & Condutor
+                  </label>
+                  <div className="bg-slate-50 p-4 sm:p-5 rounded-2xl border border-slate-200 space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-slate-700 block flex items-center gap-1">
+                          Empresa Locadora <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={formData.company}
+                          onChange={(e) => setFormData({ ...formData, company: e.target.value })}
+                          placeholder="Ex: Alamo, Hertz, Avis, Sixt..."
+                          className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] shadow-2xs"
+                          required
+                        />
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {['Alamo', 'Hertz', 'Avis', 'Sixt', 'Budget', 'National'].map((comp) => (
+                            <button
+                              key={comp}
+                              type="button"
+                              onClick={() => setFormData({ ...formData, company: comp })}
+                              className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors cursor-pointer border ${
+                                formData.company === comp
+                                  ? 'bg-[#1A2B4C] text-white border-[#1A2B4C]'
+                                  : 'bg-white border-slate-200 text-slate-600 hover:border-[#1A2B4C]'
+                              }`}
+                            >
+                              {comp}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-slate-700 block">
+                          Código da Reserva / PNR / Voucher
+                        </label>
+                        <input
+                          type="text"
+                          value={formData.confirmationCode || ''}
+                          onChange={(e) => setFormData({ ...formData, confirmationCode: e.target.value.toUpperCase() })}
+                          placeholder="Ex: ALM-983142"
+                          className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono font-bold uppercase text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] shadow-2xs"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-slate-700 block flex items-center gap-1">
+                          Categoria do Veículo <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={formData.category}
+                          onChange={(e) => setFormData({ ...formData, category: e.target.value })}
+                          placeholder="Ex: Minivan 7 Lugares, SUV Grande, Sedan Intermediário..."
+                          className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] shadow-2xs"
+                          required
+                        />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-slate-700 block">
+                          Status Operacional da Reserva
+                        </label>
+                        <select
+                          value={formData.status}
+                          onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
+                          className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] shadow-2xs cursor-pointer"
+                        >
+                          <option value="Reservado / Confirmado">✅ Reservado / Confirmado</option>
+                          <option value="Confirmado">📋 Confirmado</option>
+                          <option value="Check-in Realizado">🔑 Check-in / Retirado</option>
+                          <option value="Em Andamento">🚗 Em Andamento</option>
+                          <option value="Concluído">🏁 Concluído / Devolvido</option>
+                          <option value="Cancelado">❌ Cancelado</option>
+                        </select>
+                        <span className="text-[10px] text-slate-400 block">
+                          Status da operação do veículo (independente do pagamento).
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Condutor Principal com campo próprio e distinção clara do pagador */}
+                    <div className="pt-3 border-t border-slate-200/80 space-y-2">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                        <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                          <KeyRound className="w-4 h-4 text-[#D4AF37]" />
+                          <span>Condutor Principal (Motorista Habilitado)</span>
+                        </label>
+                        <span className="text-[10px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200 font-medium">
+                          ⚠️ O condutor dirige o carro; o pagador é definido na seção de Custos & Pagamento.
+                        </span>
+                      </div>
                       <input
                         type="text"
-                        value={formData.company}
-                        onChange={(e) => setFormData({ ...formData, company: e.target.value })}
-                        placeholder="Ex: Alamo, Hertz, Avis..."
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs"
-                        required
+                        value={formData.driverName || ''}
+                        onChange={(e) => setFormData({ ...formData, driverName: e.target.value })}
+                        placeholder="Ex: Nome Completo do Motorista Principal"
+                        className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] shadow-2xs"
                       />
-                      <div className="flex flex-wrap gap-1 mt-1.5">
-                        {['Alamo', 'Hertz', 'Avis', 'Sixt'].map((comp) => (
+                      {settings.travelers && settings.travelers.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                          <span className="text-[10px] font-semibold text-slate-400 mr-1">Preencher com viajante:</span>
+                          {settings.travelers.map((trv) => {
+                            const isSelected = formData.driverName === trv.name;
+                            return (
+                              <button
+                                key={trv.id}
+                                type="button"
+                                onClick={() => setFormData({ ...formData, driverName: trv.name })}
+                                className={`px-2 py-0.5 rounded-lg text-[10px] font-medium transition-colors cursor-pointer border ${
+                                  isSelected
+                                    ? 'bg-[#1A2B4C] text-white border-[#1A2B4C]'
+                                    : 'bg-white border-slate-200 text-slate-600 hover:border-[#1A2B4C]'
+                                }`}
+                              >
+                                👤 {trv.name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. RETIRADA (PICK-UP) */}
+                <div className="space-y-3">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
+                    2. Retirada (Pick-up)
+                  </label>
+                  <div className="bg-slate-50 p-4 sm:p-5 rounded-2xl border border-slate-200 space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-slate-700 block flex items-center gap-1">
+                          Data de Retirada <span className="text-rose-500">*</span>
+                        </label>
+                        <div className="relative">
+                          <Calendar className="absolute left-3 top-2.5 w-4 h-4 text-slate-400 pointer-events-none" />
+                          <input
+                            type="date"
+                            value={formData.pickupDate}
+                            onChange={(e) => setFormData({ ...formData, pickupDate: e.target.value })}
+                            className="w-full pl-9 pr-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] shadow-2xs cursor-pointer"
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-slate-700 block flex items-center gap-1">
+                          Horário de Retirada
+                        </label>
+                        <div className="relative">
+                          <Clock className="absolute left-3 top-2.5 w-4 h-4 text-slate-400 pointer-events-none" />
+                          <input
+                            type="time"
+                            value={formData.pickupTime}
+                            onChange={(e) => setFormData({ ...formData, pickupTime: e.target.value })}
+                            className="w-full pl-9 pr-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] shadow-2xs cursor-pointer"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-700 block">
+                        Local de Retirada
+                      </label>
+                      <div className="relative">
+                        <MapPin className="absolute left-3 top-2.5 w-4 h-4 text-slate-400 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={formData.pickupLocation}
+                          onChange={(e) => setFormData({ ...formData, pickupLocation: e.target.value })}
+                          placeholder="Ex: Aeroporto de Orlando (MCO) - Terminal Principal"
+                          className="w-full pl-9 pr-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] shadow-2xs"
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 mt-1.5">
+                        {[
+                          'Aeroporto de Orlando (MCO)',
+                          'Aeroporto de Miami (MIA)',
+                          'Aeroporto de Tampa (TPA)',
+                          'Disney Car Care Center',
+                        ].map((loc) => (
                           <button
-                            key={comp}
+                            key={loc}
                             type="button"
-                            onClick={() => setFormData({ ...formData, company: comp })}
-                            className="px-2 py-0.5 rounded text-[10px] font-bold bg-white border border-slate-200 text-slate-600 hover:border-[#1A2B4C] transition-colors cursor-pointer"
+                            onClick={() => setFormData({ ...formData, pickupLocation: loc })}
+                            className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors cursor-pointer border ${
+                              formData.pickupLocation === loc
+                                ? 'bg-[#1A2B4C] text-white border-[#1A2B4C]'
+                                : 'bg-white border-slate-200 text-slate-600 hover:border-[#1A2B4C]'
+                            }`}
                           >
-                            {comp}
+                            📍 {loc}
                           </button>
                         ))}
                       </div>
                     </div>
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] font-bold text-slate-700 block">Código da Reserva / PNR</label>
-                      <input
-                        type="text"
-                        value={formData.confirmationCode}
-                        onChange={(e) => setFormData({ ...formData, confirmationCode: e.target.value.toUpperCase() })}
-                        placeholder="Ex: ALM-983142"
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800 shadow-2xs"
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[11px] font-bold text-slate-700 block">Categoria do Veículo</label>
-                    <input
-                      type="text"
-                      value={formData.category}
-                      onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                      placeholder="Ex: Minivan 7 Lugares, SUV Grande..."
-                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs"
-                      required
-                    />
                   </div>
                 </div>
-              </div>
 
-              {/* 2. RETIRADA (PICK-UP) */}
-              <div className="space-y-4">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-                  2. Retirada (Pick-up)
-                </label>
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-4">
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] font-bold text-slate-700 block">Data</label>
-                      <input
-                        type="date"
-                        value={formData.pickupDate}
-                        onChange={(e) => setFormData({ ...formData, pickupDate: e.target.value })}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs"
-                        required
-                      />
+                {/* 3. DEVOLUÇÃO (DROP-OFF) */}
+                <div className="space-y-3">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
+                    3. Devolução (Drop-off)
+                  </label>
+                  <div className="bg-slate-50 p-4 sm:p-5 rounded-2xl border border-slate-200 space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-slate-700 block flex items-center gap-1">
+                          Data de Devolução <span className="text-rose-500">*</span>
+                        </label>
+                        <div className="relative">
+                          <Calendar className="absolute left-3 top-2.5 w-4 h-4 text-slate-400 pointer-events-none" />
+                          <input
+                            type="date"
+                            value={formData.dropoffDate}
+                            onChange={(e) => setFormData({ ...formData, dropoffDate: e.target.value })}
+                            className="w-full pl-9 pr-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] shadow-2xs cursor-pointer"
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <label className="text-xs font-bold text-slate-700 block flex items-center gap-1">
+                          Horário de Devolução
+                        </label>
+                        <div className="relative">
+                          <Clock className="absolute left-3 top-2.5 w-4 h-4 text-slate-400 pointer-events-none" />
+                          <input
+                            type="time"
+                            value={formData.dropoffTime}
+                            onChange={(e) => setFormData({ ...formData, dropoffTime: e.target.value })}
+                            className="w-full pl-9 pr-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] shadow-2xs cursor-pointer"
+                          />
+                        </div>
+                      </div>
                     </div>
+
                     <div className="space-y-1.5">
-                      <label className="text-[11px] font-bold text-slate-700 block">Hora (A partir de - Limite inicial)</label>
-                      <input
-                        type="time"
-                        value={formData.pickupTime}
-                        onChange={(e) => setFormData({ ...formData, pickupTime: e.target.value })}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs"
-                      />
-                    </div>
-                    <div className="col-span-2 sm:col-span-1 space-y-1.5">
-                      <label className="text-[11px] font-bold text-slate-700 block">Status da Reserva</label>
-                      <select
-                        value={formData.status}
-                        onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs"
-                      >
-                        {formData.status && !['Reservado / Confirmado', 'Pago', 'Pendente', 'Concluído', 'Planejado', 'Planejando'].includes(formData.status) && (
-                          <option value={formData.status}>{formData.status} (Legado)</option>
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-bold text-slate-700 block">
+                          Local de Devolução
+                        </label>
+                        {formData.pickupLocation && (
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, dropoffLocation: formData.pickupLocation })}
+                            className="text-[11px] font-bold text-[#1A2B4C] hover:text-[#D4AF37] cursor-pointer flex items-center gap-1"
+                          >
+                            🔄 Mesmo local da retirada
+                          </button>
                         )}
-                        <option value="Reservado / Confirmado">✅ Reservado / Confirmado</option>
-                        <option value="Pago">💰 Pago</option>
-                        <option value="Pendente">⚠️ Pendente</option>
-                        <option value="Concluído">🏁 Concluído</option>
-                        <option value="Planejado">📋 Planejado (Legado)</option>
-                        <option value="Planejando">📋 Planejando (Legado)</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[11px] font-bold text-slate-700 block">Local de Retirada</label>
-                    <input
-                      type="text"
-                      value={formData.pickupLocation}
-                      onChange={(e) => setFormData({ ...formData, pickupLocation: e.target.value })}
-                      placeholder="Ex: Aeroporto de Orlando (MCO) - Terminal Principal"
-                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 shadow-2xs"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* 3. DEVOLUÇÃO (DROP-OFF) */}
-              <div className="space-y-4">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-                  3. Devolução (Drop-off)
-                </label>
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] font-bold text-slate-700 block">Data</label>
-                      <input
-                        type="date"
-                        value={formData.dropoffDate}
-                        onChange={(e) => setFormData({ ...formData, dropoffDate: e.target.value })}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs"
-                        required
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] font-bold text-slate-700 block">Hora (Até - Prazo máximo)</label>
-                      <input
-                        type="time"
-                        value={formData.dropoffTime}
-                        onChange={(e) => setFormData({ ...formData, dropoffTime: e.target.value })}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs"
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[11px] font-bold text-slate-700 block">Local de Devolução</label>
-                    <input
-                      type="text"
-                      value={formData.dropoffLocation}
-                      onChange={(e) => setFormData({ ...formData, dropoffLocation: e.target.value })}
-                      placeholder="Ex: Aeroporto de Orlando (MCO)"
-                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 shadow-2xs"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* 4. VIAJANTES DO PACOTE */}
-              <TravelerSelector
-                label="4. Viajantes do Pacote"
-                travelers={settings.travelers || []}
-                selectedIds={formData.travelerIds || ['all']}
-                onChange={(ids) => setFormData({ ...formData, travelerIds: ids })}
-              />
-
-              {/* 5. CUSTOS & CONDUTOR */}
-              <div className="space-y-4">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-                  5. Custos & Condutor
-                </label>
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] font-bold text-slate-700 block">Valor a Pagar (US$)</label>
-                      <MoneyInput
-                        currency="USD"
-                        value={formData.costUSD}
-                        onChange={(val) => {
-                          const rate = settings.dollarRate || 5.75;
-                          setFormData({
-                            ...formData,
-                            costUSD: val,
-                            costBRL: val !== null ? Math.round(val * rate * 100) / 100 : null,
-                          });
-                        }}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] font-bold text-slate-700 block">Valor a Pagar (R$)</label>
-                      <MoneyInput
-                        currency="BRL"
-                        value={formData.costBRL}
-                        onChange={(val) => {
-                          const rate = settings.dollarRate || 5.75;
-                          setFormData({
-                            ...formData,
-                            costBRL: val,
-                            costUSD: val !== null && rate > 0 ? Math.round((val / rate) * 100) / 100 : null,
-                          });
-                        }}
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[11px] font-bold text-slate-700 block">Condutor Principal</label>
-                    <input
-                      type="text"
-                      value={formData.driverName}
-                      onChange={(e) => setFormData({ ...formData, driverName: e.target.value })}
-                      placeholder="Ex: Nome do Condutor"
-                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs"
-                    />
-                  </div>
-
-                  <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <CreditCard className="w-4 h-4 text-[#D4AF37]" />
-                      <label className="text-[11px] font-bold text-slate-700">Responsável pelo Pagamento</label>
-                    </div>
-                    <select
-                      value={formData.payerId || 'all'}
-                      onChange={(e) => setFormData({ ...formData, payerId: e.target.value })}
-                      className="bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-[11px] font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#1A2B4C]/30 min-w-[200px]"
-                    >
-                      <option value="all">👥 Dividido pelo grupo</option>
-                      {settings.travelers.map((t) => (
-                        <option key={t.id} value={t.id}>👤 {t.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              {/* COBERTURAS DE SEGURO */}
-              <div className="space-y-4">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-                  Coberturas de Seguro Incluídas
-                </label>
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
-                  {[
-                    'CDW / LDW (Proteção contra Colisão e Roubo)',
-                    'SLI / ALI (Proteção contra Terceiros)',
-                    'PAI / PEC (Proteção contra Acidentes Pessoais)',
-                    'Assistência Rodoviária 24h',
-                  ].map((ins) => {
-                    const isChecked = formData.includedInsurances?.includes(ins);
-                    return (
-                      <label key={ins} className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700">
+                      </div>
+                      <div className="relative">
+                        <MapPin className="absolute left-3 top-2.5 w-4 h-4 text-slate-400 pointer-events-none" />
                         <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={(e) => {
-                            const current = formData.includedInsurances || [];
-                            const updated = e.target.checked
-                              ? [...current, ins]
-                              : current.filter((i) => i !== ins);
-                            setFormData({ ...formData, includedInsurances: updated });
-                          }}
-                          className="w-4 h-4 rounded text-[#1A2B4C] focus:ring-[#1A2B4C]"
+                          type="text"
+                          value={formData.dropoffLocation}
+                          onChange={(e) => setFormData({ ...formData, dropoffLocation: e.target.value })}
+                          placeholder="Ex: Aeroporto de Orlando (MCO)"
+                          className="w-full pl-9 pr-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] shadow-2xs"
                         />
-                        <span>{ins}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* 6. DICAS & OBSERVAÇÕES */}
-              <div className="space-y-4">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-                  6. Dicas & Observações
-                </label>
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-4">
-                  <div className="space-y-1.5">
-                    <label className="text-[11px] font-bold text-slate-700 block">Opção de Pedágio</label>
-                    <select
-                      value={formData.tollOption}
-                      onChange={(e) => setFormData({ ...formData, tollOption: e.target.value })}
-                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs"
-                    >
-                      <option value="Visitor Toll Pass (Gratuito MCO)">Visitor Toll Pass (Gratuito MCO)</option>
-                      <option value="Tag da Locadora">Tag da Locadora</option>
-                      <option value="SunPass Próprio">SunPass Próprio</option>
-                      <option value="Pagar na Faixa">Pagar na Faixa</option>
-                    </select>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5 mt-1.5">
+                        {[
+                          'Aeroporto de Orlando (MCO)',
+                          'Aeroporto de Miami (MIA)',
+                          'Aeroporto de Tampa (TPA)',
+                        ].map((loc) => (
+                          <button
+                            key={loc}
+                            type="button"
+                            onClick={() => setFormData({ ...formData, dropoffLocation: loc })}
+                            className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors cursor-pointer border ${
+                              formData.dropoffLocation === loc
+                                ? 'bg-[#1A2B4C] text-white border-[#1A2B4C]'
+                                : 'bg-white border-slate-200 text-slate-600 hover:border-[#1A2B4C]'
+                            }`}
+                          >
+                            📍 {loc}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                  <div className="space-y-1.5">
-                    <label className="text-[11px] font-bold text-slate-700 block">Instruções & Observações</label>
+                </div>
+
+                {/* 4. SEGUROS & PEDÁGIOS */}
+                <div className="space-y-3">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
+                    4. Seguros & Pedágios
+                  </label>
+                  <div className="bg-slate-50 p-4 sm:p-5 rounded-2xl border border-slate-200 space-y-4">
+                    <div>
+                      <label className="text-xs font-bold text-slate-700 block mb-2">
+                        Coberturas de Seguro Incluídas
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {[
+                          'CDW / LDW (Proteção contra Colisão e Roubo)',
+                          'SLI / ALI (Proteção contra Terceiros)',
+                          'PAI / PEC (Proteção contra Acidentes Pessoais)',
+                          'Assistência Rodoviária 24h',
+                        ].map((ins) => {
+                          const isChecked = formData.includedInsurances?.includes(ins);
+                          return (
+                            <label
+                              key={ins}
+                              className={`flex items-center gap-2.5 p-2.5 rounded-xl border transition-colors cursor-pointer text-xs font-medium ${
+                                isChecked
+                                  ? 'bg-white border-[#1A2B4C] text-slate-900 shadow-2xs'
+                                  : 'bg-white/60 border-slate-200 text-slate-600 hover:bg-white'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={(e) => {
+                                  const current = formData.includedInsurances || [];
+                                  const updated = e.target.checked
+                                    ? [...current, ins]
+                                    : current.filter((i) => i !== ins);
+                                  setFormData({ ...formData, includedInsurances: updated });
+                                }}
+                                className="w-4 h-4 rounded text-[#1A2B4C] focus:ring-[#1A2B4C]"
+                              />
+                              <span>{ins}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-slate-200/80 space-y-2">
+                      <label className="text-xs font-bold text-slate-700 block">Opção de Pedágio</label>
+                      <select
+                        value={formData.tollOption}
+                        onChange={(e) => setFormData({ ...formData, tollOption: e.target.value })}
+                        className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] shadow-2xs cursor-pointer"
+                      >
+                        <option value="Visitor Toll Pass (Gratuito MCO)">Visitor Toll Pass (Gratuito MCO - Recomendado)</option>
+                        <option value="Tag da Locadora">Tag da Locadora (SunPass / E-Toll com taxa diária)</option>
+                        <option value="SunPass Próprio">SunPass Próprio (Comprado no Walgreens/Publix)</option>
+                        <option value="Pagar na Faixa">Pagar na Faixa / Toll-By-Plate</option>
+                      </select>
+                      <p className="text-[11px] text-slate-500 leading-relaxed">
+                        💡 <strong>Dica de Economia:</strong> No aeroporto MCO você pode retirar a tag gratuita do <strong>Visitor Toll Pass</strong> e pagar somente o valor oficial dos pedágios sem taxa de serviço da locadora.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 5. PARTICIPANTES / VIAJANTES DO VEÍCULO (Imediatamente antes de Custos & Pagamento) */}
+                <TravelerSelector
+                  label="5. Participantes / Viajantes do Veículo"
+                  travelers={settings.travelers || []}
+                  selectedIds={formData.travelerIds || ['all']}
+                  onChange={(ids) => setFormData((prev) => ({ ...prev, travelerIds: ids }))}
+                />
+
+                {/* 6. CUSTOS & PAGAMENTO (Reutiliza PaymentSection no modo total) */}
+                <PaymentSection
+                  sectionNumber={6}
+                  sectionTitle="CUSTOS & PAGAMENTO"
+                  pricingMode="total"
+                  dollarRate={settings.dollarRate || 5.75}
+                  unitCostUSD={participantCount > 0 && formData.costUSD ? formData.costUSD / participantCount : null}
+                  unitCostBRL={participantCount > 0 && formData.costBRL ? formData.costBRL / participantCount : null}
+                  totalCostUSD={formData.costUSD !== undefined && formData.costUSD !== null ? formData.costUSD : null}
+                  totalCostBRL={formData.costBRL !== undefined && formData.costBRL !== null ? formData.costBRL : null}
+                  onChangeCosts={(_unitUSD, _unitBRL, totalUSD, totalBRL) => {
+                    setFormData((prev) => ({
+                      ...prev,
+                      costUSD: totalUSD ?? 0,
+                      costBRL: totalBRL ?? 0,
+                    }));
+                  }}
+                  paymentStatus={formData.paymentStatus || 'Não informado'}
+                  onChangePaymentStatus={(status: PaymentStatusType) => {
+                    setFormData((prev) => ({
+                      ...prev,
+                      paymentStatus: status,
+                    }));
+                  }}
+                  payerId={formData.payerId || 'all'}
+                  onChangePayerId={(payerId) => {
+                    setFormData((prev) => ({
+                      ...prev,
+                      payerId,
+                    }));
+                  }}
+                  travelers={settings.travelers || []}
+                  selectedTravelerIds={formData.travelerIds || ['all']}
+                  passengerCount={participantCount}
+                  passengerLabel="passageiro"
+                  unitLabelUSD="Valor Total da Locação (US$)"
+                  unitLabelBRL="Valor Total da Locação (R$)"
+                  summaryTitle="Resumo da Locação para "
+                  fixedCostDescription="Valor total fixo da locação do veículo (não multiplicado pelo nº de passageiros)"
+                  showPayerSelector={true}
+                />
+
+                {/* 7. OBSERVAÇÕES & INSTRUÇÕES */}
+                <div className="space-y-3">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
+                    7. Observações & Instruções
+                  </label>
+                  <div className="bg-slate-50 p-4 sm:p-5 rounded-2xl border border-slate-200 space-y-2">
                     <textarea
-                      value={formData.notes}
+                      value={formData.notes || ''}
                       onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                      rows={2}
-                      placeholder="Ex: Skip the Counter ativado..."
-                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 shadow-2xs"
+                      rows={3}
+                      placeholder="Ex: Skip the Counter ativado no app da locadora. Retirar veículo direto na garagem sem passar pelo balcão."
+                      className="w-full px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] shadow-2xs"
                     />
                   </div>
                 </div>
               </div>
 
-              </div>
+              {/* Fixed Footer */}
+              <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
+                {editingRental ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsModalOpen(false);
+                      setRentalToDelete(editingRental);
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors shadow-2xs"
+                    title="Excluir este aluguel"
+                    aria-label={`Excluir aluguel de ${editingRental.company}`}
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                    <span>Excluir Aluguel</span>
+                  </button>
+                ) : (
+                  <div />
+                )}
 
-              <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-3 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 font-bold text-xs cursor-pointer transition-colors"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSaving}
-                  className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white font-bold text-xs shadow-md hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isSaving ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 text-[#D4AF37] animate-spin" />
-                      <span>Salvando...</span>
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
-                      <span>Salvar</span>
-                    </>
-                  )}
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setIsModalOpen(false)}
+                    className="px-5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSaving}
+                    className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isSaving ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 text-[#D4AF37] animate-spin" />
+                        <span>Salvando...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
+                        <span>Salvar</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </form>
           </div>

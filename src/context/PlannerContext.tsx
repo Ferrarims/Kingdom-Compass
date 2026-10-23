@@ -1714,13 +1714,19 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   // Helper para verificar se uma locação de carro é considerada paga
-  const isCarRentalPaid = (status?: string): boolean => {
-    if (!status) return false;
-    const s = status.trim().toLowerCase();
-    if (s.includes('pendente') || s.includes('falta pagar') || s.includes('planejado') || s.includes('previsão')) {
+  const isCarRentalPaid = (rentalOrStatus?: CarRentalBooking | string): boolean => {
+    if (!rentalOrStatus) return false;
+    if (typeof rentalOrStatus === 'object') {
+      if (rentalOrStatus.paymentStatus) {
+        return rentalOrStatus.paymentStatus === 'Pago';
+      }
+      return isCarRentalPaid(rentalOrStatus.status);
+    }
+    const s = rentalOrStatus.trim().toLowerCase();
+    if (s.includes('pendente') || s.includes('falta pagar') || s.includes('não informado') || s.includes('nao informado') || s.includes('planejado') || s.includes('previsão')) {
       return false;
     }
-    return s.includes('pago') || s.includes('confirmado') || s.includes('concluído') || s.includes('reservado');
+    return s.includes('pago');
   };
 
   // Função utilitária para reconciliar e garantir que todos os itens comprados (voos, hotéis, carros, ingressos)
@@ -1957,12 +1963,27 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     // 4. Locações de Carro
     carRentalsList.forEach((rental) => {
       const expId = generateDeterministicUUID('car-expense', rental.id);
-      const usd = rental.costUSD || 0;
-      const brl = rental.costBRL || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
-      const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
+      const legacyId = `exp-car-${rental.id}`;
+      const isZero = isZeroCost(rental.costUSD, rental.costBRL);
 
-      if (brl > 0 || finalUsd > 0) {
-        const isPaid = isCarRentalPaid(rental.status);
+      if (isZero) {
+        // Regra obrigatória: se a cobrança for zero nas duas moedas, nenhuma despesa vinculada
+        // a este aluguel de veículo pode existir no Financeiro (mesmo que paymentStatus seja 'Pago')
+        for (let i = updatedExpenses.length - 1; i >= 0; i--) {
+          const e = updatedExpenses[i];
+          if (
+            e.id === expId ||
+            e.id === legacyId ||
+            (e.sourceType === 'car_rental' && e.sourceId === rental.id)
+          ) {
+            updatedExpenses.splice(i, 1);
+          }
+        }
+      } else {
+        const usd = Number(rental.costUSD) || 0;
+        const brl = Number(rental.costBRL) || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
+        const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
+        const isPaid = isCarRentalPaid(rental);
         const rentalTitle = `Transporte: Aluguel de Carro (${rental.company || 'Locadora'})`.trim();
         const rentalNotes = `Período: ${rental.pickupDate || '---'} a ${rental.dropoffDate || '---'}${rental.category ? ' (' + rental.category + ')' : ''}`;
 
@@ -1986,21 +2007,35 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           updatedBy: cUser.name || 'Sistema',
         };
 
-        const existingIdx = updatedExpenses.findIndex((e) => e.id === expId || e.id === `exp-car-${rental.id}` || (e.sourceType === 'car_rental' && e.sourceId === rental.id));
-        if (existingIdx >= 0) {
-          const prevExp = updatedExpenses[existingIdx];
-          const finalPaid = isPaid || prevExp.status === 'Pago' || (prevExp.paidValueBRL || 0) > 0;
-          updatedExpenses[existingIdx] = {
+        const matchingIndices: number[] = [];
+        updatedExpenses.forEach((e, idx) => {
+          if (
+            e.id === expId ||
+            e.id === legacyId ||
+            (e.sourceType === 'car_rental' && e.sourceId === rental.id)
+          ) {
+            matchingIndices.push(idx);
+          }
+        });
+
+        if (matchingIndices.length > 0) {
+          const primaryIdx = matchingIndices[0];
+          const prevExp = updatedExpenses[primaryIdx];
+          const finalPaid = isPaid;
+          updatedExpenses[primaryIdx] = {
             ...prevExp,
             ...expData,
-            id: prevExp.id,
-            status: finalPaid ? 'Pago' : (prevExp.status === 'Parcial' ? 'Parcial' : 'Pendente'),
-            paidValueBRL: finalPaid ? (prevExp.paidValueBRL && prevExp.paidValueBRL > 0 ? prevExp.paidValueBRL : brl) : 0,
-            paidValueUSD: finalPaid ? (prevExp.paidValueUSD && prevExp.paidValueUSD > 0 ? prevExp.paidValueUSD : finalUsd) : 0,
+            id: expId,
+            status: finalPaid ? 'Pago' : 'Pendente',
+            paidValueBRL: finalPaid ? brl : 0,
+            paidValueUSD: finalPaid ? finalUsd : 0,
             payerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevExp.payerId || expData.payerId),
             responsibleTravelerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevExp.responsibleTravelerId || expData.payerId),
             excluded: prevExp.excluded,
           };
+          for (let d = matchingIndices.length - 1; d >= 1; d--) {
+            updatedExpenses.splice(matchingIndices[d], 1);
+          }
         } else {
           updatedExpenses.push(expData);
         }
@@ -4504,63 +4539,23 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
   const syncCarRentalExpense = async (rental: CarRentalBooking, rate: number): Promise<{ success: boolean; error?: string }> => {
     const expId = generateDeterministicUUID('car-expense', rental.id);
-    const usd = rental.costUSD || 0;
-    const brl = rental.costBRL || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
+    const legacyId = `exp-car-${rental.id}`;
+    const usd = Number(rental.costUSD) || 0;
+    const brl = Number(rental.costBRL) || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
     const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
 
-    if (brl > 0 || finalUsd > 0) {
-      const isPaid = isCarRentalPaid(rental.status);
-      const rentalTitle = `Transporte: Aluguel de Carro (${rental.company || 'Locadora'})`.trim();
-      const rentalNotes = `Período: ${rental.pickupDate || '---'} a ${rental.dropoffDate || '---'}${rental.category ? ' (' + rental.category + ')' : ''}`;
+    const isZero = isZeroCost(rental.costUSD, rental.costBRL);
 
-      const expData: ExpenseItem = {
-        id: expId,
-        title: rentalTitle,
-        category: 'Transporte',
-        estimatedValueUSD: finalUsd,
-        estimatedValueBRL: brl,
-        paidValueBRL: isPaid ? brl : 0,
-        paidValueUSD: isPaid ? finalUsd : 0,
-        status: isPaid ? 'Pago' : 'Pendente',
-        payerId: rental.payerId || 'all',
-        responsibleTravelerId: rental.payerId || 'all',
-        travelerIds: rental.travelerIds || ['all'],
-        sourceType: 'car_rental',
-        sourceId: rental.id,
-        excluded: false,
-        notes: rentalNotes,
-        updatedAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
-        updatedBy: currentUser.name,
-      };
-
+    if (isZero) {
+      // Regra obrigatória: se a cobrança for zero nas duas moedas, nenhuma despesa vinculada
+      // a este aluguel de veículo pode existir no Financeiro (mesmo que paymentStatus seja 'Pago')
       setExpenses((prev) => {
-        let nextExpenses: ExpenseItem[];
-        const existingIndex = prev.findIndex((e) => e.id === expId || e.id === `exp-car-${rental.id}` || e.sourceId === rental.id);
-        if (existingIndex >= 0) {
-          const updated = [...prev];
-          const prevItem = updated[existingIndex];
-          const finalPaid = isPaid || prevItem.status === 'Pago' || (prevItem.paidValueBRL || 0) > 0;
-          updated[existingIndex] = {
-            ...prevItem,
-            title: rentalTitle,
-            estimatedValueUSD: finalUsd,
-            estimatedValueBRL: brl,
-            paidValueBRL: finalPaid ? (prevItem.paidValueBRL && prevItem.paidValueBRL > 0 ? prevItem.paidValueBRL : brl) : 0,
-            paidValueUSD: finalPaid ? (prevItem.paidValueUSD && prevItem.paidValueUSD > 0 ? prevItem.paidValueUSD : finalUsd) : 0,
-            status: finalPaid ? 'Pago' : (prevItem.status === 'Parcial' ? 'Parcial' : 'Pendente'),
-            payerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevItem.payerId || expData.payerId),
-            responsibleTravelerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevItem.responsibleTravelerId || expData.payerId),
-            travelerIds: expData.travelerIds,
-            sourceType: 'car_rental',
-            sourceId: rental.id,
-            notes: rentalNotes,
-            updatedAt: expData.updatedAt,
-            updatedBy: expData.updatedBy,
-          };
-          nextExpenses = updated;
-        } else {
-          nextExpenses = [expData, ...prev];
-        }
+        const nextExpenses = prev.filter(
+          (e) =>
+            e.id !== expId &&
+            e.id !== legacyId &&
+            !(e.sourceType === 'car_rental' && e.sourceId === rental.id)
+        );
         setTrips((prevTrips) =>
           prevTrips.map((t) => (t.id === activeTripId ? { ...t, expenses: nextExpenses } : t))
         );
@@ -4568,25 +4563,101 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       });
 
       if (activeTripId) {
-        const fallbackTrip = activeTrip || {
-          id: activeTripId,
-          tripName: settings.tripName,
-          destination: settings.destination,
-          startDate: settings.startDate,
-          durationDays: settings.durationDays,
-          travelers: settings.travelers,
-        };
-        const expRes = await SupabaseService.saveExpense(activeTripId, expData, fallbackTrip);
-        if (expRes && !expRes.success) {
-          return { success: false, error: expRes.error || 'Erro ao sincronizar despesa de locação de veículo' };
+        const delRes = await SupabaseService.deleteExpensesBySource(activeTripId, 'car_rental', rental.id);
+        if (!delRes.success) {
+          return { success: false, error: delRes.error || 'Erro ao excluir despesa do aluguel de veículo no Supabase' };
         }
       }
-    } else {
-      setExpenses((prev) => prev.filter((e) => e.id !== expId));
-      if (activeTripId) {
-        await SupabaseService.deleteExpense(expId);
+      return { success: true };
+    }
+
+    const isPaid = isCarRentalPaid(rental);
+    const rentalTitle = `Transporte: Aluguel de Carro (${rental.company || 'Locadora'})`.trim();
+    const rentalNotes = `Período: ${rental.pickupDate || '---'} a ${rental.dropoffDate || '---'}${rental.category ? ' (' + rental.category + ')' : ''}`;
+
+    const expData: ExpenseItem = {
+      id: expId,
+      title: rentalTitle,
+      category: 'Transporte',
+      estimatedValueUSD: finalUsd,
+      estimatedValueBRL: brl,
+      paidValueBRL: isPaid ? brl : 0,
+      paidValueUSD: isPaid ? finalUsd : 0,
+      status: isPaid ? 'Pago' : 'Pendente',
+      payerId: rental.payerId || 'all',
+      responsibleTravelerId: rental.payerId || 'all',
+      travelerIds: rental.travelerIds || ['all'],
+      sourceType: 'car_rental',
+      sourceId: rental.id,
+      excluded: false,
+      notes: rentalNotes,
+      updatedAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+      updatedBy: currentUser.name,
+    };
+
+    setExpenses((prev) => {
+      let nextExpenses: ExpenseItem[];
+      const existingIndex = prev.findIndex(
+        (e) =>
+          e.id === expId ||
+          e.id === legacyId ||
+          (e.sourceType === 'car_rental' && e.sourceId === rental.id)
+      );
+      if (existingIndex >= 0) {
+        const updated = [...prev];
+        const prevItem = updated[existingIndex];
+        const finalPaid = isPaid;
+        updated[existingIndex] = {
+          ...prevItem,
+          title: rentalTitle,
+          estimatedValueUSD: finalUsd > 0 ? finalUsd : (prevItem.estimatedValueUSD || 0),
+          estimatedValueBRL: brl > 0 ? brl : (prevItem.estimatedValueBRL || 0),
+          paidValueBRL: finalPaid ? brl : 0,
+          paidValueUSD: finalPaid ? finalUsd : 0,
+          status: finalPaid ? 'Pago' : 'Pendente',
+          payerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevItem.payerId || expData.payerId),
+          responsibleTravelerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevItem.responsibleTravelerId || expData.payerId),
+          travelerIds: expData.travelerIds,
+          sourceType: 'car_rental',
+          sourceId: rental.id,
+          notes: rentalNotes,
+          updatedAt: expData.updatedAt,
+          updatedBy: expData.updatedBy,
+        };
+        // Idempotência: remover duplicatas paralelas
+        nextExpenses = updated.filter(
+          (e, idx) =>
+            idx === existingIndex ||
+            !(
+              e.id === expId ||
+              e.id === legacyId ||
+              (e.sourceType === 'car_rental' && e.sourceId === rental.id)
+            )
+        );
+      } else {
+        nextExpenses = [expData, ...prev];
+      }
+      setTrips((prevTrips) =>
+        prevTrips.map((t) => (t.id === activeTripId ? { ...t, expenses: nextExpenses } : t))
+      );
+      return nextExpenses;
+    });
+
+    if (activeTripId) {
+      const fallbackTrip = activeTrip || {
+        id: activeTripId,
+        tripName: settings.tripName,
+        destination: settings.destination,
+        startDate: settings.startDate,
+        durationDays: settings.durationDays,
+        travelers: settings.travelers,
+      };
+      const expRes = await SupabaseService.saveExpense(activeTripId, expData, fallbackTrip);
+      if (expRes && !expRes.success) {
+        return { success: false, error: expRes.error || 'Erro ao sincronizar despesa de locação de veículo' };
       }
     }
+
     return { success: true };
   };
 

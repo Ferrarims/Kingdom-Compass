@@ -856,6 +856,7 @@ export function mapCarRentalToDb(c: CarRentalBooking, tripId: string): Record<st
     cost_usd: c.costUSD ? Number(c.costUSD) : null,
     cost_brl: c.costBRL ? Number(c.costBRL) : null,
     status: c.status || 'Reservado / Confirmado',
+    payment_status: c.paymentStatus && c.paymentStatus !== 'Não informado' ? c.paymentStatus : null,
     payer_id: sanitizeTravelerForeignKey(c.payerId),
     driver_name: c.driverName || null,
     included_insurances: c.includedInsurances || [],
@@ -873,6 +874,23 @@ export function mapCarRentalToDb(c: CarRentalBooking, tripId: string): Record<st
 }
 
 export function mapDbToCarRental(row: any): CarRentalBooking {
+  let operationalStatus: string = row.status || 'Reservado / Confirmado';
+  let paymentStatus: 'Pago' | 'Pendente' | 'Não informado' = 'Não informado';
+
+  if (row.payment_status) {
+    if (row.payment_status === 'Pago') paymentStatus = 'Pago';
+    else if (row.payment_status === 'Pendente') paymentStatus = 'Pendente';
+    else paymentStatus = 'Não informado';
+  } else if (row.status === 'Pago') {
+    paymentStatus = 'Pago';
+    operationalStatus = 'Reservado / Confirmado';
+  } else if (row.status === 'Pendente' || row.status === 'Falta Pagar') {
+    paymentStatus = 'Pendente';
+    operationalStatus = 'Reservado / Confirmado';
+  } else {
+    paymentStatus = 'Não informado';
+  }
+
   return {
     id: row.id,
     company: row.company,
@@ -886,7 +904,8 @@ export function mapDbToCarRental(row: any): CarRentalBooking {
     dropoffTime: row.dropoff_time,
     costUSD: row.cost_usd ? Number(row.cost_usd) : undefined,
     costBRL: row.cost_brl ? Number(row.cost_brl) : undefined,
-    status: row.status,
+    status: operationalStatus,
+    paymentStatus,
     payerId: row.payer_id || 'all',
     driverName: row.driver_name,
     includedInsurances: row.included_insurances || [],
@@ -3071,7 +3090,15 @@ export const SupabaseService = {
       }
 
       const dbRow = mapCarRentalToDb(rental, tripId);
-      const { error: upsertErr } = await supabase.from('car_rentals').upsert(dbRow, { onConflict: 'id' });
+      let { error: upsertErr } = await supabase.from('car_rentals').upsert(dbRow, { onConflict: 'id' });
+
+      // Fallback gracioso se a coluna payment_status ainda não foi criada no Supabase via migração SQL
+      if (upsertErr && (upsertErr.message?.includes('payment_status') || upsertErr.details?.includes('payment_status') || upsertErr.code === 'PGRST204')) {
+        const fallbackRow = { ...dbRow };
+        delete fallbackRow.payment_status;
+        const retryRes = await supabase.from('car_rentals').upsert(fallbackRow, { onConflict: 'id' });
+        upsertErr = retryRes.error;
+      }
 
       if (upsertErr) {
         if (isSupabaseMissingTableError(upsertErr)) {
@@ -3080,7 +3107,10 @@ export const SupabaseService = {
         return { success: false, error: upsertErr.message };
       }
 
-      // Sincronizar com a tabela de expenses
+      // Sincronizar com a tabela de expenses usando o status financeiro
+      const isPaid = rental.paymentStatus
+        ? rental.paymentStatus === 'Pago'
+        : (rental.status === 'Pago' || rental.status === 'Concluído');
       await syncToExpenses(tripId, 'car_rental', rental.id, {
         title: `Transporte: Aluguel de Carro (${rental.company || 'Locadora'})`,
         category: 'Transporte',
@@ -3088,7 +3118,7 @@ export const SupabaseService = {
         brl: rental.costBRL || 0,
         payerId: rental.payerId || 'all',
         travelerIds: rental.travelerIds || ['all'],
-        status: (rental.status === 'Pago' || rental.status === 'Concluído') ? 'Pago' : 'Pendente',
+        status: isPaid ? 'Pago' : 'Pendente',
         notes: `Período: ${rental.pickupDate || '---'} a ${rental.dropoffDate || '---'}`
       });
 
