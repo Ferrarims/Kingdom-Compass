@@ -1821,10 +1821,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
         const isPaid = flight.paymentStatus
           ? flight.paymentStatus === 'Pago'
-          : flight.status === 'Emitido / Confirmado' ||
-            flight.status === 'Check-in Realizado' ||
-            flight.status === 'Embarcado' ||
-            flight.status === 'Concluído';
+          : flight.status === 'Pago';
         const flightTitle = `Passagem: ${flight.airline || 'Voo'} (${flight.typeLabel || 'Voo'}${flight.flightNumber ? ' ' + flight.flightNumber : ''})`.trim();
         const flightNotes = `Trecho: ${flight.originCity || flight.originAirport || 'Origem'} ➔ ${flight.destinationCity || flight.destinationAirport || 'Destino'}${flight.departureDate ? ' (' + flight.departureDate + ')' : ''}`;
 
@@ -1937,14 +1934,14 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         if (matchingIndices.length > 0) {
           const primaryIdx = matchingIndices[0];
           const prevExp = updatedExpenses[primaryIdx];
-          const finalPaid = isPaid || prevExp.status === 'Pago' || (prevExp.paidValueBRL || 0) > 0;
+          const finalPaid = isPaid;
           updatedExpenses[primaryIdx] = {
             ...prevExp,
             ...expData,
             id: expId,
-            status: finalPaid ? 'Pago' : (prevExp.status === 'Parcial' ? 'Parcial' : 'Pendente'),
-            paidValueBRL: finalPaid ? (prevExp.paidValueBRL && prevExp.paidValueBRL > 0 ? prevExp.paidValueBRL : brl) : 0,
-            paidValueUSD: finalPaid ? (prevExp.paidValueUSD && prevExp.paidValueUSD > 0 ? prevExp.paidValueUSD : finalUsd) : 0,
+            status: finalPaid ? 'Pago' : 'Pendente',
+            paidValueBRL: finalPaid ? brl : 0,
+            paidValueUSD: finalPaid ? finalUsd : 0,
             payerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevExp.payerId || expData.payerId),
             responsibleTravelerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevExp.responsibleTravelerId || expData.payerId),
             excluded: prevExp.excluded,
@@ -3013,9 +3010,18 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     if (!prevItem) {
       return { success: false, error: 'Despesa não encontrada' };
     }
+    const expStatus = updates.status || prevItem.status;
+    const isPaidStatus = expStatus === 'Pago';
+    const estBRL = updates.estimatedValueBRL !== undefined ? updates.estimatedValueBRL : prevItem.estimatedValueBRL;
+    const estUSD = updates.estimatedValueUSD !== undefined ? updates.estimatedValueUSD : prevItem.estimatedValueUSD;
+    const paidBRL = isPaidStatus ? estBRL : (updates.paidValueBRL !== undefined ? updates.paidValueBRL : (prevItem.paidValueBRL || 0));
+    const paidUSD = isPaidStatus ? estUSD : (updates.paidValueUSD !== undefined ? updates.paidValueUSD : (prevItem.paidValueUSD || 0));
+
     const updatedItem: ExpenseItem = {
       ...prevItem,
       ...updates,
+      paidValueBRL: paidBRL,
+      paidValueUSD: paidUSD,
       updatedAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
       updatedBy: currentUser.name,
     };
@@ -3074,35 +3080,204 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         return { success: false, error: err?.message || 'Erro inesperado ao atualizar despesa' };
       }
 
-      // Sincronizar de volta para a acomodação se o gasto for derivado de hospedagem
-      const isAcc = (updatedItem as ExpenseItem).sourceType === 'accommodation' || id.startsWith('exp-acc-');
-      const accSourceId = (updatedItem as ExpenseItem).sourceId || (id.startsWith('exp-acc-') ? id.replace('exp-acc-', '') : undefined);
+      const nextPaymentStatus = expStatus === 'Pago' ? 'Pago' : 'Pendente';
+      const sourceType = updatedItem.sourceType;
+      const sourceId = updatedItem.sourceId;
+
+      // 1. Hospedagens
+      const isAcc = sourceType === 'accommodation' || id.startsWith('exp-acc-');
+      const accSourceId = sourceId || (id.startsWith('exp-acc-') ? id.replace('exp-acc-', '') : undefined);
       if (isAcc) {
+        let updatedAccList: AccommodationBooking[] = [];
         setAccommodations((prevAccs) => {
-          let updatedAccList: AccommodationBooking[] = [];
           const next = prevAccs.map((acc) => {
             const matches = (accSourceId && acc.id === accSourceId) || generateDeterministicUUID('acc-expense', acc.id) === id;
             if (matches) {
-              const expStatus = (updatedItem as ExpenseItem).status;
-              const nextPaymentStatus = expStatus === 'Pago' ? 'Pago' : 'Pendente';
               const upAcc: AccommodationBooking = {
                 ...acc,
-                costBRL: (updatedItem as ExpenseItem).estimatedValueBRL ?? acc.costBRL,
-                costUSD: (updatedItem as ExpenseItem).estimatedValueUSD ?? acc.costUSD,
+                costBRL: updatedItem.estimatedValueBRL ?? acc.costBRL,
+                costUSD: updatedItem.estimatedValueUSD ?? acc.costUSD,
                 paymentStatus: nextPaymentStatus as any,
-                payerId: (updatedItem as ExpenseItem).payerId,
-                travelerIds: (updatedItem as ExpenseItem).travelerIds,
+                payerId: updatedItem.payerId || acc.payerId,
+                travelerIds: updatedItem.travelerIds || acc.travelerIds,
               };
               updatedAccList.push(upAcc);
               return upAcc;
             }
             return acc;
           });
-          if (activeTripId && updatedAccList.length > 0) {
-            updatedAccList.forEach((a) => SupabaseService.saveAccommodation(activeTripId, a, fallbackTrip));
-          }
           return next;
         });
+
+        if (updatedAccList.length > 0) {
+          setTrips((prevTrips) =>
+            prevTrips.map((t) =>
+              t.id === activeTripId
+                ? {
+                    ...t,
+                    accommodations: (t.accommodations || []).map((a) => {
+                      const match = updatedAccList.find((u) => u.id === a.id);
+                      return match || a;
+                    }),
+                  }
+                : t
+            )
+          );
+          for (const a of updatedAccList) {
+            const saveRes = await SupabaseService.saveAccommodation(activeTripId, a, fallbackTrip);
+            if (!saveRes.success) {
+              setExpenses((prev) => prev.map((item) => (item.id === id ? prevItem : item)));
+              return { success: false, error: saveRes.error || 'Falha ao atualizar status na hospedagem' };
+            }
+          }
+        }
+      }
+
+      // 2. Voos
+      const isFlight = sourceType === 'flight' || id.startsWith('exp-flight-');
+      const flightSourceId = sourceId || (id.startsWith('exp-flight-') ? id.replace('exp-flight-', '') : undefined);
+      if (isFlight) {
+        let updatedFlightList: FlightSegment[] = [];
+        setFlights((prevFlights) => {
+          const next = prevFlights.map((flight) => {
+            const matches = (flightSourceId && flight.id === flightSourceId) || generateDeterministicUUID('flight-expense', flight.id) === id;
+            if (matches) {
+              const upFlight: FlightSegment = {
+                ...flight,
+                ticketCostBRL: updatedItem.estimatedValueBRL ?? flight.ticketCostBRL,
+                ticketCostUSD: updatedItem.estimatedValueUSD ?? flight.ticketCostUSD,
+                paymentStatus: nextPaymentStatus as any,
+                payerId: updatedItem.payerId || flight.payerId,
+                travelerIds: updatedItem.travelerIds || flight.travelerIds,
+              };
+              updatedFlightList.push(upFlight);
+              return upFlight;
+            }
+            return flight;
+          });
+          return next;
+        });
+
+        if (updatedFlightList.length > 0) {
+          setTrips((prevTrips) =>
+            prevTrips.map((t) =>
+              t.id === activeTripId
+                ? {
+                    ...t,
+                    flights: (t.flights || []).map((f) => {
+                      const match = updatedFlightList.find((u) => u.id === f.id);
+                      return match || f;
+                    }),
+                  }
+                : t
+            )
+          );
+          for (const f of updatedFlightList) {
+            const saveRes = await SupabaseService.saveFlight(activeTripId, f, fallbackTrip);
+            if (!saveRes.success) {
+              setExpenses((prev) => prev.map((item) => (item.id === id ? prevItem : item)));
+              return { success: false, error: saveRes.error || 'Falha ao atualizar status no voo' };
+            }
+          }
+        }
+      }
+
+      // 3. Aluguel de Carro
+      const isCar = sourceType === 'car_rental' || id.startsWith('exp-car-');
+      const carSourceId = sourceId || (id.startsWith('exp-car-') ? id.replace('exp-car-', '') : undefined);
+      if (isCar) {
+        let updatedCarList: CarRentalBooking[] = [];
+        setCarRentals((prevCars) => {
+          const next = prevCars.map((car) => {
+            const matches = (carSourceId && car.id === carSourceId) || generateDeterministicUUID('car-expense', car.id) === id;
+            if (matches) {
+              const upCar: CarRentalBooking = {
+                ...car,
+                costBRL: updatedItem.estimatedValueBRL ?? car.costBRL,
+                costUSD: updatedItem.estimatedValueUSD ?? car.costUSD,
+                paymentStatus: nextPaymentStatus as any,
+                payerId: updatedItem.payerId || car.payerId,
+                travelerIds: updatedItem.travelerIds || car.travelerIds,
+              };
+              updatedCarList.push(upCar);
+              return upCar;
+            }
+            return car;
+          });
+          return next;
+        });
+
+        if (updatedCarList.length > 0) {
+          setTrips((prevTrips) =>
+            prevTrips.map((t) =>
+              t.id === activeTripId
+                ? {
+                    ...t,
+                    carRentals: (t.carRentals || []).map((c) => {
+                      const match = updatedCarList.find((u) => u.id === c.id);
+                      return match || c;
+                    }),
+                  }
+                : t
+            )
+          );
+          for (const c of updatedCarList) {
+            const saveRes = await SupabaseService.saveCarRental(activeTripId, c, fallbackTrip);
+            if (!saveRes.success) {
+              setExpenses((prev) => prev.map((item) => (item.id === id ? prevItem : item)));
+              return { success: false, error: saveRes.error || 'Falha ao atualizar status no aluguel de veículo' };
+            }
+          }
+        }
+      }
+
+      // 4. Ingressos de Parque
+      const isTicket = sourceType === 'park_ticket' || (sourceType as string) === 'ticket' || id.startsWith('exp-ticket-');
+      const ticketSourceId = sourceId || (id.startsWith('exp-ticket-') ? id.replace('exp-ticket-', '') : undefined);
+      if (isTicket) {
+        let updatedTicketList: ParkTicketPurchase[] = [];
+        setParkTickets((prevTickets) => {
+          const next = prevTickets.map((tkt) => {
+            const matches = (ticketSourceId && tkt.id === ticketSourceId) || generateDeterministicUUID('ticket-expense', tkt.id) === id;
+            if (matches) {
+              const upTicket: ParkTicketPurchase = {
+                ...tkt,
+                costBRL: updatedItem.estimatedValueBRL ?? tkt.costBRL,
+                costUSD: updatedItem.estimatedValueUSD ?? tkt.costUSD,
+                paymentStatus: nextPaymentStatus as any,
+                payerId: updatedItem.payerId || tkt.payerId,
+                travelerIds: updatedItem.travelerIds || tkt.travelerIds,
+              };
+              updatedTicketList.push(upTicket);
+              return upTicket;
+            }
+            return tkt;
+          });
+          return next;
+        });
+
+        if (updatedTicketList.length > 0) {
+          setTrips((prevTrips) =>
+            prevTrips.map((t) =>
+              t.id === activeTripId
+                ? {
+                    ...t,
+                    parkTickets: (t.parkTickets || []).map((tkt) => {
+                      const match = updatedTicketList.find((u) => u.id === tkt.id);
+                      return match || tkt;
+                    }),
+                  }
+                : t
+            )
+          );
+          for (const tkt of updatedTicketList) {
+            const saveRes = await SupabaseService.saveParkTicket(activeTripId, tkt, fallbackTrip);
+            if (!saveRes.success) {
+              setExpenses((prev) => prev.map((item) => (item.id === id ? prevItem : item)));
+              return { success: false, error: saveRes.error || 'Falha ao atualizar status no ingresso' };
+            }
+          }
+        }
       }
     }
     addNotification(`Editou o item financeiro`);
