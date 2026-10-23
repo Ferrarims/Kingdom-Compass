@@ -800,11 +800,25 @@ export const AccommodationsView: React.FC = () => {
                       <div>
                         <div className="flex items-center gap-1.5 text-slate-400 font-bold uppercase text-[10px] tracking-wider">
                           <Users className="w-3.5 h-3.5 text-[#D4AF37]" />
-                          <span>Hóspedes & Contato</span>
+                          <span>Hóspedes Vinculados</span>
                         </div>
-                        <p className="font-bold text-slate-900 text-xs mt-1">
-                          {acc.totalGuests || 1} {(acc.totalGuests || 1) === 1 ? 'Hóspede' : 'Hóspedes'}
-                        </p>
+                        {(() => {
+                          const accTrvs = acc.travelerIds || [];
+                          const allTrvs = settings.travelers || [];
+                          const isAll = !accTrvs || accTrvs.length === 0 || accTrvs.includes('all') || (allTrvs.length > 0 && accTrvs.length === allTrvs.length);
+                          const matchedNames = isAll
+                            ? allTrvs.map((t) => t.name || 'Viajante')
+                            : allTrvs.filter((t) => accTrvs.includes(t.id)).map((t) => t.name || 'Viajante');
+                          if (matchedNames.length === 0 && acc.guestName) {
+                            matchedNames.push(acc.guestName);
+                          }
+                          const namesStr = matchedNames.length > 0 ? matchedNames.join(', ') : 'Todos os Viajantes';
+                          return (
+                            <p className="font-medium text-slate-800 text-xs mt-1 leading-snug break-words">
+                              {namesStr}
+                            </p>
+                          );
+                        })()}
                       </div>
                       <div className="text-[11px] pt-1.5 border-t border-slate-200/70">
                         {acc.contactPhone ? (
@@ -854,7 +868,7 @@ export const AccommodationsView: React.FC = () => {
                       </span>
                     </div>
 
-                    {/* Financial Investment */}
+                    {/* Financial Investment (Standardized Financial Block) */}
                     <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
                       <div>
                         <div className="flex items-center gap-1.5 text-slate-400 font-bold uppercase text-[10px] tracking-wider">
@@ -862,28 +876,34 @@ export const AccommodationsView: React.FC = () => {
                           <span>Investimento Total</span>
                         </div>
                         <div className="mt-1">
-                          <div className="text-sm sm:text-base font-bold text-[#1A2B4C] font-mono tabular-nums">
-                            US$ {costUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                          </div>
-                          <span className="text-[11px] text-slate-500 font-mono tabular-nums block">
+                          <div className="text-base sm:text-lg font-bold text-[#1A2B4C] font-mono tabular-nums">
                             R$ {costBrl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                          </div>
+                          <span className="text-xs text-slate-500 font-mono tabular-nums block">
+                            (US$ {costUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })})
                           </span>
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5 flex-wrap pt-1.5 border-t border-slate-200/70">
-                        <span className="text-[10px] text-amber-800 font-bold bg-amber-100/70 px-2 py-0.5 rounded-md border border-amber-200 w-fit">
-                          {acc.payerId && acc.payerId !== 'all'
-                            ? `Pago: ${settings.travelers.find((t) => t.id === acc.payerId)?.name || 'Viajante'}`
-                            : 'Rateio do Grupo'}
-                        </span>
-                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border w-fit ${
-                          acc.paymentStatus === 'Pago'
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-md border w-fit ${
+                            acc.paymentStatus === 'Pago'
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                              : acc.paymentStatus === 'Pendente'
+                              ? 'bg-amber-50 text-amber-800 border-amber-300'
+                              : 'bg-slate-100 text-slate-600 border-slate-300'
+                          }`}
+                        >
+                          {acc.paymentStatus === 'Pago'
+                            ? '✓ Pago'
                             : acc.paymentStatus === 'Pendente'
-                            ? 'bg-amber-50 text-amber-700 border-amber-200'
-                            : 'bg-slate-100 text-slate-600 border-slate-200'
-                        }`}>
-                          {acc.paymentStatus === 'Pago' ? '● Pago' : acc.paymentStatus === 'Pendente' ? '○ Pendente' : '– Não informado'}
+                            ? '⏳ Pendente'
+                            : '⚪ Não informado'}
+                        </span>
+                        <span className="text-[10px] text-amber-800 font-bold bg-amber-100/70 px-2 py-0.5 rounded-md border border-amber-200/80 w-fit">
+                          {!acc.payerId || acc.payerId === 'all' || acc.payerId === 'grupo'
+                            ? 'Dividido pelo grupo'
+                            : `Pagador: ${(settings.travelers || []).find((t) => t.id === acc.payerId)?.name || 'Viajante'}`}
                         </span>
                       </div>
                     </div>

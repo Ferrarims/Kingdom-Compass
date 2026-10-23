@@ -1156,97 +1156,142 @@ export const ParksGuideView: React.FC = () => {
                       />
 
                       {/* Ticket Body Content */}
-                      <div className="p-4 sm:p-5 space-y-3.5 text-xs text-slate-700">
-                        {/* Included Parks Tag Cloud */}
-                        <div className="space-y-1.5">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                            Parques Inclusos ({ticket.parksIncluded?.length || 0}):
-                          </span>
-                          <div className="flex flex-wrap gap-1.5">
-                            {(ticket.parksIncluded || []).map((pName) => (
-                              <span
-                                key={pName}
-                                className="px-2.5 py-1 bg-slate-100 text-slate-800 rounded-lg text-[11px] font-medium border border-slate-200/80 shadow-2xs"
-                              >
-                                🎡 {pName}
-                              </span>
-                            ))}
+                      <div className="p-5 sm:p-6 space-y-5">
+                        {/* 5-Column Balanced Grid for Park Ticket Details */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5 text-xs">
+                          {/* Box 1: Complexo & Parques Inclusos */}
+                          <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
+                            <div>
+                              <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                                <Ticket className="w-3.5 h-3.5 text-[#D4AF37]" />
+                                <span>Complexo & Parques</span>
+                              </div>
+                              <p className="font-bold text-slate-900 text-xs mt-1">
+                                {ticket.complex || 'Atração / Parque'}
+                              </p>
+                              <div className="flex flex-wrap gap-1 mt-1.5">
+                                {(ticket.parksIncluded || []).map((pName) => (
+                                  <span
+                                    key={pName}
+                                    className="px-2 py-0.5 bg-white text-slate-800 rounded-md text-[10px] font-semibold border border-slate-200"
+                                  >
+                                    🎡 {pName}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                            <span className="text-[10px] text-slate-400 pt-1.5 border-t border-slate-200/70 block">
+                              {ticket.type === 'combo' ? 'Combo Multi-Parques' : 'Ingresso Individual'}
+                            </span>
                           </div>
-                        </div>
 
-                        {/* Viajantes do Pacote */}
-                        <div className="space-y-1.5 pt-2.5 border-t border-slate-100">
-                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                            Comprado para:
-                          </span>
-                          <div className="flex flex-wrap gap-1.5">
-                            {isAllTravelers ? (
-                              <span className="px-2.5 py-1 bg-sky-50 border border-sky-100 text-sky-800 rounded-lg text-[11px] font-bold flex items-center gap-1">
-                                <Users className="w-3.5 h-3.5 text-sky-600" />
-                                <span>Todos os Viajantes</span>
-                              </span>
-                            ) : (
-                              matchingTravelers.map((t) => (
-                                <span
-                                  key={t.id}
-                                  className="px-2.5 py-1 bg-indigo-50 border border-indigo-100 text-indigo-800 rounded-lg text-[11px] font-bold flex items-center gap-1"
-                                >
-                                  <Users className="w-3.5 h-3.5 text-indigo-600" />
-                                  <span>{t.name}</span>
+                          {/* Box 2: Modalidade & Duração */}
+                          <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
+                            <div>
+                              <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                                <Calendar className="w-3.5 h-3.5 text-[#D4AF37]" />
+                                <span>Modalidade & Duração</span>
+                              </div>
+                              <p className="font-bold text-slate-900 text-xs mt-1">
+                                {ticket.daysCount} {ticket.daysCount === 1 ? 'Dia de Parque' : 'Dias de Parques'}
+                              </p>
+                              <p className="text-[11px] text-amber-900 font-semibold mt-0.5">
+                                {ticket.ticketOption || 'Opção Padrão'}
+                              </p>
+                            </div>
+                            <span className="text-[10px] text-slate-500 font-medium pt-1.5 border-t border-slate-200/70 block">
+                              Qtd: {ticket.quantity || 1} {ticket.quantity === 1 ? 'ingresso' : 'ingressos'}
+                            </span>
+                          </div>
+
+                          {/* Box 3: Participantes Vinculados */}
+                          <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
+                            <div>
+                              <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                                <Users className="w-3.5 h-3.5 text-[#D4AF37]" />
+                                <span>Participantes Vinculados</span>
+                              </div>
+                              <p className="font-medium text-slate-800 text-xs mt-1 leading-snug break-words">
+                                {isAllTravelers
+                                  ? (settings.travelers || []).map((t) => t.name || 'Viajante').join(', ') || 'Todos os Viajantes'
+                                  : matchingTravelers.map((t) => t.name || 'Viajante').join(', ') || 'Todos os Viajantes'}
+                              </p>
+                            </div>
+                            <span className="text-[10px] text-slate-400 pt-1.5 border-t border-slate-200/70 block">
+                              Titulares dos ingressos
+                            </span>
+                          </div>
+
+                          {/* Box 4: Emissão & Voucher */}
+                          <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
+                            <div>
+                              <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                                <FileText className="w-3.5 h-3.5 text-[#D4AF37]" />
+                                <span>Emissão & Voucher</span>
+                              </div>
+                              <p className="font-bold text-slate-900 text-xs mt-1 truncate">
+                                Vendedor: {ticket.seller || 'Não informado'}
+                              </p>
+                              <p className="text-[11px] font-mono text-slate-600 truncate mt-0.5">
+                                Voucher: {ticket.confirmationCode || 'Pendente'}
+                              </p>
+                            </div>
+                            <span className="text-[10px] text-slate-400 pt-1.5 border-t border-slate-200/70 block">
+                              Comprovante de compra
+                            </span>
+                          </div>
+
+                          {/* Box 5: Standardized Financial Block */}
+                          <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
+                            <div>
+                              <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                                <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                                <span>Investimento do Ingresso</span>
+                              </div>
+                              <div className="mt-1">
+                                <div className="text-base sm:text-lg font-bold text-[#1A2B4C] font-mono tabular-nums">
+                                  R$ {costBrl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                </div>
+                                <span className="text-xs text-slate-500 font-mono tabular-nums block">
+                                  (US$ {costUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })})
                                 </span>
-                              ))
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Modalidade / Opção & Dias */}
-                        <div className="grid grid-cols-2 gap-2 pt-2.5 border-t border-slate-100 text-[11px]">
-                          <div>
-                            <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Duração</span>
-                            <span className="font-bold text-slate-800">
-                              {ticket.daysCount} {ticket.daysCount === 1 ? 'Dia de Parque' : 'Dias de Parques'}
-                            </span>
-                          </div>
-                          <div>
-                            <span className="text-slate-400 block text-[10px] uppercase font-bold tracking-wider">Modalidade</span>
-                            <span className="font-bold text-slate-800 truncate block">
-                              {ticket.ticketOption || 'Padrão'}
-                            </span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5 flex-wrap pt-1.5 border-t border-slate-200/70">
+                              <span
+                                className={`text-[10px] font-bold px-2 py-0.5 rounded-md border w-fit ${
+                                  ticket.paymentStatus === 'Pago'
+                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                    : ticket.paymentStatus === 'Pendente'
+                                    ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                    : 'bg-slate-100 text-slate-600 border-slate-300'
+                                }`}
+                              >
+                                {ticket.paymentStatus === 'Pago'
+                                  ? '✓ Pago'
+                                  : ticket.paymentStatus === 'Pendente'
+                                  ? '⏳ Pendente'
+                                  : '⚪ Não informado'}
+                              </span>
+                              <span className="text-[10px] text-amber-800 font-bold bg-amber-100/70 px-2 py-0.5 rounded-md border border-amber-200/80 w-fit">
+                                {!ticket.payerId || ticket.payerId === 'all' || ticket.payerId === 'grupo'
+                                  ? 'Dividido pelo grupo'
+                                  : `Pagador: ${(settings.travelers || []).find((t) => t.id === ticket.payerId)?.name || 'Viajante'}`}
+                              </span>
+                            </div>
                           </div>
                         </div>
 
                         {/* Notes if present */}
                         {ticket.notes && (
-                          <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-200/80 text-xs text-amber-900 flex items-start gap-2">
-                            <FileText className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                            <p className="text-[11px] leading-relaxed italic text-amber-950">
-                              "{ticket.notes}"
-                            </p>
+                          <div className="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200/80 text-xs text-amber-900 flex items-start gap-2.5">
+                            <FileText className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                            <div className="space-y-0.5">
+                              <span className="font-bold block text-amber-950">Observações do Ingresso:</span>
+                              <p className="leading-relaxed">{ticket.notes}</p>
+                            </div>
                           </div>
                         )}
-                      </div>
-                    </div>
-
-                    {/* Bottom Footer of Card: Financial details & Sync Badge */}
-                    <div className="p-4 bg-slate-50 border-t border-slate-200/90 flex items-center justify-between text-xs">
-                      <div>
-                        <span className="text-[10px] text-slate-400 block font-medium">
-                          Valor Total ({ticket.quantity || 1} {ticket.quantity === 1 ? 'ingresso' : 'ingressos'})
-                        </span>
-                        <div className="flex items-baseline gap-1.5">
-                          <span className="text-base font-bold text-[#1A2B4C] font-mono tabular-nums">
-                            R$ {costBrl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                          </span>
-                          <span className="text-[11px] text-slate-500 font-mono tabular-nums">
-                            (US$ {costUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })})
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="text-right">
-                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100/80 px-2.5 py-1 rounded-full border border-emerald-200">
-                          ⚡ No Financeiro
-                        </span>
                       </div>
                     </div>
                   </div>

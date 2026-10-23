@@ -726,16 +726,16 @@ export const FlightsView: React.FC = () => {
                               <Users className="w-3.5 h-3.5 text-[#D4AF37]" />
                               <span>Passageiros ({passengersList.length})</span>
                             </div>
-                            <p className="text-slate-800 font-medium text-xs mt-1 leading-snug line-clamp-2">
+                            <p className="text-slate-800 font-medium text-xs mt-1 leading-snug break-words">
                               {passengersList.join(', ')}
                             </p>
                           </div>
                           <span className="text-[10px] text-slate-400 pt-1.5 border-t border-slate-200/70 block">
-                            Documentação vinculada
+                            Passagens vinculadas
                           </span>
                         </div>
 
-                        {/* Cost & Investment */}
+                        {/* Cost & Investment (Standardized Financial Block) */}
                         <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
                           <div>
                             <div className="flex items-center gap-1.5 text-slate-400 font-bold uppercase text-[10px] tracking-wider">
@@ -743,36 +743,34 @@ export const FlightsView: React.FC = () => {
                               <span>Investimento da Passagem</span>
                             </div>
                             <div className="mt-1">
-                              <div className="text-sm sm:text-base font-bold text-[#1A2B4C] font-mono tabular-nums">
-                                {currencyView === 'BRL'
-                                  ? `R$ ${costBrl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
-                                  : `US$ ${costUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })}`}
+                              <div className="text-base sm:text-lg font-bold text-[#1A2B4C] font-mono tabular-nums">
+                                R$ {costBrl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
                               </div>
-                              <span className="text-[11px] text-slate-500 font-mono tabular-nums block">
-                                {currencyView === 'BRL'
-                                  ? `(US$ ${costUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })})`
-                                  : `(R$ ${costBrl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })})`}
+                              <span className="text-xs text-slate-500 font-mono tabular-nums block">
+                                (US$ {costUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })})
                               </span>
                             </div>
                           </div>
-                          <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                          <div className="flex items-center gap-1.5 flex-wrap pt-1.5 border-t border-slate-200/70">
                             <span
                               className={`text-[10px] font-bold px-2 py-0.5 rounded-md border w-fit ${
                                 flight.paymentStatus === 'Pago'
-                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
                                   : flight.paymentStatus === 'Pendente'
-                                  ? 'bg-amber-100 text-amber-800 border-amber-300'
+                                  ? 'bg-amber-50 text-amber-800 border-amber-300'
                                   : 'bg-slate-100 text-slate-600 border-slate-300'
                               }`}
                             >
                               {flight.paymentStatus === 'Pago'
                                 ? '✓ Pago'
                                 : flight.paymentStatus === 'Pendente'
-                                ? '⏳ Pagamento Pendente'
-                                : '⚪ Pagamento: Não informado'}
+                                ? '⏳ Pendente'
+                                : '⚪ Não informado'}
                             </span>
-                            <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100/70 px-2 py-0.5 rounded-md border border-emerald-200 w-fit">
-                              ⚡ No Financeiro
+                            <span className="text-[10px] text-amber-800 font-bold bg-amber-100/70 px-2 py-0.5 rounded-md border border-amber-200/80 w-fit">
+                              {!flight.payerId || flight.payerId === 'all' || flight.payerId === 'grupo'
+                                ? 'Dividido pelo grupo'
+                                : `Pagador: ${(settings.travelers || []).find((t) => t.id === flight.payerId)?.name || 'Viajante'}`}
                             </span>
                           </div>
                         </div>

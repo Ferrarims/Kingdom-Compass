@@ -728,8 +728,8 @@ export const TransportationView: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* 4-Column Balanced Grid: Driver, Tolls, Insurances, Investment */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 text-xs">
+                      {/* 5-Column Balanced Grid: Driver, Tolls, Insurances, Passengers, Financial */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5 text-xs">
                         {/* Driver */}
                         <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
                           <div>
@@ -767,7 +767,7 @@ export const TransportationView: React.FC = () => {
                           <div>
                             <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
                               <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                              <span>Seguros & Coberturas ({rental.includedInsurances?.length || 0})</span>
+                              <span>Seguros Inclusos ({rental.includedInsurances?.length || 0})</span>
                             </div>
                             {rental.includedInsurances && rental.includedInsurances.length > 0 ? (
                               <div className="flex flex-wrap gap-1 mt-1">
@@ -796,7 +796,34 @@ export const TransportationView: React.FC = () => {
                           </span>
                         </div>
 
-                        {/* Cost & Investment */}
+                        {/* Linked Passengers / Participants */}
+                        <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
+                          <div>
+                            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
+                              <Users className="w-3.5 h-3.5 text-[#D4AF37]" />
+                              <span>Passageiros Vinculados</span>
+                            </div>
+                            {(() => {
+                              const rTrvs = rental.travelerIds || [];
+                              const allTrvs = settings.travelers || [];
+                              const isAll = !rTrvs || rTrvs.length === 0 || rTrvs.includes('all') || (allTrvs.length > 0 && rTrvs.length === allTrvs.length);
+                              const matchedNames = isAll
+                                ? allTrvs.map((t) => t.name || 'Viajante')
+                                : allTrvs.filter((t) => rTrvs.includes(t.id)).map((t) => t.name || 'Viajante');
+                              const namesStr = matchedNames.length > 0 ? matchedNames.join(', ') : 'Todos os Viajantes';
+                              return (
+                                <p className="font-medium text-slate-800 text-xs mt-1 leading-snug break-words">
+                                  {namesStr}
+                                </p>
+                              );
+                            })()}
+                          </div>
+                          <span className="text-[10px] text-slate-400 pt-1.5 border-t border-slate-200/70 block">
+                            Ocupantes do veículo
+                          </span>
+                        </div>
+
+                        {/* Cost & Investment (Standardized Financial Block) */}
                         <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
                           <div>
                             <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
@@ -804,17 +831,36 @@ export const TransportationView: React.FC = () => {
                               <span>Investimento da Locação</span>
                             </div>
                             <div className="mt-1">
-                              <div className="text-sm sm:text-base font-bold text-[#1A2B4C] font-mono tabular-nums">
-                                US$ {costUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                              </div>
-                              <span className="text-[11px] text-slate-500 font-mono tabular-nums block">
+                              <div className="text-base sm:text-lg font-bold text-[#1A2B4C] font-mono tabular-nums">
                                 R$ {costBRLCalculated.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                              </div>
+                              <span className="text-xs text-slate-500 font-mono tabular-nums block">
+                                (US$ {costUsd.toLocaleString('en-US', { minimumFractionDigits: 2 })})
                               </span>
                             </div>
                           </div>
-                          <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100/70 px-2 py-0.5 rounded-md border border-emerald-200 w-fit">
-                            ⚡ No Financeiro
-                          </span>
+                          <div className="flex items-center gap-1.5 flex-wrap pt-1.5 border-t border-slate-200/70">
+                            <span
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-md border w-fit ${
+                                rental.paymentStatus === 'Pago'
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                                  : rental.paymentStatus === 'Pendente'
+                                  ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                  : 'bg-slate-100 text-slate-600 border-slate-300'
+                              }`}
+                            >
+                              {rental.paymentStatus === 'Pago'
+                                ? '✓ Pago'
+                                : rental.paymentStatus === 'Pendente'
+                                ? '⏳ Pendente'
+                                : '⚪ Não informado'}
+                            </span>
+                            <span className="text-[10px] text-amber-800 font-bold bg-amber-100/70 px-2 py-0.5 rounded-md border border-amber-200/80 w-fit">
+                              {!rental.payerId || rental.payerId === 'all' || rental.payerId === 'grupo'
+                                ? 'Dividido pelo grupo'
+                                : `Pagador: ${(settings.travelers || []).find((t) => t.id === rental.payerId)?.name || 'Viajante'}`}
+                            </span>
+                          </div>
                         </div>
                       </div>
 
