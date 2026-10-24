@@ -820,12 +820,6 @@ export function mapDbToFlight(row: any): FlightSegment {
     else if (row.payment_status === 'Parcial') paymentStatus = 'Parcial';
     else if (row.payment_status === 'Não informado') paymentStatus = 'Não informado';
     else paymentStatus = row.payment_status;
-  } else if (row.status === 'Pago') {
-    paymentStatus = 'Pago';
-    operationalStatus = 'Emitido / Confirmado';
-  } else if (row.status === 'Pendente') {
-    paymentStatus = 'Pendente';
-    operationalStatus = 'Emitido / Confirmado';
   } else {
     paymentStatus = 'Não informado';
   }
@@ -915,12 +909,6 @@ export function mapDbToCarRental(row: any): CarRentalBooking {
     else if (row.payment_status === 'Parcial') paymentStatus = 'Parcial';
     else if (row.payment_status === 'Não informado') paymentStatus = 'Não informado';
     else paymentStatus = row.payment_status;
-  } else if (row.status === 'Pago') {
-    paymentStatus = 'Pago';
-    operationalStatus = 'Reservado / Confirmado';
-  } else if (row.status === 'Pendente' || row.status === 'Falta Pagar') {
-    paymentStatus = 'Pendente';
-    operationalStatus = 'Reservado / Confirmado';
   } else {
     paymentStatus = 'Não informado';
   }
@@ -1007,12 +995,6 @@ export function mapDbToAccommodation(row: any): AccommodationBooking {
     else if (row.payment_status === 'Parcial') paymentStatus = 'Parcial';
     else if (row.payment_status === 'Não informado') paymentStatus = 'Não informado';
     else paymentStatus = row.payment_status;
-  } else if (row.status === 'Pago') {
-    paymentStatus = 'Pago';
-    operationalStatus = 'Reservado / Confirmado';
-  } else if (row.status === 'Pendente' || row.status === 'Falta Pagar') {
-    paymentStatus = 'Pendente';
-    operationalStatus = 'Reservado / Confirmado';
   } else {
     paymentStatus = 'Não informado';
   }
@@ -1405,7 +1387,7 @@ export const SupabaseService = {
             costBRL: pRow.cost_brl !== null ? Number(pRow.cost_brl) : undefined,
             // paidValue fields are hydrated from expenses later
             status: pRow.status || 'Confirmado',
-            paymentStatus: (pRow.payment_status === 'Pago' ? 'Pago' : (pRow.payment_status === 'Parcial' ? 'Parcial' : (['Pendente', 'Falta Pagar'].includes(pRow.payment_status) ? 'Pendente' : 'Não informado'))),
+            paymentStatus: (pRow.payment_status === 'Pago' ? 'Pago' : (pRow.payment_status === 'Parcial' ? 'Parcial' : (pRow.payment_status === 'Pendente' || pRow.payment_status === 'Falta Pagar' ? 'Pendente' : 'Não informado'))),
             payerId: pRow.payer_id || 'all',
             travelerIds: Array.isArray(pRow.traveler_ids) ? pRow.traveler_ids : ['all'],
             notes: pRow.notes || undefined,
@@ -2051,8 +2033,11 @@ export const SupabaseService = {
 
               const pkg = d.parkBooking.hasPhotoPackage && d.parkBooking.photoPackage ? d.parkBooking.photoPackage : null;
               if (pkg && (pkg.costUSD || pkg.costBRL || pkg.name)) {
+                // Use a unique PK for the side table record that includes the day ID,
+                // while preserving the pkg.id as the shared logical identifier.
+                const sideTableId = generateDeterministicUUID('photo-pkg-row', `${tripId}-${d.id}-${pkg.id}`);
                 allPhotoPkgRows.push({
-                  id: ensureValidUUID(pkg.id, 'photo-pkg', `${bookingId}-${pkg.name}`),
+                  id: sideTableId,
                   trip_id: tripId,
                   park_day_booking_id: bookingId,
                   itinerary_day_id: d.id,
@@ -2344,16 +2329,17 @@ export const SupabaseService = {
   /**
    * Delete Expense
    */
-  async deleteExpense(id: string): Promise<boolean> {
+  async deleteExpense(id: string): Promise<{ success: boolean; error?: string }> {
     try {
-      if (!id) return true;
+      if (!id) return { success: true };
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id.trim())) {
-        return true; // Ignorar IDs com formato não-UUID (ex: legados 'exp-car-...') para evitar erro de sintaxe do PostgreSQL
+        return { success: true }; // Ignorar IDs com formato não-UUID (ex: legados 'exp-car-...') para evitar erro de sintaxe do PostgreSQL
       }
       const { error } = await supabase.from('expenses').delete().eq('id', id);
-      return !error;
-    } catch {
-      return false;
+      if (error) return { success: false, error: error.message };
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro ao excluir despesa' };
     }
   },
 
@@ -4538,8 +4524,9 @@ export const SupabaseService = {
             // Photo Package
             const pkg = day.parkBooking.hasPhotoPackage && day.parkBooking.photoPackage ? day.parkBooking.photoPackage : null;
             if (pkg && (pkg.costUSD || pkg.costBRL || pkg.name)) {
+              const sideTableId = generateDeterministicUUID('photo-pkg-row', `${tripId}-${resolvedDayId}-${pkg.id}`);
               const photoPkgRow = {
-                id: ensureValidUUID(pkg.id, 'photo-pkg', `${bookingId}-${pkg.name}`),
+                id: sideTableId,
                 trip_id: tripId,
                 park_day_booking_id: bookingId,
                 itinerary_day_id: resolvedDayId,

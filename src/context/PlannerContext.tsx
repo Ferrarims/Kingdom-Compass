@@ -548,7 +548,7 @@ interface PlannerContextType {
   expenses: ExpenseItem[];
   addExpense: (expense: Omit<ExpenseItem, 'id'>) => Promise<{ success: boolean; error?: string; id?: string }>;
   updateExpense: (id: string, updates: Partial<ExpenseItem>) => Promise<{ success: boolean; error?: string }>;
-  deleteExpense: (id: string) => void;
+  deleteExpense: (id: string) => Promise<{ success: boolean; error?: string }>;
   toggleExpenseExclusion: (id: string) => void;
   syncExpensesToSupabase: () => Promise<boolean>;
   reloadExpensesFromSupabase: () => Promise<boolean>;
@@ -2133,7 +2133,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
         const matchingIndices: number[] = [];
         updatedExpenses.forEach((e, idx) => {
-          if (e.id === expId || (e.sourceType === 'photo_package' && e.sourceId === pkg.id)) {
+          const isSameId = e.id === expId || (e.sourceType === 'photo_package' && e.sourceId === pkg.id);
+          const isSameTitle = e.sourceType === 'photo_package' && pkg.name && e.title.toLowerCase().includes(pkg.name.toLowerCase());
+          if (isSameId || isSameTitle) {
             matchingIndices.push(idx);
           }
         });
@@ -3475,7 +3477,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           }
         }
       }
-
       // 4. Ingressos de Parque
       const isTicket = sourceType === 'park_ticket' || (sourceType as string) === 'ticket' || id.startsWith('exp-ticket-');
       const ticketSourceId = sourceId || (id.startsWith('exp-ticket-') ? id.replace('exp-ticket-', '') : undefined);
@@ -3552,13 +3553,49 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           }
         }
       }
+
+      // 5. Pacotes de Fotos
+      const isPhotoPkg = sourceType === 'photo_package' || id.startsWith('exp-photo-');
+      const photoSourceId = sourceId || (id.startsWith('exp-photo-') ? id.replace('exp-photo-', '') : undefined);
+      if (isPhotoPkg) {
+        setRawDays((prevDays) =>
+          prevDays.map((d) => {
+            if (d.parkBooking?.photoPackage) {
+              const pkg = d.parkBooking.photoPackage;
+              const matches = (photoSourceId && pkg.id === photoSourceId) || generateDeterministicUUID('photo-expense', pkg.id) === id;
+              if (matches) {
+                return {
+                  ...d,
+                  parkBooking: {
+                    ...d.parkBooking,
+                    photoPackage: {
+                      ...pkg,
+                      costBRL: updatedItem.estimatedValueBRL ?? pkg.costBRL,
+                      costUSD: updatedItem.estimatedValueUSD ?? pkg.costUSD,
+                      paymentStatus: nextPaymentStatus as any,
+                      paidValueBRL: paidBRL,
+                      paidValueUSD: paidUSD,
+                      payerId: updatedItem.payerId || pkg.payerId,
+                      travelerIds: updatedItem.travelerIds || pkg.travelerIds,
+                    },
+                  },
+                };
+              }
+            }
+            return d;
+          })
+        );
+      }
     }
     addNotification(`Editou o item financeiro`);
     return { success: true };
   };
 
-  const deleteExpense = (id: string) => {
+  const deleteExpense = async (id: string): Promise<{ success: boolean; error?: string }> => {
     const item = expenses.find((e) => e.id === id);
+    if (!item) return { success: true };
+
+    const prevExpenses = [...expenses];
     setExpenses((prev) => prev.filter((e) => e.id !== id));
     setTrips((prevTrips) =>
       prevTrips.map((t) =>
@@ -3570,67 +3607,82 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           : t
       )
     );
-    SupabaseService.deleteExpense(id);
 
-    if (item) {
-      const sourceType = item.sourceType;
-      let sourceId = item.sourceId;
-
-      if (!sourceId) {
-        if (id.startsWith('exp-ticket-')) sourceId = id.replace('exp-ticket-', '');
-        else if (id.startsWith('exp-flight-')) sourceId = id.replace('exp-flight-', '');
-        else if (id.startsWith('exp-acc-')) sourceId = id.replace('exp-acc-', '');
-        else if (id.startsWith('exp-car-')) sourceId = id.replace('exp-car-', '');
-      }
-
-      if (sourceId) {
-        if (sourceType === 'park_ticket' || sourceType === 'ticket' || id.startsWith('exp-ticket-')) {
-          deleteParkTicket(sourceId);
-        } else if (sourceType === 'flight' || id.startsWith('exp-flight-')) {
-          deleteFlight(sourceId);
-        } else if (sourceType === 'accommodation' || id.startsWith('exp-acc-')) {
-          deleteAccommodation(sourceId);
-        } else if (sourceType === 'car_rental' || id.startsWith('exp-car-')) {
-          deleteCarRental(sourceId);
-        }
-      }
-
-      if (sourceType === 'photo_package' || item.title.toLowerCase().includes('pacote de fotos') || item.title.toLowerCase().includes('fotos')) {
-        setRawDays((prevDays) =>
-          prevDays.map((d) => {
-            if (d.parkBooking) {
-              const pkg = d.parkBooking.photoPackage;
-              const hasPkg = d.parkBooking.hasPhotoPackage;
-              if (
-                hasPkg ||
-                (pkg && (pkg.id === sourceId || pkg.id === id || item.title.toLowerCase().includes(pkg.name.toLowerCase())))
-              ) {
-                if (pkg?.id) {
-                  SupabaseService.deleteParkPhotoPackage(pkg.id);
-                }
-                return {
-                  ...d,
-                  parkBooking: {
-                    ...d.parkBooking,
-                    hasPhotoPackage: false,
-                    photoPackage: undefined,
-                  },
-                };
-              }
-            }
-            return d;
-          })
+    try {
+      const res = await SupabaseService.deleteExpense(id);
+      if (res && !res.success) {
+        setExpenses(prevExpenses);
+        setTrips((prevTrips) =>
+          prevTrips.map((t) => (t.id === activeTripId ? { ...t, expenses: prevExpenses } : t))
         );
-        if (sourceId) {
-          SupabaseService.deleteParkPhotoPackage(sourceId);
-        }
-        SupabaseService.deleteParkPhotoPackage(id);
-        SupabaseService.deleteParkPhotoPackage(item.title);
-        addNotification(`Removeu o pacote de fotos e limpou dos parques vinculados`);
-      } else {
-        addNotification(`Removeu o item "${item.title}"`);
+        return { success: false, error: res.error || 'Falha ao excluir despesa no Supabase' };
+      }
+    } catch (err: any) {
+      setExpenses(prevExpenses);
+      setTrips((prevTrips) =>
+        prevTrips.map((t) => (t.id === activeTripId ? { ...t, expenses: prevExpenses } : t))
+      );
+      return { success: false, error: err?.message || 'Erro inesperado ao excluir despesa' };
+    }
+
+    const sourceType = item.sourceType;
+    let sourceId = item.sourceId;
+
+    if (!sourceId) {
+      if (id.startsWith('exp-ticket-')) sourceId = id.replace('exp-ticket-', '');
+      else if (id.startsWith('exp-flight-')) sourceId = id.replace('exp-flight-', '');
+      else if (id.startsWith('exp-acc-')) sourceId = id.replace('exp-acc-', '');
+      else if (id.startsWith('exp-car-')) sourceId = id.replace('exp-car-', '');
+    }
+
+    if (sourceId) {
+      if (sourceType === 'park_ticket' || sourceType === 'ticket' || id.startsWith('exp-ticket-')) {
+        await deleteParkTicket(sourceId);
+      } else if (sourceType === 'flight' || id.startsWith('exp-flight-')) {
+        await deleteFlight(sourceId);
+      } else if (sourceType === 'accommodation' || id.startsWith('exp-acc-')) {
+        await deleteAccommodation(sourceId);
+      } else if (sourceType === 'car_rental' || id.startsWith('exp-car-')) {
+        await deleteCarRental(sourceId);
       }
     }
+
+    if (sourceType === 'photo_package' || (item.title && (item.title.toLowerCase().includes('pacote de fotos') || item.title.toLowerCase().includes('fotos')))) {
+      const targetPkgId = sourceId || id;
+      setRawDays((prevDays) =>
+        prevDays.map((d) => {
+          if (d.parkBooking) {
+            const pkg = d.parkBooking.photoPackage;
+            const hasPkg = d.parkBooking.hasPhotoPackage;
+            if (
+              hasPkg ||
+              (pkg && (pkg.id === targetPkgId || item.title.toLowerCase().includes(pkg.name.toLowerCase())))
+            ) {
+              if (pkg?.id) {
+                SupabaseService.deleteParkPhotoPackage(pkg.id).catch(e => console.warn('Silent deletePkg in deleteExpense:', e));
+              }
+              return {
+                ...d,
+                parkBooking: {
+                  ...d.parkBooking,
+                  hasPhotoPackage: false,
+                  photoPackage: undefined,
+                },
+              };
+            }
+          }
+          return d;
+        })
+      );
+      
+      if (targetPkgId) {
+        SupabaseService.deleteParkPhotoPackage(targetPkgId).catch(() => {});
+      }
+      addNotification(`Removeu o pacote de fotos e limpou dos parques vinculados`);
+    } else {
+      addNotification(`Removeu o item "${item.title}"`);
+    }
+    return { success: true };
   };
 
   const toggleExpenseExclusion = (id: string) => {
@@ -5734,11 +5786,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         if (!itinRes.success) {
           const delRentalRes = await SupabaseService.deleteCarRental(newRental.id, activeTripId);
           const expId = generateDeterministicUUID('car-expense', newRental.id);
-          const delExpOk = await SupabaseService.deleteExpense(expId);
+          const delExpRes = await SupabaseService.deleteExpense(expId);
           const delBySourceRes = await SupabaseService.deleteExpensesBySource(activeTripId, 'car_rental', newRental.id);
           const compFailures: string[] = [];
           if (!delRentalRes.success) compFailures.push(`car_rentals (${delRentalRes.error || 'remoção falhou'})`);
-          if (!delExpOk || !delBySourceRes.success) compFailures.push(`expenses (${delBySourceRes.error || 'remoção da despesa falhou'})`);
+          if (!delExpRes.success || !delBySourceRes.success) compFailures.push(`expenses (${delBySourceRes.error || 'remoção da despesa falhou'})`);
 
           if (compFailures.length === 0) {
             setCarRentals(previousRentals);
@@ -5859,7 +5911,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     return { success: true };
   };
 
-  const deleteCarRental = (id: string) => {
+  const deleteCarRental = async (id: string) => {
     const rental = carRentals.find((c) => c.id === id);
     setCarRentals((prev) => prev.filter((c) => c.id !== id));
     
@@ -5881,12 +5933,14 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         ),
       }))
     );
-    SupabaseService.deleteCarRental(id, activeTripId);
-    SupabaseService.deleteExpense(expId);
-    SupabaseService.deleteExpense(`exp-car-${id}`);
+    
+    await SupabaseService.deleteCarRental(id, activeTripId);
+    await SupabaseService.deleteExpense(expId);
+    await SupabaseService.deleteExpense(`exp-car-${id}`);
+    
     if (activeTripId) {
-      SupabaseService.deleteExpensesBySource(activeTripId, 'car_rental', id);
-      SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'car_rental');
+      await SupabaseService.deleteExpensesBySource(activeTripId, 'car_rental', id);
+      await SupabaseService.deleteHourlySchedulesBySource(activeTripId, id, 'car_rental');
     }
     if (rental) {
       addNotification(`Removeu aluguel do veículo ${rental.company} e seus horários do roteiro`);

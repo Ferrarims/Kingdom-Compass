@@ -101,9 +101,12 @@ export const FinancialPlanner: React.FC = () => {
 
   useConfirmationKeyboard({
     isOpen: !!confirmDelete,
-    onConfirm: () => {
+    onConfirm: async () => {
       if (confirmDelete) {
-        deleteExpense(confirmDelete.id);
+        const res = await deleteExpense(confirmDelete.id);
+        if (!res.success) {
+          alert(`❌ Erro ao excluir despesa: ${res.error || 'Falha de conexão'}`);
+        }
         setConfirmDelete(null);
       }
     },
@@ -999,8 +1002,11 @@ export const FinancialPlanner: React.FC = () => {
                   Cancelar
                 </button>
                 <button
-                  onClick={() => {
-                    deleteExpense(confirmDelete.id);
+                  onClick={async () => {
+                    const res = await deleteExpense(confirmDelete.id);
+                    if (!res.success) {
+                      alert(`❌ Erro ao excluir despesa: ${res.error || 'Falha de conexão'}`);
+                    }
                     setConfirmDelete(null);
                   }}
                   className="flex-1 px-4 py-2.5 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700 transition-all text-sm cursor-pointer shadow-md shadow-red-100"

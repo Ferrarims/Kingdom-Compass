@@ -1126,8 +1126,9 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
         (e) => e.id === photoExpenseId || (e.sourceType === 'photo_package' && e.sourceId === packageId)
       );
 
+      let financeRes: { success: boolean; error?: string };
       if (existingExpense) {
-        updateExpense(existingExpense.id, {
+        financeRes = await updateExpense(existingExpense.id, {
           id: photoExpenseId, // Ensure it has the deterministic ID
           title: expenseTitle,
           category: 'Pacotes de Fotos',
@@ -1144,7 +1145,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
           notes: finalPhotoPackage.confirmationCode ? `Voucher / Confirmação: #${finalPhotoPackage.confirmationCode}` : undefined,
         });
       } else {
-        addExpense({
+        financeRes = await addExpense({
           id: photoExpenseId,
           title: expenseTitle,
           category: 'Pacotes de Fotos',
@@ -1162,46 +1163,66 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
           notes: finalPhotoPackage.confirmationCode ? `Voucher / Confirmação: #${finalPhotoPackage.confirmationCode}` : undefined,
         });
       }
+
+      if (!financeRes.success) {
+        alert(`❌ Erro ao salvar despesa do pacote de fotos: ${financeRes.error || 'Falha de conexão'}. Mantendo dados para nova tentativa.`);
+        return;
+      }
     } else {
       // Caso não tenha pacote ou o custo seja zero, removemos a despesa vinculada
       const existingExpense = expenses.find(
         (e) => e.id === photoExpenseId || (e.sourceType === 'photo_package' && e.sourceId === packageId)
       );
       if (existingExpense) {
-        deleteExpense(existingExpense.id);
+        const delRes = await deleteExpense(existingExpense.id);
+        if (!delRes.success) {
+          alert(`❌ Erro ao remover despesa do pacote de fotos: ${delRes.error || 'Falha de conexão'}. Mantendo dados para nova tentativa.`);
+          return;
+        }
       }
       
       // Se desmarcou o pacote, limpamos de todos os dias (comportamento de pacote da viagem)
       if (!hasPhotoPackage) {
-        expenses.forEach((e) => {
+        for (const e of expenses) {
           if (e.sourceType === 'photo_package' && photoPkgName && e.title.toLowerCase().includes(photoPkgName.toLowerCase())) {
             if (e.sourceId === packageId || !e.sourceId) {
-              deleteExpense(e.id);
+              const res = await deleteExpense(e.id);
+              if (!res.success) {
+                alert(`❌ Erro ao limpar despesas vinculadas em outros dias: ${res.error}.`);
+                return;
+              }
             }
           }
-        });
+        }
       }
     }
 
-      // 2. Remove photo package from ALL other days in the itinerary as well
-      allDays.forEach((d) => {
+    // 2. Remove photo package from ALL other days in the itinerary if package was unlinked
+    if (!hasPhotoPackage) {
+      for (const d of allDays) {
         if (d.parkBooking && d.parkBooking.photoPackage) {
           const pkg = d.parkBooking.photoPackage;
           if (
             (pkg.id === packageId) ||
-            (photoPkgName && pkg.name.toLowerCase() === photoPkgName.toLowerCase()) ||
-            (d.id !== activeDay.id)
+            (photoPkgName && pkg.name.toLowerCase() === photoPkgName.toLowerCase())
           ) {
-            updateItineraryDay(d.id, {
-              parkBooking: {
-                ...d.parkBooking,
-                hasPhotoPackage: false,
-                photoPackage: undefined,
-              },
-            });
+            if (d.id !== activeDay.id) {
+              const dayDelRes = await updateItineraryDay(d.id, {
+                parkBooking: {
+                  ...d.parkBooking,
+                  hasPhotoPackage: false,
+                  photoPackage: undefined,
+                },
+              });
+              if (!dayDelRes.success) {
+                alert(`❌ Erro ao desvincular pacote do dia ${d.dayNumber}: ${dayDelRes.error}.`);
+                return;
+              }
+            }
           }
         }
-      });
+      }
+    }
 
     const updatedBooking: ParkDayBooking = {
       id: activeDay.parkBooking?.id || `pb-${activeDay.id}`,
@@ -1228,7 +1249,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
 
     // Propagate multi-park / 30-day package to other days if checked
     if (applyPhotoPkgToAllDays && hasPhotoPackage && finalPhotoPackage && finalPhotoPackage.includedParks.length > 0) {
-      allDays.forEach((d) => {
+      for (const d of allDays) {
         if (d.id !== activeDay.id && d.park && d.park !== 'Sem Parque' && !isNonParkEvent(d.park)) {
           const isParkCovered = finalPhotoPackage.includedParks.some(
             (p) => p.toLowerCase().includes(d.park.toLowerCase()) || d.park.toLowerCase().includes(p.toLowerCase())
@@ -1244,19 +1265,23 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
               diningReservations: [],
               showsAndParades: [],
             };
-            updateItineraryDay(d.id, {
+            const dayUpRes = await updateItineraryDay(d.id, {
               parkBooking: {
                 ...currentPb,
                 hasPhotoPackage: true,
                 photoPackage: {
                   ...finalPhotoPackage,
-                  id: `photo-${d.id}`,
+                  id: packageId, // Share the same STABLE ID
                 },
               },
             });
+            if (!dayUpRes.success) {
+              alert(`❌ Erro ao propagar pacote para o dia ${d.dayNumber}: ${dayUpRes.error}.`);
+              return;
+            }
           }
         }
-      });
+      }
     }
 
     const fallbackAccLocation = getFallbackAccommodationLocation(
