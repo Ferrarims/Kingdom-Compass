@@ -797,9 +797,12 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
                             ) : (
                               <div className="space-y-1.5">
                                 {paidExpenses.map((exp, pIdx) => (
-                                  <div key={`${exp.id}-${pIdx}`} className="p-2 rounded-lg bg-white border border-slate-200 flex items-center justify-between">
-                                    <span className="font-medium text-slate-800">{exp.title}</span>
-                                    <strong className="text-slate-900 font-mono">{formatMoney(exp.estimatedValueBRL, exp.estimatedValueUSD)}</strong>
+                                  <div key={`${exp.id}-${pIdx}`} className="p-2 rounded-lg bg-white border border-slate-200 flex flex-col gap-1">
+                                    <div className="flex justify-between">
+                                      <span className="font-medium text-slate-800">{exp.title}</span>
+                                      <strong className="text-slate-900 font-mono">{formatMoney(exp.estimatedValueBRL, exp.estimatedValueUSD)}</strong>
+                                    </div>
+                                    <span className="text-[10px] text-slate-500">{exp.category}</span>
                                   </div>
                                 ))}
                               </div>
@@ -815,9 +818,12 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
                                   const isSent = adj.fromTravelerId === summary.traveler.id;
                                   const other = isSent ? travelers.find(t => t.id === adj.toTravelerId) : travelers.find(t => t.id === adj.fromTravelerId);
                                   return (
-                                    <div key={adj.id} className={`p-2 rounded-lg border ${isSent ? 'bg-rose-50/50 border-rose-200' : 'bg-emerald-50/50 border-emerald-200'} flex items-center justify-between`}>
-                                      <span className="text-slate-700">{isSent ? 'Enviou para' : 'Recebeu de'} <strong>{other?.name}</strong></span>
-                                      <strong className={`${isSent ? 'text-rose-700' : 'text-emerald-700'} font-mono`}>{formatMoney(adj.amount, adj.amount / dollarRate)}</strong>
+                                    <div key={adj.id} className={`p-2 rounded-lg border ${isSent ? 'bg-rose-50/50 border-rose-200' : 'bg-emerald-50/50 border-emerald-200'} flex flex-col gap-1`}>
+                                      <div className="flex justify-between">
+                                        <span className="text-slate-700 text-xs font-semibold">{isSent ? 'Enviou para' : 'Recebeu de'} <strong>{other?.name}</strong></span>
+                                        <strong className={`${isSent ? 'text-rose-700' : 'text-emerald-700'} font-mono`}>{formatMoney(adj.amount, adj.amount / dollarRate)}</strong>
+                                      </div>
+                                      <span className="text-[10px] text-slate-500">{adj.paymentMethod || 'Transferência'} {adj.description ? `• ${adj.description}` : ''}</span>
                                     </div>
                                   );
                                 })}

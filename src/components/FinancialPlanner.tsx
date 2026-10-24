@@ -860,6 +860,7 @@ export const FinancialPlanner: React.FC = () => {
                       </label>
                       <MoneyInput
                         currency="USD"
+                        variant="light"
                         value={estimatedValueUSD}
                         onChange={(val) => handleUSDChange(val)}
                       />
@@ -871,6 +872,7 @@ export const FinancialPlanner: React.FC = () => {
                       </label>
                       <MoneyInput
                         currency="BRL"
+                        variant="light"
                         value={estimatedValueBRL}
                         onChange={(val) => handleBRLChange(val)}
                       />

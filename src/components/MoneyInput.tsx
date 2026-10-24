@@ -12,6 +12,7 @@ interface MoneyInputProps {
   id?: string;
   name?: string;
   autoFocus?: boolean;
+  variant?: 'dark' | 'light';
 }
 
 export const MoneyInput: React.FC<MoneyInputProps> = ({
@@ -25,6 +26,7 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
   id,
   name,
   autoFocus,
+  variant = 'dark',
 }) => {
   const [displayValue, setDisplayValue] = useState<string>('');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -122,7 +124,11 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
         disabled={disabled}
         required={required}
         autoFocus={autoFocus}
-        className={`w-full pl-9 pr-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent ${className}`}
+        className={`w-full pl-9 pr-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:border-transparent ${
+          variant === 'light'
+            ? 'bg-slate-50 border-slate-200 text-slate-800 placeholder-slate-400 focus:ring-[#D4AF37]/50'
+            : 'bg-slate-900 border-slate-700 text-white placeholder-slate-500 focus:ring-indigo-500'
+        } ${className}`}
       />
     </div>
   );
