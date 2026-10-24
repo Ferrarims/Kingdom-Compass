@@ -697,6 +697,7 @@ export const MapView: React.FC = () => {
   const [locations, setLocations] = useState<LocationPoint[]>(MASTER_LOCATIONS);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [selectedLocation, setSelectedLocation] = useState<LocationPoint | null>(null);
 
   // Selected stop in day route
@@ -2215,6 +2216,7 @@ export const MapView: React.FC = () => {
   const handleOpenEditRoute = () => {
     if (!activeDay) return;
     setEditingDayStops([...activeDayStops]);
+    setSaveError(null);
     setIsEditRouteModalOpen(true);
   };
 
@@ -2892,149 +2894,83 @@ export const MapView: React.FC = () => {
               </button>
             </div>
 
-            {/* List of editable stops */}
-            <div className="p-5 sm:p-6 flex-1 min-h-0 overflow-y-auto custom-scrollbar space-y-3">
-              {editingDayStops.length === 0 ? (
-                <div className="bg-slate-50 border border-dashed border-slate-300 rounded-xl p-6 text-center space-y-2">
-                  <p className="text-xs font-bold text-[#1A2B4C]">Nenhuma parada cadastrada para este dia</p>
-                  <p className="text-[11px] text-slate-500">
-                    Clique no botão abaixo para adicionar a primeira parada (hotel, parque ou restaurante).
-                  </p>
+            {/* Modal Body */}
+            <div className="p-5 sm:p-6 flex-1 overflow-y-auto min-h-0 custom-scrollbar space-y-6">
+              {saveError && (
+                <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-start gap-2 shadow-2xs">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-red-500 mt-0.5" />
+                  <span>{saveError}</span>
                 </div>
-              ) : (
-                editingDayStops.map((stop, idx) => (
-                  <div key={stop.id} className="p-3 rounded-xl border border-slate-200 bg-slate-50/70 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="w-6 h-6 rounded-full bg-[#1A2B4C] text-[#D4AF37] text-xs font-bold flex items-center justify-center">
-                          {idx + 1}
-                        </span>
-                        <span className="text-xs font-bold text-[#1A2B4C]">
-                          {idx === 0
-                            ? 'Ponto de Partida'
-                            : idx === editingDayStops.length - 1
-                            ? 'Ponto de Retorno / Encerramento'
-                            : `Parada ${idx + 1}`}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-1">
-                        {/* Move Up */}
-                        {idx > 0 && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const newStops = [...editingDayStops];
-                              const temp = newStops[idx - 1];
-                              newStops[idx - 1] = newStops[idx];
-                              newStops[idx] = temp;
-                              setEditingDayStops(newStops);
-                            }}
-                            className="p-1 rounded text-slate-500 hover:bg-slate-200"
-                            title="Mover para cima"
-                          >
-                            <MoveUp className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-
-                        {/* Move Down */}
-                        {idx < editingDayStops.length - 1 && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const newStops = [...editingDayStops];
-                              const temp = newStops[idx + 1];
-                              newStops[idx + 1] = newStops[idx];
-                              newStops[idx] = temp;
-                              setEditingDayStops(newStops);
-                            }}
-                            className="p-1 rounded text-slate-500 hover:bg-slate-200"
-                            title="Mover para baixo"
-                          >
-                            <MoveDown className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-
-                        {/* Remove */}
-                        {editingDayStops.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingDayStops(editingDayStops.filter((_, i) => i !== idx));
-                            }}
-                            className="p-1 rounded text-rose-500 hover:bg-rose-50"
-                            title="Remover parada"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2">
-                      <div className="col-span-2">
-                        <label className="text-[10px] font-bold text-slate-600 block">Nome do Local</label>
-                        <input
-                          type="text"
-                          value={stop.name}
-                          onChange={(e) => {
-                            const newStops = [...editingDayStops];
-                            newStops[idx].name = e.target.value;
-                            setEditingDayStops(newStops);
-                          }}
-                          className="w-full p-2 text-xs rounded-lg border border-slate-300 font-semibold bg-white"
-                        />
-                      </div>
-
-                      <div>
-                        <label className="text-[10px] font-bold text-slate-600 block">Horário</label>
-                        <input
-                          type="text"
-                          value={stop.time || ''}
-                          onChange={(e) => {
-                            const newStops = [...editingDayStops];
-                            newStops[idx].time = e.target.value;
-                            setEditingDayStops(newStops);
-                          }}
-                          placeholder="08:00"
-                          className="w-full p-2 text-xs rounded-lg border border-slate-300 font-semibold bg-white"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-[10px] font-bold text-slate-600 block">Localização / Endereço</label>
-                        <input
-                          type="text"
-                          value={stop.location || ''}
-                          onChange={(e) => {
-                            const newStops = [...editingDayStops];
-                            newStops[idx].location = e.target.value;
-                            setEditingDayStops(newStops);
-                          }}
-                          placeholder="Ex: Rua Miller, 448, Brás..."
-                          className="w-full p-1.5 text-xs rounded-lg border border-slate-300 bg-white"
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[10px] font-bold text-slate-600 block">Notas da Parada</label>
-                        <input
-                          type="text"
-                          value={stop.notes || ''}
-                          onChange={(e) => {
-                            const newStops = [...editingDayStops];
-                            newStops[idx].notes = e.target.value;
-                            setEditingDayStops(newStops);
-                          }}
-                          placeholder="Ex: Almoço no Columbia Harbour House..."
-                          className="w-full p-1.5 text-xs rounded-lg border border-slate-300 bg-white"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ))
               )}
+              
+              {/* SECTION 1: ROTEIRO EDITÁVEL */}
+              <div>
+                <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">1. Ordenação e Detalhes das Paradas</h4>
+                
+                <div className="space-y-3">
+                  {editingDayStops.length === 0 ? (
+                    <div className="bg-slate-50 border border-dashed border-slate-300 rounded-2xl p-6 text-center space-y-2">
+                      <p className="text-xs font-bold text-[#1A2B4C]">Nenhuma parada cadastrada</p>
+                    </div>
+                  ) : (
+                    editingDayStops.map((stop, idx) => (
+                      <div key={stop.id} className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4 shadow-2xs">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2">
+                            <span className="w-6 h-6 rounded-full bg-[#1A2B4C] text-[#D4AF37] text-xs font-bold flex items-center justify-center">
+                              {idx + 1}
+                            </span>
+                            <span className="text-xs font-bold text-[#1A2B4C]">
+                              {idx === 0 ? 'Ponto de Partida' : idx === editingDayStops.length - 1 ? 'Encerramento' : `Parada ${idx + 1}`}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-1">
+                            {idx > 0 && (
+                              <button type="button" onClick={() => {
+                                const newStops = [...editingDayStops];
+                                [newStops[idx - 1], newStops[idx]] = [newStops[idx], newStops[idx - 1]];
+                                setEditingDayStops(newStops);
+                              }} className="p-1.5 rounded text-slate-500 hover:bg-slate-200" title="Mover para cima"><MoveUp className="w-4 h-4" /></button>
+                            )}
+                            {idx < editingDayStops.length - 1 && (
+                              <button type="button" onClick={() => {
+                                const newStops = [...editingDayStops];
+                                [newStops[idx + 1], newStops[idx]] = [newStops[idx], newStops[idx + 1]];
+                                setEditingDayStops(newStops);
+                              }} className="p-1.5 rounded text-slate-500 hover:bg-slate-200" title="Mover para baixo"><MoveDown className="w-4 h-4" /></button>
+                            )}
+                            {editingDayStops.length > 1 && (
+                              <button type="button" onClick={() => setEditingDayStops(editingDayStops.filter((_, i) => i !== idx))} className="p-1.5 rounded text-rose-500 hover:bg-rose-50" title="Remover parada"><Trash2 className="w-4 h-4" /></button>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-3">
+                          <div className="col-span-2">
+                            <label className="text-[10px] font-bold text-slate-600 block mb-1">Nome do Local</label>
+                            <input type="text" value={stop.name} onChange={(e) => { const newStops = [...editingDayStops]; newStops[idx].name = e.target.value; setEditingDayStops(newStops); }} className="w-full p-2.5 text-xs rounded-lg border border-slate-200 font-semibold bg-white" />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-600 block mb-1">Horário</label>
+                            <input type="text" value={stop.time || ''} onChange={(e) => { const newStops = [...editingDayStops]; newStops[idx].time = e.target.value; setEditingDayStops(newStops); }} placeholder="08:00" className="w-full p-2.5 text-xs rounded-lg border border-slate-200 font-semibold bg-white" />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-600 block mb-1">Endereço</label>
+                            <input type="text" value={stop.location || ''} onChange={(e) => { const newStops = [...editingDayStops]; newStops[idx].location = e.target.value; setEditingDayStops(newStops); }} placeholder="Endereço..." className="w-full p-2.5 text-xs rounded-lg border border-slate-200 bg-white" />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-600 block mb-1">Notas</label>
+                            <input type="text" value={stop.notes || ''} onChange={(e) => { const newStops = [...editingDayStops]; newStops[idx].notes = e.target.value; setEditingDayStops(newStops); }} placeholder="Notas..." className="w-full p-2.5 text-xs rounded-lg border border-slate-200 bg-white" />
+                          </div>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
             </div>
 
             {/* Quick Add Stop & Action Buttons Footer */}
