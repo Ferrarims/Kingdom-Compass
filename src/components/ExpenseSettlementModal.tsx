@@ -463,8 +463,6 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
         status: 'Concluído',
       },
     ]);
-    setNewAdjAmount('');
-    setNewAdjDesc('');
 
     // Persist to Supabase
     try {
@@ -479,6 +477,9 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
         setAdjustments((prev) =>
           prev.map((a) => (a.id === tempId ? { ...a, id: savedId } : a))
         );
+        // Clear fields ONLY on success
+        setNewAdjAmount(null);
+        setNewAdjDesc('');
       } else {
         throw new Error(res.error || 'Erro ao salvar ajuste.');
       }
@@ -1050,12 +1051,39 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
                     </div>
                   </div>
                   
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div className="sm:col-span-1">
                       <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Valor (R$)</label>
                       <MoneyInput currency="BRL" value={newAdjAmount} onChange={(val) => setNewAdjAmount(val)} />
                     </div>
-                    <div className="sm:col-span-2">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Forma de Pagamento</label>
+                      <select
+                        value={newAdjMethod}
+                        onChange={(e) => setNewAdjMethod(e.target.value)}
+                        className="w-full text-xs p-2.5 rounded-lg border border-slate-200 bg-white"
+                      >
+                        <option value="PIX">PIX</option>
+                        <option value="Dinheiro">Dinheiro (Espécie)</option>
+                        <option value="Cartão de Crédito">Cartão de Crédito</option>
+                        <option value="Cartão de Débito">Cartão de Débito</option>
+                        <option value="Transferência Bancária">Transferência (TED/DOC)</option>
+                        <option value="Outro">Outro Acerto</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="sm:col-span-1">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Data do Pagamento</label>
+                      <input
+                        type="date"
+                        value={newAdjDate}
+                        onChange={(e) => setNewAdjDate(e.target.value)}
+                        className="w-full text-xs p-2.5 rounded-lg border border-slate-200 bg-white"
+                      />
+                    </div>
+                    <div className="sm:col-span-1">
                        <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Motivo</label>
                        <input type="text" placeholder="Ex: Ajuste de despesa, reembolso..." value={newAdjDesc} onChange={(e) => setNewAdjDesc(e.target.value)} className="w-full text-xs p-2.5 rounded-lg border border-slate-200" />
                     </div>
