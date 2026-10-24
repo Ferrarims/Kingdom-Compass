@@ -13,6 +13,7 @@ import {
   syncAllEventsToHourlySchedule,
   deduplicateHourlySchedule,
 } from '../src/utils/parkScheduleUtils.js';
+import { generateDeterministicUUID } from '../src/utils/uuid.js';
 
 const SUPABASE_URL = 'https://fmwikutwogsvobbyzjpk.supabase.co';
 const SUPABASE_ANON_KEY =
@@ -22,7 +23,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const TARGET_TRIP_ID = '78bbd4b1-2857-43d0-9520-2318a3b157a3';
 
 async function main() {
-  console.log('=== STARTING SAFE SCHEDULE AUDIT & RECONCILIATION ===');
+  console.log('=== STARTING ULTIMATE STABLE SCHEDULE AUDIT & RECONCILIATION ===');
 
   // 1. Fetch Trip explicitly by ID
   const { data: tripRows, error: tripErr } = await supabase
@@ -63,7 +64,18 @@ async function main() {
 
   console.log(`Loaded: ${accommodations.length} accommodations, ${flights.length} flights, ${carRentals.length} car rentals, ${parkBookings.length} park bookings, ${days.length} itinerary days.`);
 
-  // Attach park bookings to days and ensure park names are set for known park days
+  // Explicit park mapping for park days
+  const parkMapping: Record<string, string> = {
+    '2026-12-30': 'SeaWorld Orlando',
+    '2026-12-31': 'Busch Gardens Tampa Bay',
+    '2027-01-01': "Universal's Islands of Adventure",
+    '2027-01-03': "Universal's Islands of Adventure",
+    '2027-01-05': "Disney's Hollywood Studios",
+    '2027-01-07': "Universal's Islands of Adventure",
+    '2027-01-08': "Universal's Islands of Adventure",
+    '2027-01-09': 'Universal Studios Florida',
+  };
+
   days.forEach((day) => {
     const pb = parkBookings.find(
       (p) => p.dayNumber === day.dayNumber || (day.date && p.date === day.date) || p.itineraryDayId === day.id
@@ -75,27 +87,8 @@ async function main() {
       }
     }
 
-    // Explicit fallback for known park days if park booking was separate
-    if (day.date === '2026-12-30' && (!day.park || day.park === 'Sem Parque')) {
-      day.park = 'SeaWorld Orlando';
-    }
-    if (day.date === '2026-12-31' && (!day.park || day.park === 'Sem Parque')) {
-      day.park = 'Busch Gardens Tampa Bay';
-    }
-    if (day.date === '2027-01-03' && (!day.park || day.park === 'Sem Parque')) {
-      day.park = "Universal's Islands of Adventure";
-    }
-    if (day.date === '2027-01-05' && (!day.park || day.park === 'Sem Parque')) {
-      day.park = 'Universal Studios Florida';
-    }
-    if (day.date === '2027-01-07' && (!day.park || day.park === 'Sem Parque')) {
-      day.park = "Universal's Islands of Adventure";
-    }
-    if (day.date === '2027-01-08' && (!day.park || day.park === 'Sem Parque')) {
-      day.park = "Universal's Islands of Adventure";
-    }
-    if (day.date === '2027-01-09' && (!day.park || day.park === 'Sem Parque')) {
-      day.park = 'Universal Studios Florida';
+    if (day.date && parkMapping[day.date] && (!day.park || day.park === 'Sem Parque')) {
+      day.park = parkMapping[day.date];
     }
   });
 
@@ -109,9 +102,26 @@ async function main() {
     selectedAccommodationsPerNight: trip.selectedAccommodationsPerNight || {},
   };
 
-  // 3. Process and sync schedule for each day with explicit custom overrides for 08/01 and 09/01
+  // 3. Process and sync schedule for each day with explicit custom overrides for 08/01, 09/01, and park days
   for (const day of days) {
     let syncedItems = syncAllEventsToHourlySchedule(day, tripContext);
+
+    // Special handling for New Year's Eve on 2026-12-31 (Busch Gardens Tampa Bay)
+    if (day.date === '2026-12-31') {
+      const hasNYE = syncedItems.some((i) => (i.title || '').toLowerCase().includes('ano-novo') || (i.title || '').toLowerCase().includes('réveillon'));
+      if (!hasNYE) {
+        syncedItems.push({
+          id: 'auto-nye-buschtampabay',
+          time: '23:59',
+          title: '🎆 Celebração de Réveillon e Virada de Ano em Busch Gardens',
+          location: 'Busch Gardens Tampa Bay',
+          category: 'park',
+          notes: 'Espectáculo de fogos de artifício e celebração de Ano-Novo em Busch Gardens Tampa Bay.',
+          sourceType: 'park',
+          completed: false,
+        });
+      }
+    }
 
     // Explicit overrides and fine-tuning for 2027-01-08 (Day 13)
     if (day.date === '2027-01-08') {
@@ -137,7 +147,7 @@ async function main() {
         title: '⏰ Acordar — Modern Retreat Resort',
         titleKey: 'Acordar',
         location: 'Modern Retreat Resort',
-        category: 'airbnb',
+        category: 'hotel',
         notes: 'Despertar 30 min antes da saída para o Universal Hard Rock Hotel às 06:19.',
         sourceType: 'accommodation',
         completed: false,
@@ -204,8 +214,32 @@ async function main() {
       });
 
       ensureItem({
+        id: 'auto-saida-parque-2027-01-08',
+        time: '21:00',
+        title: "🌙 Fechamento de Universal's Islands of Adventure e Saída",
+        titleKey: 'Fechamento de',
+        location: "Universal's Islands of Adventure",
+        category: 'park',
+        notes: "Encerramento das atividades no parque e percurso até o carro no estacionamento (25 min).",
+        sourceType: 'park',
+        completed: false,
+      });
+
+      ensureItem({
+        id: 'auto-carro-retorno-2027-01-08',
+        time: '21:25',
+        title: '🚗 Chegada ao Carro no Estacionamento',
+        titleKey: 'Chegada ao Carro',
+        location: "Universal's Islands of Adventure",
+        category: 'transport',
+        notes: 'Embarque no veículo e início da viagem de volta para o Universal Hard Rock Hotel (~10 min de trajeto).',
+        sourceType: 'transport',
+        completed: false,
+      });
+
+      ensureItem({
         id: 'auto-retorno-2027-01-08',
-        time: '22:30',
+        time: '21:35',
         title: '🌙 Fim do dia na acomodação (Universal Hard Rock Hotel)',
         titleKey: 'Fim do dia',
         location: 'Universal Hard Rock Hotel',
@@ -259,22 +293,63 @@ async function main() {
       });
 
       ensureItem({
+        id: 'auto-ida-2027-01-09',
+        time: '08:00',
+        title: '🎟️ Chegada na Entrada do Parque (30 min antes da abertura)',
+        titleKey: 'Chegada na Entrada',
+        location: 'Universal Studios Florida',
+        category: 'park',
+        notes: 'Posicionamento nas catracas e revista de segurança para Entrada Antecipada (Early Entry) às 08:30.',
+        sourceType: 'park',
+        completed: false,
+      });
+
+      ensureItem({
+        id: 'auto-abertura-2027-01-09',
+        time: '08:30',
+        title: 'Entrada Antecipada (Early Entry) em Universal Studios Florida',
+        titleKey: 'Entrada Antecipada',
+        location: 'Universal Studios Florida',
+        category: 'park',
+        notes: 'Início do funcionamento e exploração das atrações de Universal Studios Florida com Universal Express.',
+        sourceType: 'park',
+        completed: false,
+      });
+
+      ensureItem({
+        id: 'auto-saida-parque-2027-01-09',
+        time: '21:00',
+        title: '🌙 Fechamento de Universal Studios Florida e Saída',
+        titleKey: 'Fechamento de',
+        location: 'Universal Studios Florida',
+        category: 'park',
+        notes: 'Encerramento das atividades no parque e percurso até o carro no estacionamento (25 min).',
+        sourceType: 'park',
+        completed: false,
+      });
+
+      ensureItem({
         id: 'auto-retorno-2027-01-09',
         time: '22:30',
         title: '🌙 Fim do dia na acomodação (Modern Retreat Resort)',
         titleKey: 'Fim do dia',
         location: 'Modern Retreat Resort',
-        category: 'airbnb',
+        category: 'hotel',
         notes: 'Retorno ao Modern Retreat Resort após o dia em Universal Studios Florida e descanso.',
         sourceType: 'accommodation',
         completed: false,
       });
     }
 
+    // Normalize category for airbnb -> hotel for consistency
+    syncedItems.forEach((item) => {
+      if (item.category === 'airbnb') item.category = 'hotel';
+    });
+
     day.hourlySchedule = deduplicateHourlySchedule(syncedItems);
   }
 
-  // 4. Safe Transactional Upsert per Day (Delete only rows for that day, then insert)
+  // 4. Safe Transactional Upsert per Day with Deterministic Stable IDs & Rigorous Field Validation
   console.log('Persisting updated itinerary_days and hourly_schedules safely to Supabase...');
 
   for (const day of days) {
@@ -301,10 +376,12 @@ async function main() {
       process.exit(1);
     }
 
-    // Map and insert new hourly schedule rows for this day
-    const dayHourlyRows = (day.hourlySchedule || []).map((item, index) =>
-      mapHourlyScheduleToDb(item, dayDbRow.id, tripId, index)
-    );
+    // Map using deterministic stable IDs
+    const dayHourlyRows = (day.hourlySchedule || []).map((item, index) => {
+      const dbRow = mapHourlyScheduleToDb(item, dayDbRow.id, tripId, index);
+      dbRow.id = generateDeterministicUUID('hourly-stable', `${dayDbRow.id}-${index}-${item.time}-${item.title}`);
+      return dbRow;
+    });
 
     if (dayHourlyRows.length > 0) {
       const { error: hErr } = await supabase.from('hourly_schedules').insert(dayHourlyRows);
@@ -315,17 +392,11 @@ async function main() {
     }
   }
 
-  console.log('=== RIGOROUS LINE-BY-LINE AUDIT & VERIFICATION ===');
+  console.log('=== RIGOROUS FIELD-BY-FIELD AUDIT & VERIFICATION ===');
 
-  const checkDates = ['2026-12-27', '2026-12-30', '2026-12-31', '2027-01-03', '2027-01-05', '2027-01-07', '2027-01-08', '2027-01-09'];
+  let allChecksPassed = true;
 
-  for (const targetDate of checkDates) {
-    const targetDay = days.find((d) => d.date === targetDate);
-    if (!targetDay) {
-      console.log(`Target date ${targetDate} not found!`);
-      continue;
-    }
-
+  for (const targetDay of days) {
     const { data: dbDay } = await supabase.from('itinerary_days').select('*').eq('id', targetDay.id).single();
     const { data: dbRows } = await supabase.from('hourly_schedules').select('*').eq('itinerary_day_id', targetDay.id).order('time');
 
@@ -333,23 +404,48 @@ async function main() {
     const dbItems = dbRows || [];
 
     console.log(`\n------------------------------------------------------------`);
-    console.log(`Date: ${targetDate} (Day ${targetDay.dayNumber}: ${targetDay.title} | Park: ${targetDay.park})`);
+    console.log(`Date: ${targetDay.date} (Day ${targetDay.dayNumber}: ${targetDay.title} | Park: ${targetDay.park})`);
     console.log(`JSON items count: ${jsonItems.length} | DB rows count: ${dbItems.length}`);
-    console.log(`1-to-1 Parity Match: ${jsonItems.length === dbItems.length ? 'YES' : 'NO'}`);
+
+    if (jsonItems.length !== dbItems.length) {
+      console.log(`❌ MISMATCH COUNT for ${targetDay.date}! JSON: ${jsonItems.length}, DB: ${dbItems.length}`);
+      allChecksPassed = false;
+    }
 
     for (let i = 0; i < Math.max(jsonItems.length, dbItems.length); i++) {
       const jItem = jsonItems[i];
       const dItem = dbItems[i];
       if (!jItem || !dItem) {
-        console.log(`  [${i + 1}] MISMATCH: JSON exists = ${!!jItem}, DB exists = ${!!dItem}`);
+        console.log(`  [${i + 1}] ❌ MISSING ITEM: JSON exists = ${!!jItem}, DB exists = ${!!dItem}`);
+        allChecksPassed = false;
         continue;
       }
-      const match = jItem.time === dItem.time && jItem.title === dItem.title;
-      console.log(`  [${i + 1}] ${dItem.time} - ${dItem.title} | Loc: ${dItem.location || 'N/A'} | Source: ${dItem.source_type || 'none'} | Match: ${match ? 'OK' : 'DIFF'}`);
+
+      const matchTime = jItem.time === dItem.time;
+      const matchTitle = jItem.title === dItem.title;
+      const matchLoc = (jItem.location || null) === (dItem.location || null);
+      const matchCat = (jItem.category || 'other') === (dItem.category || 'other');
+      const matchNotes = (jItem.notes || null) === (dItem.notes || null);
+      const matchSourceType = (jItem.sourceType || null) === (dItem.source_type || null);
+      const matchSourceId = (jItem.sourceId || null) === (dItem.source_id || null);
+      const matchCompleted = Boolean(jItem.completed) === Boolean(dItem.completed);
+
+      const allMatch = matchTime && matchTitle && matchLoc && matchCat && matchNotes && matchSourceType && matchSourceId && matchCompleted;
+
+      if (!allMatch) {
+        allChecksPassed = false;
+        console.log(`  [${i + 1}] ❌ FIELD DIFF at ${jItem.time} - ${jItem.title}:`);
+        if (!matchTime) console.log(`      Time diff: JSON(${jItem.time}) vs DB(${dItem.time})`);
+        if (!matchTitle) console.log(`      Title diff: JSON(${jItem.title}) vs DB(${dItem.title})`);
+        if (!matchLoc) console.log(`      Location diff: JSON(${jItem.location}) vs DB(${dItem.location})`);
+        if (!matchCat) console.log(`      Category diff: JSON(${jItem.category}) vs DB(${dItem.category})`);
+      } else {
+        console.log(`  [${i + 1}] ✅ [${dItem.time}] ${dItem.title} (Loc: ${dItem.location || 'N/A'}, Cat: ${dItem.category}, Src: ${dItem.source_type || 'none'})`);
+      }
     }
   }
 
-  console.log('\n=== SAFE AUDIT & RECONCILIATION COMPLETE ===');
+  console.log(`\n=== FINAL AUDIT RESULT: ${allChecksPassed ? 'ALL CHECKS PASSED SUCCESSFULLY (100% FIELD PARITY)' : 'SOME DISCREPANCIES FOUND'} ===`);
 }
 
 main().catch(console.error);

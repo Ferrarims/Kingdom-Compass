@@ -625,8 +625,9 @@ export function mapHourlyScheduleToDb(
   index: number = 0
 ): Record<string, any> {
   const rawCat = (item.category || '').toLowerCase();
-  const category = (VALID_HOURLY_CATEGORIES as readonly string[]).includes(rawCat)
-    ? rawCat
+  const dbCat = rawCat === 'airbnb' ? 'hotel' : rawCat;
+  const category = (VALID_HOURLY_CATEGORIES as readonly string[]).includes(dbCat)
+    ? dbCat
     : 'other';
 
   const cleanTime = (item.time || '08:00').trim();
