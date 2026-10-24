@@ -333,7 +333,17 @@ export function compareScheduleItemOrder(a: HourlyScheduleItem, b: HourlySchedul
     return 4.5;
   };
 
-  return getItemPriority(a) - getItemPriority(b);
+  const priorityDiff = getItemPriority(a) - getItemPriority(b);
+  if (priorityDiff !== 0) return priorityDiff;
+
+  const titleA = a?.title || '';
+  const titleB = b?.title || '';
+  const titleDiff = titleA.localeCompare(titleB);
+  if (titleDiff !== 0) return titleDiff;
+
+  const idA = a?.id || '';
+  const idB = b?.id || '';
+  return idA.localeCompare(idB);
 }
 
 /**
