@@ -6237,26 +6237,43 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     compErr: string,
     _actionContext: 'add' | 'edit' | 'delete'
   ): Promise<{ success: boolean; error: string }> => {
-    const reloaded = await reloadAccommodationsFromSupabase();
-    if (!reloaded) {
+    if (!activeTripId) {
+      const errMsg = `Falha ao salvar limpeza das seleções de hospedagem (${origErr}). A ação compensatória falhou (${compErr}) e não há viagem ativa para reconciliação.`;
+      addNotification(`❌ ${errMsg}`);
+      return { success: false, error: errMsg };
+    }
+
+    setSupabaseStatus((prev) => ({ ...prev, syncing: true, error: null }));
+    const remoteAccs = await SupabaseService.fetchAccommodationsByTripId(activeTripId);
+
+    if (remoteAccs === null) {
+      setSupabaseStatus((prev) => ({ ...prev, syncing: false }));
       const errMsg = `Falha ao salvar limpeza das seleções de hospedagem (${origErr}). A ação compensatória no banco também falhou (${compErr}) e a recarga dos dados do banco para reconciliação falhou. O estado local não pôde ser atualizado com o banco.`;
       addNotification(`❌ ${errMsg}`);
       return { success: false, error: errMsg };
     }
 
-    let reloadedAccs: AccommodationBooking[] = [];
-    if (activeTripId) {
-      const remoteAccs = await SupabaseService.fetchAccommodationsByTripId(activeTripId);
-      if (remoteAccs !== null) {
-        reloadedAccs = remoteAccs;
-      }
-    }
+    setAccommodations(remoteAccs);
+    setTrips((prevTrips) =>
+      prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: remoteAccs } : t))
+    );
 
-    const reloadedCleanedSel = cleanOrphanedAccommodationSelections(selectedAccommodationsPerNight, reloadedAccs);
+    const now = new Date();
+    const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    setSupabaseStatus((prev) => ({
+      ...prev,
+      connected: true,
+      tablesExist: true,
+      syncing: false,
+      lastSynced: `Hoje às ${timeStr}`,
+      error: null,
+    }));
+
+    const reloadedCleanedSel = cleanOrphanedAccommodationSelections(selectedAccommodationsPerNight, remoteAccs);
     let reloadedCleanSuccess = true;
     let reloadedCleanErr: string | undefined;
 
-    if (activeTripId && JSON.stringify(reloadedCleanedSel) !== JSON.stringify(selectedAccommodationsPerNight)) {
+    if (JSON.stringify(reloadedCleanedSel) !== JSON.stringify(selectedAccommodationsPerNight)) {
       const cleanRes = await SupabaseService.saveSelectedAccommodationsPerNight(activeTripId, reloadedCleanedSel);
       if (!cleanRes.success) {
         reloadedCleanSuccess = false;
@@ -6264,13 +6281,13 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       } else {
         setSelectedAccommodationsPerNightState(reloadedCleanedSel);
         setTrips((prevTrips) =>
-          prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: reloadedAccs, selectedAccommodationsPerNight: reloadedCleanedSel } : t))
+          prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: remoteAccs, selectedAccommodationsPerNight: reloadedCleanedSel } : t))
         );
       }
     } else {
       setSelectedAccommodationsPerNightState(reloadedCleanedSel);
       setTrips((prevTrips) =>
-        prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: reloadedAccs, selectedAccommodationsPerNight: reloadedCleanedSel } : t))
+        prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: remoteAccs, selectedAccommodationsPerNight: reloadedCleanedSel } : t))
       );
     }
 
