@@ -4553,7 +4553,7 @@ export const SupabaseService = {
                 cost_usd: pkg.costUSD !== undefined ? Number(pkg.costUSD) : null,
                 cost_brl: pkg.costBRL !== undefined ? Number(pkg.costBRL) : null,
                 status: pkg.status || 'Confirmado',
-                payment_status: pkg.paymentStatus || 'Reservado / Confirmado',
+                payment_status: pkg.paymentStatus || 'Não informado',
                 payer_id: pkg.payerId || 'all',
                 traveler_ids: pkg.travelerIds || ['all'],
                 notes: pkg.notes || null,
@@ -4760,9 +4760,10 @@ export const SupabaseService = {
       // Regra obrigatória: se a cobrança for zero nas duas moedas para um item vinculado (voo ou hospedagem),
       // nenhuma despesa vinculada pode existir no Financeiro. Exclui e encerra sem upsert.
       const isZero = (Number(expense.estimatedValueUSD) || 0) <= 0 && (Number(expense.estimatedValueBRL) || 0) <= 0;
-      if (isZero && expense.sourceType && (expense.sourceType === 'flight' || expense.sourceType === 'accommodation')) {
+      const linkedSourceTypes = ['flight', 'accommodation', 'car_rental', 'park_ticket', 'photo_package'];
+      if (isZero && expense.sourceType && linkedSourceTypes.includes(expense.sourceType)) {
         if (expense.sourceId) {
-          const delRes = await deleteExpensesBySourceInDb(cleanTripId, expense.sourceType, expense.sourceId);
+          const delRes = await deleteExpensesBySourceInDb(cleanTripId, expense.sourceType as 'flight' | 'accommodation' | 'car_rental' | 'park_ticket' | 'photo_package', expense.sourceId);
           if (!delRes.success) {
             return { success: false, error: delRes.error || 'Falha ao excluir despesa zerada no Supabase' };
           }

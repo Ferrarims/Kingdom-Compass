@@ -41,7 +41,7 @@ import {
   PhotoPackageItem,
 } from '../types';
 import { PARKS_GUIDE_DATA } from '../data/initialData';
-import { formatDisplayDate, usePlanner } from '../context/PlannerContext';
+import { formatDisplayDate, usePlanner, isZeroCost } from '../context/PlannerContext';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
 import { fetchParkHours, ParkHoursResult } from '../services/parkHoursClient';
@@ -56,6 +56,7 @@ import {
   isDayWithPark,
   getDriveAndParkingMetrics,
 } from '../utils/parkScheduleUtils';
+import { generateDeterministicUUID } from '../utils/uuid';
 
 interface ParkBookingModalProps {
   isOpen: boolean;
@@ -1111,22 +1112,23 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     // Sincroniza o pacote de fotos com o módulo Financeiro / Divisão de Despesas
     const parsedUsd = photoPkgCostUSD || 0;
     const parsedBrl = photoPkgCostBRL || (parsedUsd * dollarRate);
+    const packageId = photoPkgId || `photo-${activeDay.id}`;
+    const photoExpenseId = generateDeterministicUUID('photo-expense', packageId);
 
-    if (hasPhotoPackage && finalPhotoPackage) {
+    if (hasPhotoPackage && finalPhotoPackage && !isZeroCost(parsedUsd, parsedBrl)) {
       const expenseStatus = photoPkgPaymentStatus;
       const finalPaidBRL = expenseStatus === 'Pago' ? parsedBrl : (expenseStatus === 'Parcial' ? (photoPkgPaidValueBRL || 0) : 0);
       const finalPaidUSD = expenseStatus === 'Pago' ? parsedUsd : (expenseStatus === 'Parcial' ? ((photoPkgPaidValueBRL || 0) / dollarRate) : 0);
 
       const expenseTitle = `Pacote de Fotos: ${finalPhotoPackage.name}`;
-      const packageId = finalPhotoPackage.id || `photo-${activeDay.id}`;
 
       const existingExpense = expenses.find(
-        (e) => (e.sourceType === 'photo_package' && (e.sourceId === packageId || e.id === `exp-${packageId}`)) ||
-               (e.sourceType === 'photo_package' && e.title.toLowerCase().includes(finalPhotoPackage.name.toLowerCase()))
+        (e) => e.id === photoExpenseId || (e.sourceType === 'photo_package' && e.sourceId === packageId)
       );
 
       if (existingExpense) {
         updateExpense(existingExpense.id, {
+          id: photoExpenseId, // Ensure it has the deterministic ID
           title: expenseTitle,
           category: 'Pacotes de Fotos',
           estimatedValueUSD: parsedUsd,
@@ -1143,6 +1145,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
         });
       } else {
         addExpense({
+          id: photoExpenseId,
           title: expenseTitle,
           category: 'Pacotes de Fotos',
           estimatedValueUSD: parsedUsd,
@@ -1159,21 +1162,26 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
           notes: finalPhotoPackage.confirmationCode ? `Voucher / Confirmação: #${finalPhotoPackage.confirmationCode}` : undefined,
         });
       }
-    } else if (!hasPhotoPackage) {
-      // 1. Remove expense from financial module
-      const packageId = photoPkgId || `photo-${activeDay.id}`;
+    } else {
+      // Caso não tenha pacote ou o custo seja zero, removemos a despesa vinculada
       const existingExpense = expenses.find(
-        (e) => e.sourceType === 'photo_package' && (e.sourceId === packageId || e.id === `exp-${packageId}`)
+        (e) => e.id === photoExpenseId || (e.sourceType === 'photo_package' && e.sourceId === packageId)
       );
       if (existingExpense) {
         deleteExpense(existingExpense.id);
       }
-      // Also search by name if any other photo expense matches
-      expenses.forEach((e) => {
-        if (e.sourceType === 'photo_package' && photoPkgName && e.title.toLowerCase().includes(photoPkgName.toLowerCase())) {
-          deleteExpense(e.id);
-        }
-      });
+      
+      // Se desmarcou o pacote, limpamos de todos os dias (comportamento de pacote da viagem)
+      if (!hasPhotoPackage) {
+        expenses.forEach((e) => {
+          if (e.sourceType === 'photo_package' && photoPkgName && e.title.toLowerCase().includes(photoPkgName.toLowerCase())) {
+            if (e.sourceId === packageId || !e.sourceId) {
+              deleteExpense(e.id);
+            }
+          }
+        });
+      }
+    }
 
       // 2. Remove photo package from ALL other days in the itinerary as well
       allDays.forEach((d) => {
@@ -1194,7 +1202,6 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
           }
         }
       });
-    }
 
     const updatedBooking: ParkDayBooking = {
       id: activeDay.parkBooking?.id || `pb-${activeDay.id}`,

@@ -3110,8 +3110,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   };
 
-  const addExpense = async (expense: Omit<ExpenseItem, 'id'>): Promise<{ success: boolean; error?: string; id?: string }> => {
-    const id = `exp-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const addExpense = async (expense: Omit<ExpenseItem, 'id'> & { id?: string }): Promise<{ success: boolean; error?: string; id?: string }> => {
+    const id = expense.id || `exp-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     const newExp: ExpenseItem = {
       ...expense,
       id,
