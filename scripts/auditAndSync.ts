@@ -14,13 +14,14 @@ import {
   deduplicateHourlySchedule,
   resolveAccommodationForNight,
   getDriveAndParkingMetrics,
+  compareScheduleItemOrder,
 } from '../src/utils/parkScheduleUtils.js';
 import { generateDeterministicUUID } from '../src/utils/uuid.js';
 
 const TARGET_TRIP_ID = '78bbd4b1-2857-43d0-9520-2318a3b157a3';
 
 async function main() {
-  console.log('=== STARTING FINAL MORNING NOTE RECONCILIATION ===');
+  console.log('=== STARTING COMPREHENSIVE AUDIT & RECONCILIATION FOR TRIP 78bbd4b1-2857-43d0-9520-2318a3b157a3 ===');
 
   const { data: tripRows, error: tripErr } = await supabase
     .from('trips')
@@ -93,203 +94,229 @@ async function main() {
   for (const day of days) {
     let syncedItems = syncAllEventsToHourlySchedule(day, tripContext);
     const isParkDay = day.park && day.park !== 'Sem Parque' && day.park !== 'Parque a Definir';
-    let closingTime = '21:00';
 
-    if (day.parkBooking?.parkHours?.closingTime) {
-      closingTime = day.parkBooking.parkHours.closingTime;
-    } else if (day.date && officialParkMapping[day.date]) {
-      closingTime = officialParkMapping[day.date].closing;
+    // 1. Specific Day Adjustments based on user prompt instructions
+
+    // Day 1: 27/12/2026 (Arrival Miami & Car Rental)
+    if (day.date === '2026-12-27') {
+      const hasCarPickup = syncedItems.some((i) => i.time === '14:30');
+      const hasTransit = syncedItems.some((i) => i.time === '16:35');
+      if (hasCarPickup && hasTransit) {
+        syncedItems = syncedItems.map((i) => {
+          if (i.time === '16:35' || (i.title || '').toLowerCase().includes('deslocamento') || (i.title || '').toLowerCase().includes('rumo ao hotel')) {
+            return {
+              ...i,
+              notes: 'Intervalo de 2h15min entre a retirada do carro às 14:30 e o início do trajeto às 16:35 preservado como parada planejada (conferência do veículo, trâmites de locação e lanche de chegada). [Estimativa mantida conforme dados existentes].',
+            };
+          }
+          return i;
+        });
+      }
     }
 
-    // 1. 31/12/2026 — Busch Gardens Tampa Bay (NYE)
-    if (day.date === '2026-12-31') {
+    // Free Days: 28/12, 02/01, 04/01, 06/01
+    if (['2026-12-28', '2027-01-02', '2027-01-04', '2027-01-06'].includes(day.date!)) {
       syncedItems = syncedItems.filter((i) => {
         const t = (i.title || '').toLowerCase();
-        return !t.includes('fim do dia') && !t.includes('retorno') && !t.includes('chegada ao carro') && !t.includes('término das atividades') && !t.includes('pós-virada');
+        return !t.includes('atividade') && !t.includes('passeio inventado') && !t.includes('tour');
+      });
+      pendingItemsReport.push(`${day.date} (Dia Livre): Sem atividades detalhadas programadas; horários restritos à hospedagem/descanso.`);
+    }
+
+    // Day 3: 29/12/2026 (Checkout Miami & Drive to Kissimmee)
+    if (day.date === '2026-12-29') {
+      syncedItems = syncedItems.filter((i) => {
+        const t = (i.title || '').toLowerCase();
+        return !t.includes('partida para kissimmee às 10:00');
+      });
+      const hasCheckout = syncedItems.some((i) => (i.title || '').toLowerCase().includes('check-out'));
+      const hasDeparture = syncedItems.some((i) => (i.title || '').toLowerCase().includes('kissimmee') || (i.title || '').toLowerCase().includes('deslocamento'));
+      if (!hasCheckout) {
+        syncedItems.push({
+          id: 'auto-checkout-2026-12-29',
+          time: '10:00',
+          title: '🚪 Check-out da Acomodação em Miami',
+          location: 'Brickell, Miami, FL',
+          category: 'hotel',
+          notes: 'Horário contratual de check-out em Miami.',
+          sourceType: 'accommodation',
+          completed: false,
+        });
+      }
+      if (!hasDeparture) {
+        syncedItems.push({
+          id: 'auto-departure-2026-12-29',
+          time: '10:30',
+          title: '🚗 Saída de Miami rumo a Modern Retreat Resort (Kissimmee)',
+          location: 'Kissimmee - FL',
+          category: 'transport',
+          notes: 'Saída realizada às 10:30 após check-out, entrega de chaves e carregamento de bagagem. Estimativa de viagem: 287 minutos (~4h47m). Chegada prevista estimada para as 15:17, com check-in oficial às 16:00 [Margem estimada, não garantia absoluta].',
+          sourceType: 'transport',
+          completed: false,
+        });
+      }
+      estimatedTimesReport.push('29/12/2026: Deslocamento Miami ➔ Kissimmee estimado em 287 minutos (chegada prevista ~15:17, check-in às 16:00).');
+    }
+
+    // Day 4: 30/12/2026 — SeaWorld Orlando (Supabase vs Screen divergence resolution)
+    if (day.date === '2026-12-30') {
+      syncedItems = syncedItems.filter((i) => {
+        const t = (i.title || '').toLowerCase();
+        return !t.includes('abertura oficial às 08:00') && !t.includes('abertura oficial de 08:00');
       });
 
-      const hasNYE = syncedItems.some((i) => (i.title || '').toLowerCase().includes('ano-novo') || (i.title || '').toLowerCase().includes('réveillon'));
-      if (!hasNYE) {
+      const hasTurnstile = syncedItems.some((i) => (i.title || '').toLowerCase().includes('catracas'));
+      const hasEarly = syncedItems.some((i) => (i.title || '').toLowerCase().includes('early entry') || (i.title || '').toLowerCase().includes('antecipada'));
+      const hasOpening = syncedItems.some((i) => (i.title || '').toLowerCase().includes('abertura oficial'));
+
+      if (!hasTurnstile) {
         syncedItems.push({
-          id: 'auto-nye-buschtampabay',
-          time: '23:59',
-          title: '🎆 Celebração de Réveillon e Virada de Ano em Busch Gardens',
-          location: 'Busch Gardens Tampa Bay',
+          id: 'auto-turnstile-2026-12-30',
+          time: '08:00',
+          title: '🎟️ Chegada na Entrada de SeaWorld Orlando (Catracas)',
+          location: 'SeaWorld Orlando',
           category: 'park',
-          notes: 'Espetáculo de fogos de artifício e celebração de Ano-Novo em Busch Gardens Tampa Bay. [Duração do evento e horário de término pendentes de confirmação oficial. Saída, caminhada até o carro, início do trajeto e chegada à acomodação pós-meia-noite NÃO foram calculados como fatos confirmados e serão gravados em 01/01 somente após confirmação do término real].',
+          notes: 'Chegada às catracas 30 min antes da Early Entry.',
           sourceType: 'park',
           completed: false,
         });
-        pendingItemsReport.push('31/12/2026: Duração e término da Celebração de Réveillon pendentes; retorno pós-meia-noite aguarda confirmação oficial.');
+      }
+      if (!hasEarly) {
+        syncedItems.push({
+          id: 'auto-early-2026-12-30',
+          time: '08:30',
+          title: '⚡ Entrada Antecipada (Early Entry) em SeaWorld Orlando',
+          location: 'SeaWorld Orlando',
+          category: 'park',
+          notes: 'Início da Entrada Antecipada (abertura oficial confirmada às 09:00).',
+          sourceType: 'park',
+          completed: false,
+        });
+      }
+      if (!hasOpening) {
+        syncedItems.push({
+          id: 'auto-opening-2026-12-30',
+          time: '09:00',
+          title: '🌟 Abertura Oficial de SeaWorld Orlando',
+          location: 'SeaWorld Orlando',
+          category: 'park',
+          notes: 'Abertura oficial confirmada para as 09:00.',
+          sourceType: 'park',
+          completed: false,
+        });
       }
     }
 
-    // 2. 01/01/2027 — Post-midnight return removed while NYE end time is pending
+    // Day 5: 31/12/2026 — Busch Gardens Tampa Bay (NYE)
+    if (day.date === '2026-12-31') {
+      const hasTransitToBG = syncedItems.some((i) => (i.title || '').toLowerCase().includes('modern retreat') && (i.title || '').toLowerCase().includes('busch gardens'));
+      if (!hasTransitToBG) {
+        syncedItems.push({
+          id: 'auto-transit-bg-3112',
+          time: '08:45',
+          title: '🚗 Deslocamento: Modern Retreat Resort ➔ Busch Gardens Tampa Bay',
+          location: 'Busch Gardens Tampa Bay',
+          category: 'transport',
+          notes: 'Saída estimada de Kissimmee rumo a Tampa Bay (~70-80 min de trajeto estimado via I-4). Horário de abertura oficial do parque: 10:00 [Estimativa interna de deslocamento; horário de abertura confirmado].',
+          sourceType: 'transport',
+          completed: false,
+        });
+      }
+    }
+
+    // Day 6: 01/01/2027 — Disney's Animal Kingdom
     if (day.date === '2027-01-01') {
-      syncedItems = syncedItems.filter((i) => {
-        const t = (i.title || '').toLowerCase();
-        return !t.includes('pós-virada') && !t.includes('02:01');
+      syncedItems = syncedItems.map((i) => {
+        if (i.time === '06:30' || (i.title || '').toLowerCase().includes('início do dia') || (i.title || '').toLowerCase().includes('saída')) {
+          return {
+            ...i,
+            notes: `${i.notes || ''} [PROVISÓRIO / SUJEITO A AJUSTE: Horário planejado para cumprir a Early Entry às 08:30, sujeito a revisão dependendo do descanso após a celebração de Réveillon].`,
+          };
+        }
+        return i;
       });
-      pendingItemsReport.push('01/01/2027: Nenhum evento pós-virada ou às 02:01 presente; horário do início da manhã sujeito a ajuste dependendo da confirmação do término do Réveillon de 31/12.');
+      pendingItemsReport.push('01/01/2027: Eventos matinais marcados como provisórios dependendo do descanso pós-Réveillon.');
     }
 
-    // 3. General Park Days Routing & Morning Precision
-    if (isParkDay && day.date !== '2026-12-31') {
-      const nightAcc = resolveAccommodationForNight(accommodations, day.date!, trip.selectedAccommodationsPerNight);
-      const accName = nightAcc ? nightAcc.name : 'Acomodação (Seleção Pendente)';
-      if (!nightAcc) {
-        pendingItemsReport.push(`${day.date}: Acomodação noturna sem seleção explícita em noites sobrepostas.`);
-      }
+    // Day 13: 08/01/2027 — Universal's Islands of Adventure & Hard Rock Check-in
+    if (day.date === '2027-01-08') {
+      syncedItems = syncedItems.map((i) => {
+        const t = (i.title || '').toLowerCase();
+        if (t.includes('16:00') || t.includes('check-in') || t.includes('quarto')) {
+          return {
+            ...i,
+            title: '🏨 Quarto disponível / Horário oficial de check-in (Universal Hard Rock Hotel)',
+            notes: 'Quarto liberado oficialmente às 16:00 [Informativo: sem necessidade de retornar ao hotel durante o dia de parque; as chaves/Express Passes já foram retiradas às 07:00].',
+          };
+        }
+        return i;
+      });
+    }
 
-      const transitInfo = getDriveAndParkingMetrics(day.park!, nightAcc?.name, nightAcc?.address);
-      const walkTimeMins = transitInfo.maxParkingMins;
-      const transitMins = transitInfo.driveMins;
+    // Day 14: 09/01/2027 — Universal Studios Florida
+    if (day.date === '2027-01-09') {
+      syncedItems = syncedItems.map((i) => {
+        const t = (i.title || '').toLowerCase();
+        if (t.includes('check-out') || t.includes('liberação')) {
+          return {
+            ...i,
+            notes: 'Liberação do quarto e check-out no Hard Rock. [⚠️ PENDENTE DE CONFIRMAÇÃO: Logística de guarda-volumes para as malas após o check-out antes da entrada no parque ainda não foi confirmada].',
+          };
+        }
+        return i;
+      });
+      pendingItemsReport.push('09/01/2027: Guarda-volumes pós-checkout no Hard Rock pendente de confirmação.');
+    }
 
-      const info = officialParkMapping[day.date!] || { opening: '09:00', closing: '21:00', early: '08:30' };
-      const openingTime = info.opening;
-      const earlyTime = info.early;
-
-      const baseParkTime = earlyTime ? earlyTime : openingTime;
-      const [bpH, bpM] = baseParkTime.split(':').map((v) => parseInt(v, 10));
-      const parkTotalMins = bpH * 60 + bpM;
-
-      const turnstileMins = parkTotalMins - 30;
-      const tH = Math.floor(turnstileMins / 60);
-      const tM = turnstileMins % 60;
-      const turnstileStr = `${String(tH).padStart(2, '0')}:${String(tM).padStart(2, '0')}`;
-
-      const depMins = turnstileMins - walkTimeMins - transitMins - 10;
-      const dH = Math.max(5, Math.floor(depMins / 60));
-      const dM = depMins % 60;
-      const depStr = `${String(dH).padStart(2, '0')}:${String(dM).padStart(2, '0')}`;
-
-      const wakeMins = depMins - 30;
-      const wH = Math.max(5, Math.floor(wakeMins / 60));
-      const wM = wakeMins % 60;
-      const wakeStr = `${String(wH).padStart(2, '0')}:${String(wM).padStart(2, '0')}`;
-
-      let finalWake = wakeStr;
-      let finalDep = depStr;
-      let finalTurnstile = turnstileStr;
-
-      if (day.date === '2027-01-01') {
-        finalTurnstile = '08:00';
-        finalDep = '07:00';
-        finalWake = '06:30';
-      } else if (day.date === '2027-01-03') {
-        finalTurnstile = '08:00';
-        finalDep = '06:55';
-        finalWake = '06:25';
-      } else if (day.date === '2027-01-05') {
-        finalTurnstile = '08:00';
-        finalDep = '07:20';
-        finalWake = '06:50';
-      } else if (day.date === '2027-01-07') {
-        finalTurnstile = '08:00';
-        finalDep = '07:25';
-        finalWake = '06:55';
-      } else if (day.date === '2027-01-08') {
-        finalWake = '05:49';
-        finalDep = '06:19';
-        finalTurnstile = '08:00';
-      } else if (day.date === '2027-01-09') {
-        finalWake = '06:23';
-        finalDep = '07:30';
-        finalTurnstile = '08:00';
-      }
-
-      calculatedTimesReport.push(`${day.date} (${day.park}): Saída acomodação às ${finalDep} | Chegada catracas às ${finalTurnstile}`);
-
-      let [cH, cM] = closingTime.split(':').map((v) => parseInt(v, 10));
-      const closeTotalMins = cH * 60 + cM;
-
-      const exitMins = closeTotalMins;
-      const exitH = Math.floor(exitMins / 60) % 24;
-      const exitM = exitMins % 60;
-      const exitTimeStr = `${String(exitH).padStart(2, '0')}:${String(exitM).padStart(2, '0')}`;
-
-      const carMins = closeTotalMins + walkTimeMins;
-      const carH = Math.floor(carMins / 60) % 24;
-      const carM = carMins % 60;
-      const carTimeStr = `${String(carH).padStart(2, '0')}:${String(carM).padStart(2, '0')}`;
-
-      const carStartDriveMins = carMins + 5;
-      const csdH = Math.floor(carStartDriveMins / 60) % 24;
-      const csdM = carStartDriveMins % 60;
-      const carStartDriveStr = `${String(csdH).padStart(2, '0')}:${String(csdM).padStart(2, '0')}`;
-
-      const arrivalMins = carStartDriveMins + transitMins;
-      const arrivalH = Math.floor(arrivalMins / 60) % 24;
-      const arrivalM = arrivalMins % 60;
-      const arrivalTimeStr = `${String(arrivalH).padStart(2, '0')}:${String(arrivalM).padStart(2, '0')}`;
-
-      calculatedTimesReport.push(`${day.date} (${day.park}): Saída parque às ${exitTimeStr} | Chegada carro às ${carTimeStr} | Início retorno às ${carStartDriveStr} | Chegada hospedagem às ${arrivalTimeStr}`);
-
+    // Day 15: 10/01/2027 — Departure / Airport / Car Return
+    if (day.date === '2027-01-10') {
       syncedItems = syncedItems.filter((i) => {
         const t = (i.title || '').toLowerCase();
-        return !t.includes('término das atividades') && !t.includes('chegada ao carro') && !t.includes('início do trajeto de retorno') && !t.includes('transporte de retorno') && !t.includes('fim do dia na acomodação') && !t.includes('chegada na entrada') && !t.includes('entrada antecipada') && !t.includes('deslocamento:') && !t.includes('início do dia');
+        return !t.includes('devolução do carro às 10:00');
       });
 
-      if (day.date === '2027-01-08') {
-        syncedItems.push(
-          { id: 'auto-acordar-2027-01-08', time: '05:49', title: '⏰ Acordar — Modern Retreat Resort', location: 'Modern Retreat Resort', category: 'hotel', notes: 'Despertar 30 min antes da saída para o Universal Hard Rock Hotel às 06:19.', sourceType: 'accommodation', completed: false },
-          { id: 'auto-acc-transit-2027-01-08', time: '06:19', title: '🚗 Deslocamento: Modern Retreat Resort ➔ Universal Hard Rock Hotel', location: 'Universal Hard Rock Hotel', category: 'transport', notes: 'Deslocamento da acomodação da manhã até Universal Hard Rock Hotel para pré check-in e retirada de chave.', sourceType: 'transport', completed: false },
-          { id: 'auto-acc-keypickup-2027-01-08', time: '07:00', title: '🔑 Retirada de Chaves & Pré Check-in: Universal Hard Rock Hotel', location: 'Universal Hard Rock Hotel', category: 'hotel', notes: 'Parada de 30 min em Universal Hard Rock Hotel para pré check-in e retirada de chave/Express Pass. Quarto disponível a partir das 16:00.', sourceType: 'accommodation', completed: false },
-          { id: 'auto-acc-park-transfer-2027-01-08', time: '07:30', title: "🚗 Transferência: Universal Hard Rock Hotel ➔ Universal's Islands of Adventure", location: "Universal's Islands of Adventure", category: 'transport', notes: 'Deslocamento do Hard Rock Hotel para Islands of Adventure.', sourceType: 'transport', completed: false },
-          { id: 'auto-ida-2027-01-08', time: '08:00', title: '🎟️ Chegada na Entrada do Parque (30 min antes da Early Entry)', location: "Universal's Islands of Adventure", category: 'park', notes: 'Posicionamento nas catracas para Early Entry às 08:30.', sourceType: 'park', completed: false },
-          { id: 'auto-abertura-2027-01-08', time: '08:30', title: "⚡ Entrada Antecipada (Early Entry) em Universal's Islands of Adventure", location: "Universal's Islands of Adventure", category: 'park', notes: 'Início do funcionamento com Universal Express.', sourceType: 'park', completed: false }
-        );
-      } else if (day.date === '2027-01-09') {
-        syncedItems.push(
-          { id: 'auto-acordar-2027-01-09', time: '06:23', title: '⏰ Acordar — Universal Hard Rock Hotel', location: 'Universal Hard Rock Hotel', category: 'hotel', notes: 'Despertar no Hard Rock Hotel.', sourceType: 'accommodation', completed: false },
-          { id: 'auto-checkout-2027-01-09', time: '07:15', title: '🚪 Liberação do Quarto & Check-out: Universal Hard Rock Hotel', location: 'Universal Hard Rock Hotel', category: 'hotel', notes: 'Liberação do quarto e check-out no Hard Rock. [Aviso de guarda-volumes pendente de confirmação].', sourceType: 'accommodation', completed: false },
-          { id: 'auto-park-transit-2027-01-09', time: '07:30', title: '🚗 Deslocamento: Universal Hard Rock Hotel ➔ Universal Studios Florida', location: 'Universal Studios Florida', category: 'transport', notes: 'Deslocamento do Hard Rock Hotel para Universal Studios Florida.', sourceType: 'transport', completed: false },
-          { id: 'auto-ida-2027-01-09', time: '08:00', title: '🎟️ Chegada na Entrada do Parque (30 min antes da Early Entry)', location: 'Universal Studios Florida', category: 'park', notes: 'Chegada às catracas para Early Entry às 08:30.', sourceType: 'park', completed: false },
-          { id: 'auto-abertura-2027-01-09', time: '08:30', title: '⚡ Entrada Antecipada (Early Entry) em Universal Studios Florida', location: 'Universal Studios Florida', category: 'park', notes: 'Início do funcionamento em Universal Studios Florida.', sourceType: 'park', completed: false }
-        );
-      } else {
-        const morningNotes = day.date === '2027-01-01'
-          ? 'Despertar, café da manhã e preparativos para Disney\'s Animal Kingdom. [ATENÇÃO: Este horário matinal das 06:30 é provisório e depende da confirmação do horário de término do Réveillon e do descanso do grupo após a virada do ano].'
-          : 'Despertar, café da manhã e preparativos para o dia de parque.';
-
-        syncedItems.push(
-          { id: `auto-morning-${day.date}`, time: finalWake, title: `☀️ Início do dia na acomodação (${accName})`, location: accName, category: 'hotel', notes: morningNotes, sourceType: 'accommodation', completed: false },
-          { id: `auto-dep-${day.date}`, time: finalDep, title: `🚗 Saída da acomodação (${accName}) ➔ ${day.park}`, location: accName, category: 'transport', notes: `Início do deslocamento de carro (~${transitMins} min) rumo ao estacionamento de ${day.park}.`, sourceType: 'transport', completed: false },
-          { id: `auto-arrival-turnstile-${day.date}`, time: finalTurnstile, title: `🎟️ Chegada na Entrada de ${day.park} (Catracas)`, location: day.park, category: 'park', notes: `Chegada às catracas 30 min antes da ${earlyTime ? 'Early Entry (' + earlyTime + ')' : 'Abertura Oficial (' + openingTime + ')'}.`, sourceType: 'park', completed: false }
-        );
-        if (earlyTime) {
-          syncedItems.push({
-            id: `auto-early-${day.date}`,
-            time: earlyTime,
-            title: `⚡ Entrada Antecipada (Early Entry) em ${day.park}`,
-            location: day.park,
-            category: 'park',
-            notes: `Início da Entrada Antecipada (abertura oficial às ${openingTime}).`,
-            sourceType: 'park',
-            completed: false,
-          });
-        }
+      const hasCheckout10 = syncedItems.some((i) => i.time === '10:00' && (i.title || '').toLowerCase().includes('check-out'));
+      if (hasCheckout10) {
+        syncedItems = syncedItems.map((i) => {
+          if (i.time === '10:00' && (i.title || '').toLowerCase().includes('check-out')) {
+            return {
+              ...i,
+              notes: 'Horário contratual de check-out da acomodação.',
+            };
+          }
+          return i;
+        });
       }
 
-      syncedItems.push(
-        { id: `auto-exit-${day.date}`, time: exitTimeStr, title: `🌙 Término das atividades em ${day.park} e Saída`, location: day.park, category: 'park', notes: `Encerramento das atividades e saída do parque às ${closingTime}.`, sourceType: 'park', completed: false },
-        { id: `auto-car-${day.date}`, time: carTimeStr, title: '🚗 Chegada ao Carro no Estacionamento', location: day.park, category: 'transport', notes: `Caminhada até o veículo no estacionamento (~${walkTimeMins} min).`, sourceType: 'transport', completed: false },
-        { id: `auto-return-start-${day.date}`, time: carStartDriveStr, title: `🚗 Início do trajeto de retorno: ${day.park} ➔ ${accName}`, location: day.park, category: 'transport', notes: `Embarque e início da viagem de carro de volta para a acomodação (~${transitMins} min).`, sourceType: 'transport', completed: false },
-        { id: `auto-arrival-night-${day.date}`, time: arrivalTimeStr, title: `🌙 Fim do dia na acomodação (${accName})`, location: accName, category: 'hotel', notes: `Chegada à acomodação noturna e descanso.`, sourceType: 'accommodation', completed: false }
-      );
+      const hasCarDropoff = syncedItems.some((i) => (i.title || '').toLowerCase().includes('devolução'));
+      if (!hasCarDropoff) {
+        syncedItems.push({
+          id: 'auto-cardrop-2027-01-10',
+          time: '11:03',
+          title: '🚗 Devolução do Carro Alugado (Previsão Estimada)',
+          location: 'Orlando International Airport (MCO)',
+          category: 'transport',
+          notes: 'Chegada prevista estimada para as 11:03 para devolução do veículo. [Prazo máximo contratual limite: 12:00, não horário obrigatório rígido].',
+          sourceType: 'car_rental',
+          completed: false,
+        });
+        estimatedTimesReport.push('10/01/2027: Devolução do carro estimada às 11:03 (prazo máximo limite às 12:00).');
+      }
     }
 
     syncedItems.forEach((item) => {
       if (item.category === 'airbnb') item.category = 'hotel';
     });
 
-    day.hourlySchedule = deduplicateHourlySchedule(syncedItems);
+    day.hourlySchedule = deduplicateHourlySchedule(syncedItems).sort(compareScheduleItemOrder);
   }
 
   // Safe Upsert with Stable IDs and Cleanup of Obsolete Rows
   console.log('Persisting updated schedules securely using safe upsert strategy...');
 
   for (const day of days) {
+    day.hourlySchedule = deduplicateHourlySchedule(day.hourlySchedule || []).sort(compareScheduleItemOrder);
+    
     const dayDbRow = mapItineraryDayToDb(day, tripId);
     const dayHourlyRows = (day.hourlySchedule || []).map((item, index) => {
       const dbRow = mapHourlyScheduleToDb(item, dayDbRow.id, tripId, index);
@@ -334,7 +361,7 @@ async function main() {
     }
   }
 
-  console.log('=== RIGOROUS FIELD-BY-FIELD AUDIT & VERIFICATION ===');
+  console.log('=== RIGOROUS FIELD-BY-FIELD AUDIT & VERIFICATION (ALL 16 DAYS) ===');
   let allChecksPassed = true;
 
   for (const targetDay of days) {
@@ -342,10 +369,10 @@ async function main() {
     const { data: dbRows } = await supabase.from('hourly_schedules').select('*').eq('itinerary_day_id', targetDay.id).order('time');
 
     const jsonItems = dbDay?.hourly_schedule || [];
-    const dbItems = dbRows || [];
+    const dbItems = (dbRows || []).sort(compareScheduleItemOrder as any);
 
     if (jsonItems.length !== dbItems.length) {
-      console.log(`❌ MISMATCH COUNT for ${targetDay.date}! JSON: ${jsonItems.length}, DB: ${dbItems.length}`);
+      console.log(`❌ MISMATCH COUNT for Day ${targetDay.dayNumber} (${targetDay.date})! JSON: ${jsonItems.length}, DB: ${dbItems.length}`);
       allChecksPassed = false;
     }
 
@@ -370,23 +397,15 @@ async function main() {
 
       if (!allMatch) {
         allChecksPassed = false;
-        console.log(`  [${i + 1}] ❌ FIELD DIFF at ${jItem.time} - ${jItem.title}`);
+        console.log(`  [Day ${targetDay.dayNumber} - ${targetDay.date} item ${i + 1}] ❌ FIELD DIFF at ${jItem.time} - ${jItem.title}`);
+        console.log(`    JSON: time=${jItem.time}, title=${jItem.title}, cat=${jItem.category}, srcType=${jItem.sourceType}`);
+        console.log(`    DB:   time=${dItem.time}, title=${dItem.title}, cat=${dItem.category}, srcType=${dItem.source_type}`);
       }
     }
   }
 
-  // Specifically print 01/01/2027 morning event note check from Supabase
-  const day0101 = days.find((d) => d.date === '2027-01-01');
-  if (day0101) {
-    const { data: dbRows0101 } = await supabase.from('hourly_schedules').select('*').eq('itinerary_day_id', day0101.id).eq('time', '06:30').single();
-    console.log('\n=== 2027-01-01 MORNING EVENT VERIFICATION IN SUPABASE ===');
-    console.log(`Time: ${dbRows0101?.time}`);
-    console.log(`Title: ${dbRows0101?.title}`);
-    console.log(`Notes: ${dbRows0101?.notes}`);
-  }
-
   console.log(`\n=== DATA PARITY STATUS ===`);
-  console.log(`Parity between itinerary_days.hourly_schedule and hourly_schedules: ${allChecksPassed ? '100% MATCH' : 'DISCREPANCIES FOUND'}`);
+  console.log(`Parity between itinerary_days.hourly_schedule and hourly_schedules across all 16 days: ${allChecksPassed ? '100% MATCH' : 'DISCREPANCIES FOUND'}`);
 
   console.log(`\n=== FINAL AUDIT RESULT: ${allChecksPassed ? 'ALL CHECKS PASSED SUCCESSFULLY (100% FIELD PARITY)' : 'SOME DISCREPANCIES FOUND'} ===`);
 }
