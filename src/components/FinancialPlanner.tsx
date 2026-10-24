@@ -902,6 +902,7 @@ export const FinancialPlanner: React.FC = () => {
                       </label>
                       <MoneyInput
                         currency="BRL"
+                        variant="light"
                         value={paidValueBRL}
                         onChange={(val) => setPaidValueBRL(val)}
                       />

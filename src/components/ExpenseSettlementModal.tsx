@@ -953,7 +953,7 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
                 <form onSubmit={handleAddAdjustment} className="p-4 rounded-2xl bg-white border border-slate-200 space-y-4 shadow-2xs">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Devedor (Pagador)</label>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Devedor (Pagador)</label>
                       <select
                         value={newAdjFrom}
                         onChange={(e) => setNewAdjFrom(e.target.value)}
@@ -963,7 +963,7 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
                       </select>
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Credor (Beneficiário)</label>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Credor (Beneficiário)</label>
                       <select
                         value={newAdjTo}
                         onChange={(e) => setNewAdjTo(e.target.value)}
@@ -974,13 +974,13 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
                     </div>
                   </div>
                   
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="sm:col-span-1">
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Valor (R$)</label>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Valor (R$)</label>
                       <MoneyInput currency="BRL" variant="light" value={newAdjAmount} onChange={(val) => setNewAdjAmount(val)} />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Forma de Pagamento</label>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Forma de Pagamento</label>
                       <select
                         value={newAdjMethod}
                         onChange={(e) => setNewAdjMethod(e.target.value)}
@@ -994,11 +994,8 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
                         <option value="Outro">Outro Acerto</option>
                       </select>
                     </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="sm:col-span-1">
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Data do Pagamento</label>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Data do Pagamento</label>
                       <input
                         type="date"
                         value={newAdjDate}
@@ -1006,12 +1003,19 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
                         className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 bg-slate-50 shadow-2xs cursor-pointer"
                       />
                     </div>
-                    <div className="sm:col-span-1">
-                       <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Motivo</label>
-                       <input type="text" placeholder="Ex: Ajuste de despesa, reembolso..." value={newAdjDesc} onChange={(e) => setNewAdjDesc(e.target.value)} className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 bg-slate-50 shadow-2xs" />
-                    </div>
                   </div>
-                  <button type="submit" disabled={isSavingAdjustment} className="w-full py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] disabled:opacity-50">
+
+                  <div className="space-y-1">
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Motivo / Descrição</label>
+                    <input
+                      type="text"
+                      value={newAdjDesc}
+                      onChange={(e) => setNewAdjDesc(e.target.value)}
+                      placeholder="Ex: Pagamento da janta de ontem, Reembolso uber..."
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 bg-slate-50 shadow-2xs"
+                    />
+                  </div>
+                  <button type="submit" disabled={isSavingAdjustment} className="w-full py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] disabled:opacity-50 cursor-pointer shadow-md">
                     {isSavingAdjustment ? 'Salvando...' : 'Adicionar Ajuste'}
                   </button>
                 </form>

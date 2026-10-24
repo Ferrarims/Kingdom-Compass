@@ -21,6 +21,7 @@ import {
   ExchangeRateData,
   ModuleReadiness,
   ModuleReadinessStatus,
+  PhotoPackageItem,
 } from '../types';
 import { fetchLiveExchangeRate } from '../services/exchangeRateService';
 import { supabase, checkSupabaseConnection } from '../services/supabaseClient';
@@ -1735,6 +1736,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     accommodationsList: AccommodationBooking[],
     carRentalsList: CarRentalBooking[],
     parkTicketsList: ParkTicketPurchase[],
+    rawDaysList: ItineraryDay[],
     rate: number,
     cUser: Traveler,
     travelersList: Traveler[]
@@ -2099,6 +2101,94 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
     });
 
+    // 5. Pacotes de Fotos
+    const photoPackagesFromDays: PhotoPackageItem[] = [];
+    const seenPkgIds = new Set<string>();
+    (rawDaysList || []).forEach((day) => {
+      const pkg = day.parkBooking?.photoPackage;
+      if (pkg && pkg.id && !seenPkgIds.has(pkg.id)) {
+        seenPkgIds.add(pkg.id);
+        photoPackagesFromDays.push(pkg);
+      }
+    });
+
+    photoPackagesFromDays.forEach((pkg) => {
+      const expId = generateDeterministicUUID('photo-expense', pkg.id);
+      const isZero = isZeroCost(pkg.costUSD, pkg.costBRL);
+
+      if (isZero) {
+        for (let i = updatedExpenses.length - 1; i >= 0; i--) {
+          const e = updatedExpenses[i];
+          if (e.id === expId || (e.sourceType === 'photo_package' && e.sourceId === pkg.id)) {
+            updatedExpenses.splice(i, 1);
+          }
+        }
+      } else {
+        const usd = Number(pkg.costUSD) || 0;
+        const brl = Number(pkg.costBRL) || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
+        const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
+
+        const pkgTitle = `Pacote de Fotos: ${pkg.name || 'Memory Maker'}`.trim();
+        const pkgNotes = `Complexo: ${pkg.complex || 'N/A'}${pkg.confirmationCode ? ' | Voucher: ' + pkg.confirmationCode : ''}`;
+
+        const matchingIndices: number[] = [];
+        updatedExpenses.forEach((e, idx) => {
+          if (e.id === expId || (e.sourceType === 'photo_package' && e.sourceId === pkg.id)) {
+            matchingIndices.push(idx);
+          }
+        });
+
+        const primaryIdx = matchingIndices.length > 0 ? matchingIndices[0] : -1;
+        const existingExp = primaryIdx >= 0 ? updatedExpenses[primaryIdx] : undefined;
+
+        const { status: finalStatus, paidBrl, paidUsd } = computePaymentValues(
+          pkg.paymentStatus,
+          existingExp,
+          brl,
+          finalUsd,
+          pkg.paidValueBRL,
+          pkg.paidValueUSD
+        );
+
+        const expData: ExpenseItem = {
+          id: expId,
+          title: pkgTitle,
+          category: 'Pacotes de Fotos',
+          estimatedValueUSD: finalUsd,
+          estimatedValueBRL: brl,
+          paidValueBRL: paidBrl,
+          paidValueUSD: paidUsd,
+          status: finalStatus,
+          payerId: pkg.payerId || 'all',
+          responsibleTravelerId: pkg.payerId || 'all',
+          travelerIds: pkg.travelerIds || ['all'],
+          sourceType: 'photo_package',
+          sourceId: pkg.id,
+          excluded: false,
+          notes: pkgNotes,
+          updatedAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+          updatedBy: cUser.name || 'Sistema',
+        };
+
+        if (primaryIdx >= 0) {
+          const prevExp = updatedExpenses[primaryIdx];
+          updatedExpenses[primaryIdx] = {
+            ...prevExp,
+            ...expData,
+            id: expId,
+            payerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevExp.payerId || expData.payerId),
+            responsibleTravelerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevExp.responsibleTravelerId || expData.payerId),
+            excluded: prevExp.excluded,
+          };
+          for (let d = matchingIndices.length - 1; d >= 1; d--) {
+            updatedExpenses.splice(matchingIndices[d], 1);
+          }
+        } else {
+          updatedExpenses.push(expData);
+        }
+      }
+    });
+
     return updatedExpenses;
   };
 
@@ -2141,6 +2231,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         found.accommodations || [],
         found.carRentals || [],
         found.parkTickets || [],
+        found.rawDays || [],
         tripSettings.dollarRate || 5.75,
         currentUser,
         currentTravelers

@@ -1403,8 +1403,9 @@ export const SupabaseService = {
             accountEmailOrUser: pRow.account_email_or_user || undefined,
             costUSD: pRow.cost_usd !== null ? Number(pRow.cost_usd) : undefined,
             costBRL: pRow.cost_brl !== null ? Number(pRow.cost_brl) : undefined,
+            // paidValue fields are hydrated from expenses later
             status: pRow.status || 'Confirmado',
-            paymentStatus: pRow.payment_status || 'Reservado / Confirmado',
+            paymentStatus: (pRow.payment_status === 'Reservado / Confirmado') ? 'Não informado' : (pRow.payment_status === 'Falta Pagar' ? 'Pendente' : (pRow.payment_status || 'Não informado')),
             payerId: pRow.payer_id || 'all',
             travelerIds: Array.isArray(pRow.traveler_ids) ? pRow.traveler_ids : ['all'],
             notes: pRow.notes || undefined,
@@ -1731,21 +1732,70 @@ export const SupabaseService = {
           }
         });
 
-        fullTrips.push({
-          ...(tripSummary as Trip),
-          travelers,
+        const trip: Trip = {
+          ...tripSummary,
+          id: tripId,
+          tripCode: tripSummary.tripCode || tripId,
+          tripName: tripSummary.tripName || 'Minha Viagem',
+          destination: tripSummary.destination || 'Orlando, FL',
+          startDate: tripSummary.startDate || '2026-12-30',
+          durationDays: tripSummary.durationDays || 10,
+          travelersCount: travelers.length || tripSummary.travelersCount || 1,
+          dollarRate: tripSummary.dollarRate || 5.75,
+          totalBudgetGoalBRL: tripSummary.totalBudgetGoalBRL || 0,
+          isFlexibleDates: tripSummary.isFlexibleDates ?? false,
+          outboundFlexibility: tripSummary.outboundFlexibility || 'Datas Fixas',
+          inboundFlexibility: tripSummary.inboundFlexibility || 'Datas Fixas',
+          travelers: travelers.length > 0 ? travelers : [],
+          createdAt: (tripSummary as any).created_at || (tripSummary as any).createdAt || new Date().toISOString(),
           settings,
-          expenses: (expData || []).map(mapDbToExpense),
           rawDays,
+          prepDocuments: guaranteedPrepDocs,
+          expenses: (expData || []).map(mapDbToExpense),
           flights: (fltData || []).map(mapDbToFlight),
           carRentals: (carData || []).map(mapDbToCarRental),
           accommodations: (accData || []).map(mapDbToAccommodation),
           parkTickets: (tktData || []).map(mapDbToParkTicket),
-          prepDocuments: guaranteedPrepDocs,
           bookingMilestones: (mlsData || []).map(mapDbToMilestone),
           baggageItems: (bagData || []).map(mapDbToBaggage),
           attractionSelections,
+        };
+
+        // Hydrate financial details (paidValue and paymentStatus) from the central expenses table
+        // This ensures 'expenses' is the single source of truth for payments.
+        const expensesBySource = new Map<string, ExpenseItem>();
+        trip.expenses.forEach(exp => {
+          if (exp.sourceType && exp.sourceId) {
+            expensesBySource.set(`${exp.sourceType}:${exp.sourceId}`, exp);
+          }
         });
+
+        const hydrate = (item: any, type: string) => {
+          const exp = expensesBySource.get(`${type}:${item.id}`);
+          if (exp) {
+            item.paidValueBRL = exp.paidValueBRL;
+            item.paidValueUSD = exp.paidValueUSD;
+            item.paymentStatus = exp.status;
+          }
+        };
+
+        trip.flights.forEach(f => hydrate(f, 'flight'));
+        trip.carRentals.forEach(c => hydrate(c, 'car_rental'));
+        trip.accommodations.forEach(a => hydrate(a, 'accommodation'));
+        trip.parkTickets.forEach(t => hydrate(t, 'park_ticket'));
+        trip.rawDays.forEach(d => {
+          if (d.parkBooking?.photoPackage) {
+            const pkg = d.parkBooking.photoPackage;
+            const exp = expensesBySource.get(`photo_package:${pkg.id}`);
+            if (exp) {
+              pkg.paidValueBRL = exp.paidValueBRL;
+              pkg.paidValueUSD = exp.paidValueUSD;
+              pkg.paymentStatus = exp.status;
+            }
+          }
+        });
+
+        fullTrips.push(trip);
       }
 
       return { trips: fullTrips, errors: allErrors };
@@ -2016,7 +2066,6 @@ export const SupabaseService = {
                   cost_usd: pkg.costUSD !== undefined ? Number(pkg.costUSD) : null,
                   cost_brl: pkg.costBRL !== undefined ? Number(pkg.costBRL) : null,
                   status: pkg.status || 'Confirmado',
-                  payment_status: pkg.paymentStatus || 'Reservado / Confirmado',
                   payer_id: pkg.payerId || 'all',
                   traveler_ids: pkg.travelerIds || ['all'],
                   notes: pkg.notes || null,

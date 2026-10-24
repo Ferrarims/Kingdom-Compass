@@ -267,9 +267,10 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
   const [photoPkgCostUSD, setPhotoPkgCostUSD] = useState<number | null>(0);
   const [photoPkgCostBRL, setPhotoPkgCostBRL] = useState<number | null>(0);
   const [photoPkgStatus, setPhotoPkgStatus] = useState<PhotoPackageItem['status']>('Confirmado');
-  const [photoPkgPaymentStatus, setPhotoPkgPaymentStatus] = useState<'Reservado / Confirmado' | 'Pago' | 'Pendente' | 'Falta Pagar'>('Reservado / Confirmado');
+  const [photoPkgPaymentStatus, setPhotoPkgPaymentStatus] = useState<NonNullable<PhotoPackageItem['paymentStatus']>>('Não informado');
   const [photoPkgPayerId, setPhotoPkgPayerId] = useState<string>('all');
   const [photoPkgTravelerIds, setPhotoPkgTravelerIds] = useState<string[]>(['all']);
+  const [photoPkgPaidValueBRL, setPhotoPkgPaidValueBRL] = useState<number | null>(0);
   const [photoPkgNotes, setPhotoPkgNotes] = useState<string>('');
   const [applyPhotoPkgToAllDays, setApplyPhotoPkgToAllDays] = useState<boolean>(true);
 
@@ -433,7 +434,17 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
         setPhotoPkgCostUSD(existUsd);
         setPhotoPkgCostBRL(existBrl);
         setPhotoPkgStatus(existingPkg.status || 'Confirmado');
-        setPhotoPkgPaymentStatus(existingPkg.paymentStatus || 'Reservado / Confirmado');
+        // Normalize legacy payment status
+        const rawStatus = existingPkg.paymentStatus as any;
+        let normalizedStatus: NonNullable<PhotoPackageItem['paymentStatus']> = 'Não informado';
+        if (rawStatus === 'Pago' || rawStatus === 'Pendente' || rawStatus === 'Parcial' || rawStatus === 'Não informado') {
+          normalizedStatus = rawStatus;
+        } else if (rawStatus === 'Reservado / Confirmado') {
+          normalizedStatus = 'Não informado'; // As per user instruction
+        } else if (rawStatus === 'Falta Pagar') {
+          normalizedStatus = 'Pendente';
+        }
+        setPhotoPkgPaymentStatus(normalizedStatus);
         setPhotoPkgPayerId(existingPkg.payerId || settings?.currentUserId || 'all');
         setPhotoPkgTravelerIds(existingPkg.travelerIds && existingPkg.travelerIds.length > 0 ? existingPkg.travelerIds : ['all']);
         setPhotoPkgNotes(existingPkg.notes || '');
@@ -475,7 +486,17 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
           setPhotoPkgCostUSD(detUsd);
           setPhotoPkgCostBRL(detBrl);
           setPhotoPkgStatus(detectedPkg.status || 'Confirmado');
-          setPhotoPkgPaymentStatus(detectedPkg.paymentStatus || 'Reservado / Confirmado');
+          // Normalize legacy payment status
+          const detRawStatus = detectedPkg.paymentStatus as any;
+          let detNormalizedStatus: NonNullable<PhotoPackageItem['paymentStatus']> = 'Não informado';
+          if (detRawStatus === 'Pago' || detRawStatus === 'Pendente' || detRawStatus === 'Parcial' || detRawStatus === 'Não informado') {
+            detNormalizedStatus = detRawStatus;
+          } else if (detRawStatus === 'Reservado / Confirmado') {
+            detNormalizedStatus = 'Não informado';
+          } else if (detRawStatus === 'Falta Pagar') {
+            detNormalizedStatus = 'Pendente';
+          }
+          setPhotoPkgPaymentStatus(detNormalizedStatus);
           setPhotoPkgPayerId(detectedPkg.payerId || settings?.currentUserId || 'all');
           setPhotoPkgTravelerIds(detectedPkg.travelerIds && detectedPkg.travelerIds.length > 0 ? detectedPkg.travelerIds : ['all']);
           setPhotoPkgNotes(detectedPkg.notes || '');
@@ -528,7 +549,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
           setPhotoPkgCostUSD(0);
           setPhotoPkgCostBRL(0);
           setPhotoPkgStatus('Confirmado');
-          setPhotoPkgPaymentStatus('Reservado / Confirmado');
+          setPhotoPkgPaymentStatus('Não informado');
           setPhotoPkgPayerId(settings?.currentUserId || 'all');
           setPhotoPkgTravelerIds(['all']);
         }
@@ -990,7 +1011,18 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     setPhotoPkgCostUSD(usd);
     setPhotoPkgCostBRL(brl);
     setPhotoPkgStatus(pkg.status || 'Confirmado');
-    setPhotoPkgPaymentStatus(pkg.paymentStatus || 'Reservado / Confirmado');
+    // Normalize legacy payment status
+    const rawStatus = pkg.paymentStatus as any;
+    let normalizedStatus: NonNullable<PhotoPackageItem['paymentStatus']> = 'Não informado';
+    if (rawStatus === 'Pago' || rawStatus === 'Pendente' || rawStatus === 'Parcial' || rawStatus === 'Não informado') {
+      normalizedStatus = rawStatus;
+    } else if (rawStatus === 'Reservado / Confirmado') {
+      normalizedStatus = 'Não informado';
+    } else if (rawStatus === 'Falta Pagar') {
+      normalizedStatus = 'Pendente';
+    }
+    setPhotoPkgPaymentStatus(normalizedStatus);
+    setPhotoPkgPaidValueBRL(pkg.paidValueBRL !== undefined ? Number(pkg.paidValueBRL) : 0);
     setPhotoPkgPayerId(pkg.payerId || settings?.currentUserId || 'all');
     setPhotoPkgTravelerIds(pkg.travelerIds && pkg.travelerIds.length > 0 ? pkg.travelerIds : ['all']);
     setPhotoPkgNotes(pkg.notes || '');
@@ -1068,6 +1100,8 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
           costBRL: photoPkgCostBRL !== null && photoPkgCostBRL !== undefined ? photoPkgCostBRL : undefined,
           status: photoPkgStatus,
           paymentStatus: photoPkgPaymentStatus,
+          paidValueBRL: photoPkgPaymentStatus === 'Pago' ? (photoPkgCostBRL || 0) : (photoPkgPaymentStatus === 'Parcial' ? (photoPkgPaidValueBRL || 0) : 0),
+          paidValueUSD: photoPkgPaymentStatus === 'Pago' ? (photoPkgCostUSD || 0) : (photoPkgPaymentStatus === 'Parcial' ? ((photoPkgPaidValueBRL || 0) / dollarRate) : 0),
           payerId: photoPkgPayerId || 'all',
           travelerIds: photoPkgTravelerIds && photoPkgTravelerIds.length > 0 ? photoPkgTravelerIds : ['all'],
           notes: photoPkgNotes.trim() || undefined,
@@ -1079,7 +1113,12 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     const parsedBrl = photoPkgCostBRL || (parsedUsd * dollarRate);
 
     if (hasPhotoPackage && finalPhotoPackage) {
-      const isPaid = photoPkgPaymentStatus === 'Pago' || photoPkgPaymentStatus === 'Reservado / Confirmado';
+      const isPaid = photoPkgPaymentStatus === 'Pago';
+      const isPartial = photoPkgPaymentStatus === 'Parcial';
+      const expenseStatus = isPaid ? 'Pago' : (isPartial ? 'Parcial' : 'Pendente');
+      const finalPaidBRL = isPaid ? parsedBrl : (isPartial ? (photoPkgPaidValueBRL || 0) : 0);
+      const finalPaidUSD = isPaid ? parsedUsd : (isPartial ? ((photoPkgPaidValueBRL || 0) / dollarRate) : 0);
+
       const expenseTitle = `Pacote de Fotos: ${finalPhotoPackage.name}`;
       const packageId = finalPhotoPackage.id || `photo-${activeDay.id}`;
 
@@ -1094,9 +1133,9 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
           category: 'Pacotes de Fotos',
           estimatedValueUSD: parsedUsd,
           estimatedValueBRL: parsedBrl,
-          paidValueUSD: isPaid ? parsedUsd : 0,
-          paidValueBRL: isPaid ? parsedBrl : 0,
-          status: isPaid ? 'Pago' : 'Pendente',
+          paidValueUSD: finalPaidUSD,
+          paidValueBRL: finalPaidBRL,
+          status: expenseStatus,
           payerId: photoPkgPayerId || 'all',
           responsibleTravelerId: photoPkgPayerId || 'all',
           travelerIds: photoPkgTravelerIds && photoPkgTravelerIds.length > 0 ? photoPkgTravelerIds : ['all'],
@@ -1110,9 +1149,9 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
           category: 'Pacotes de Fotos',
           estimatedValueUSD: parsedUsd,
           estimatedValueBRL: parsedBrl,
-          paidValueUSD: isPaid ? parsedUsd : 0,
-          paidValueBRL: isPaid ? parsedBrl : 0,
-          status: isPaid ? 'Pago' : 'Pendente',
+          paidValueUSD: finalPaidUSD,
+          paidValueBRL: finalPaidBRL,
+          status: expenseStatus,
           payerId: photoPkgPayerId || 'all',
           responsibleTravelerId: photoPkgPayerId || 'all',
           travelerIds: photoPkgTravelerIds && photoPkgTravelerIds.length > 0 ? photoPkgTravelerIds : ['all'],
@@ -3129,6 +3168,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
                         </label>
                         <MoneyInput
                           currency="USD"
+                          variant="light"
                           value={photoPkgCostUSD}
                           onChange={handlePhotoPkgCostUSDChange}
                         />
@@ -3142,6 +3182,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
                         </label>
                         <MoneyInput
                           currency="BRL"
+                          variant="light"
                           value={photoPkgCostBRL}
                           onChange={handlePhotoPkgCostBRLChange}
                         />
@@ -3156,15 +3197,29 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
                         <select
                           value={photoPkgPaymentStatus}
                           onChange={(e) => setPhotoPkgPaymentStatus(e.target.value as any)}
-                          className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] cursor-pointer h-[38px] shadow-2xs"
+                          className="w-full px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-[#1A2B4C] cursor-pointer h-[38px] shadow-2xs"
                         >
-                          <option value="Reservado / Confirmado">✅ Reservado / Confirmado (Pago)</option>
-                          <option value="Pago">💰 Pago / Quitado</option>
-                          <option value="Pendente">⏳ Pagamento Pendente</option>
-                          <option value="Falta Pagar">⚠️ Falta Pagar (No Check-in)</option>
+                          <option value="Não informado">⚪ Não informado</option>
+                          <option value="Pendente">⏳ Pendente</option>
+                          <option value="Parcial">💰 Parcial</option>
+                          <option value="Pago">✅ Pago</option>
                         </select>
                       </div>
                     </div>
+
+                    {photoPkgPaymentStatus === 'Parcial' && (
+                      <div className="space-y-1.5 pt-2 border-t border-slate-100 animate-in slide-in-from-top-2 duration-200">
+                        <label className="block text-xs font-bold text-emerald-700 mb-1 uppercase tracking-wider">
+                          Quanto já foi Pago? (R$)
+                        </label>
+                        <MoneyInput
+                          currency="BRL"
+                          variant="light"
+                          value={photoPkgPaidValueBRL}
+                          onChange={(val) => setPhotoPkgPaidValueBRL(val)}
+                        />
+                      </div>
+                    )}
 
                     {/* Responsável pelo Pagamento */}
                     <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">

@@ -2970,7 +2970,7 @@ export const ItineraryPlanner: React.FC = () => {
           onClick={handleHourlyBackdrop}
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-hidden animate-in fade-in duration-200"
         >
-          <div className="bg-white rounded-3xl max-w-6xl w-full overflow-hidden shadow-2xl border border-slate-200 h-auto max-h-[85vh] flex flex-col my-auto animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-white rounded-3xl max-w-2xl w-full overflow-hidden shadow-2xl border border-slate-200 h-auto max-h-[85vh] flex flex-col my-auto animate-in fade-in zoom-in-95 duration-150">
             {/* Modal Header */}
             <div className="bg-[#1A2B4C] text-white p-5 sm:p-6 flex items-center justify-between border-b border-[#D4AF37]/30 shrink-0">
               <div className="flex items-center gap-3">

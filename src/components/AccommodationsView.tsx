@@ -192,7 +192,11 @@ export const AccommodationsView: React.FC = () => {
 
     let paymentStatus: 'Pago' | 'Pendente' | 'Parcial' | 'Não informado' = 'Não informado';
     if (acc.paymentStatus) {
-      paymentStatus = acc.paymentStatus;
+      if (acc.paymentStatus === 'Não iniciado') {
+        paymentStatus = 'Não informado';
+      } else {
+        paymentStatus = acc.paymentStatus as 'Pago' | 'Pendente' | 'Parcial' | 'Não informado';
+      }
     } else if (acc.status === 'Pago') {
       paymentStatus = 'Pago';
     } else if (acc.status === 'Pendente' || acc.status === 'Falta Pagar') {

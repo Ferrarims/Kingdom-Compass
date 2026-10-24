@@ -413,6 +413,7 @@ export const GlobalSettingsModal: React.FC = () => {
               <div>
                 <MoneyInput
                   currency="BRL"
+                  variant="light"
                   value={dollarRate}
                   onChange={(val) => setDollarRate(val || 5.75)}
                 />
