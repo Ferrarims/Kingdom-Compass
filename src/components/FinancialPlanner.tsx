@@ -814,7 +814,7 @@ export const FinancialPlanner: React.FC = () => {
                       placeholder="Ex: Ingressos Universal 3 Dias"
                       value={title}
                       onChange={(e) => setTitle(e.target.value)}
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 bg-white shadow-2xs"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 bg-slate-50 shadow-2xs"
                     />
                   </div>
 
@@ -825,7 +825,7 @@ export const FinancialPlanner: React.FC = () => {
                     <select
                       value={category}
                       onChange={(e) => setCategory(e.target.value as ExpenseCategory)}
-                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 bg-white shadow-2xs cursor-pointer"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 bg-slate-50 shadow-2xs cursor-pointer"
                     >
                       {CATEGORIES.map((c) => (
                         <option key={c} value={c}>
@@ -883,7 +883,7 @@ export const FinancialPlanner: React.FC = () => {
                       <select
                         value={status}
                         onChange={(e) => setStatus(e.target.value as ExpenseStatus)}
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 bg-white shadow-2xs cursor-pointer"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 bg-slate-50 shadow-2xs cursor-pointer"
                       >
                         <option value="Pago">✅ Pago</option>
                         <option value="Pendente">⏳ Pendente</option>
@@ -914,7 +914,7 @@ export const FinancialPlanner: React.FC = () => {
                     <select
                       value={responsibleTravelerId || 'all'}
                       onChange={(e) => setResponsibleTravelerId(e.target.value)}
-                      className="bg-white border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/30 min-w-[200px]"
+                      className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/30 min-w-[200px]"
                     >
                       <option value="all">👥 Dividido pelo grupo</option>
                       {settings.travelers.map((t) => (
@@ -936,7 +936,7 @@ export const FinancialPlanner: React.FC = () => {
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     placeholder="Ex: Reserva feita pela Disney, inclui café da manhã..."
-                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 bg-white shadow-2xs"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 bg-slate-50 shadow-2xs"
                   />
                 </div>
               </div>

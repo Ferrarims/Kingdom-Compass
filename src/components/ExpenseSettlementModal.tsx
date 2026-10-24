@@ -779,7 +779,7 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
 
                       {/* Expandable details */}
                       {isExpanded && (
-                        <div className="p-4 bg-slate-50 border-t border-slate-200 text-xs space-y-3">
+                        <div className="p-4 bg-slate-50 border-t border-slate-200 text-xs space-y-4">
                           <div className="flex justify-between">
                             <span className="text-slate-500">Pagou do Bolso:</span>
                             <strong className="text-slate-800">{formatMoney(summary.totalPaidBRL, summary.totalPaidUSD)}</strong>
@@ -788,6 +788,42 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
                             <span className="text-slate-500">Sua Cota (Consumo):</span>
                             <strong className="text-slate-800">{formatMoney(summary.totalOwedBRL, summary.totalOwedUSD)}</strong>
                           </div>
+
+                          {/* Despesas Pagas */}
+                          <div className="pt-2 border-t border-slate-200/50">
+                            <span className="font-bold text-slate-700 block mb-2">🧾 Despesas pagas por {summary.traveler.name}:</span>
+                            {paidExpenses.length === 0 ? (
+                              <p className="text-slate-400 italic text-[10px]">Nenhuma despesa individual.</p>
+                            ) : (
+                              <div className="space-y-1.5">
+                                {paidExpenses.map((exp, pIdx) => (
+                                  <div key={`${exp.id}-${pIdx}`} className="p-2 rounded-lg bg-white border border-slate-200 flex items-center justify-between">
+                                    <span className="font-medium text-slate-800">{exp.title}</span>
+                                    <strong className="text-slate-900 font-mono">{formatMoney(exp.estimatedValueBRL, exp.estimatedValueUSD)}</strong>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          
+                          {/* Transferências */}
+                          {(summary.directSentBRL > 0 || summary.directReceivedBRL > 0) && (
+                            <div className="pt-2 border-t border-slate-200/50">
+                              <span className="font-bold text-slate-700 block mb-2">💳 Transferências:</span>
+                              <div className="space-y-1.5">
+                                {adjustments.filter(a => a.fromTravelerId === summary.traveler.id || a.toTravelerId === summary.traveler.id).map(adj => {
+                                  const isSent = adj.fromTravelerId === summary.traveler.id;
+                                  const other = isSent ? travelers.find(t => t.id === adj.toTravelerId) : travelers.find(t => t.id === adj.fromTravelerId);
+                                  return (
+                                    <div key={adj.id} className={`p-2 rounded-lg border ${isSent ? 'bg-rose-50/50 border-rose-200' : 'bg-emerald-50/50 border-emerald-200'} flex items-center justify-between`}>
+                                      <span className="text-slate-700">{isSent ? 'Enviou para' : 'Recebeu de'} <strong>{other?.name}</strong></span>
+                                      <strong className={`${isSent ? 'text-rose-700' : 'text-emerald-700'} font-mono`}>{formatMoney(adj.amount, adj.amount / dollarRate)}</strong>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
