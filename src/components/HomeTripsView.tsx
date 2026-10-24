@@ -1295,20 +1295,28 @@ export const HomeTripsView: React.FC = () => {
                 <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">3. Integrantes do Grupo ({travelers.length})</h4>
                 <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <input
-                      type="text"
-                      value={newTravelerName}
-                      onChange={(e) => setNewTravelerName(e.target.value)}
-                      placeholder="Nome"
-                      className="p-2.5 rounded-lg border border-slate-200 text-xs"
-                    />
-                    <input
-                      type="email"
-                      value={newTravelerEmail}
-                      onChange={(e) => setNewTravelerEmail(e.target.value)}
-                      placeholder="E-mail"
-                      className="p-2.5 rounded-lg border border-slate-200 text-xs"
-                    />
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-0.5">Nome</label>
+                      <input
+                        type="text"
+                        value={newTravelerName}
+                        onChange={(e) => setNewTravelerName(e.target.value)}
+                        placeholder="Nome"
+                        className="w-full p-2.5 rounded-lg border border-slate-200 text-xs"
+                        onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddTraveler())}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase mb-0.5">E-mail</label>
+                      <input
+                        type="email"
+                        value={newTravelerEmail}
+                        onChange={(e) => setNewTravelerEmail(e.target.value)}
+                        placeholder="E-mail"
+                        className="w-full p-2.5 rounded-lg border border-slate-200 text-xs"
+                        onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddTraveler())}
+                      />
+                    </div>
                   </div>
                   <button
                     type="button"
