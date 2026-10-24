@@ -6260,20 +6260,29 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
     }
 
-    setAccommodations((prev) => {
-      const nextAccs = [...prev, newAcc];
-      setTrips((prevTrips) =>
-        prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: nextAccs } : t))
-      );
-      const cleanedSel = cleanOrphanedAccommodationSelections(selectedAccommodationsPerNight, nextAccs);
-      if (JSON.stringify(cleanedSel) !== JSON.stringify(selectedAccommodationsPerNight)) {
-        setSelectedAccommodationsPerNightState(cleanedSel);
-        if (activeTripId) {
-          SupabaseService.saveSelectedAccommodationsPerNight(activeTripId, cleanedSel);
+    const nextAccs = [...accommodations, newAcc];
+    const cleanedSel = cleanOrphanedAccommodationSelections(selectedAccommodationsPerNight, nextAccs);
+
+    if (JSON.stringify(cleanedSel) !== JSON.stringify(selectedAccommodationsPerNight)) {
+      if (activeTripId) {
+        const cleanRes = await SupabaseService.saveSelectedAccommodationsPerNight(activeTripId, cleanedSel);
+        if (!cleanRes.success) {
+          if (activeTripId) {
+            await SupabaseService.deleteAccommodation(newAcc.id, activeTripId);
+          }
+          const errMsg = cleanRes.error || 'Erro ao persistir a limpeza das seleções de hospedagem';
+          addNotification(`❌ Falha ao salvar limpeza de hospedagens: ${errMsg}`);
+          return { success: false, error: errMsg };
         }
       }
-      return nextAccs;
-    });
+      setSelectedAccommodationsPerNightState(cleanedSel);
+    }
+
+    setAccommodations(nextAccs);
+    setTrips((prevTrips) =>
+      prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: nextAccs, selectedAccommodationsPerNight: cleanedSel } : t))
+    );
+
     // Await da sincronização financeira para garantir consistência e evitar condição de corrida
     const expSyncRes = await syncAccommodationExpense(newAcc, settings.dollarRate || 5.75);
     if (!expSyncRes.success) {
@@ -6321,20 +6330,29 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
     }
 
-    setAccommodations((prev) => {
-      const nextAccs = prev.map((a) => (a.id === id ? updatedAcc : a));
-      setTrips((prevTrips) =>
-        prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: nextAccs } : t))
-      );
-      const cleanedSel = cleanOrphanedAccommodationSelections(selectedAccommodationsPerNight, nextAccs);
-      if (JSON.stringify(cleanedSel) !== JSON.stringify(selectedAccommodationsPerNight)) {
-        setSelectedAccommodationsPerNightState(cleanedSel);
-        if (activeTripId) {
-          SupabaseService.saveSelectedAccommodationsPerNight(activeTripId, cleanedSel);
+    const nextAccs = accommodations.map((a) => (a.id === id ? updatedAcc : a));
+    const cleanedSel = cleanOrphanedAccommodationSelections(selectedAccommodationsPerNight, nextAccs);
+
+    if (JSON.stringify(cleanedSel) !== JSON.stringify(selectedAccommodationsPerNight)) {
+      if (activeTripId) {
+        const cleanRes = await SupabaseService.saveSelectedAccommodationsPerNight(activeTripId, cleanedSel);
+        if (!cleanRes.success) {
+          if (activeTripId) {
+            await SupabaseService.saveAccommodation(activeTripId, oldAcc, activeTrip || undefined);
+          }
+          const errMsg = cleanRes.error || 'Erro ao persistir a limpeza das seleções de hospedagem';
+          addNotification(`❌ Falha ao salvar limpeza de hospedagens: ${errMsg}`);
+          return { success: false, error: errMsg };
         }
       }
-      return nextAccs;
-    });
+      setSelectedAccommodationsPerNightState(cleanedSel);
+    }
+
+    setAccommodations(nextAccs);
+    setTrips((prevTrips) =>
+      prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: nextAccs, selectedAccommodationsPerNight: cleanedSel } : t))
+    );
+
     // Await da sincronização financeira sequencialmente
     const expSyncRes = await syncAccommodationExpense(updatedAcc, settings.dollarRate || 5.75);
     if (!expSyncRes.success) {
@@ -6355,6 +6373,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     const acc = accommodations.find((a) => a.id === id);
     if (!acc) return { success: false, error: 'Hospedagem não encontrada' };
 
+    const nextAccs = accommodations.filter((a) => a.id !== id);
+    const cleanedSel = cleanOrphanedAccommodationSelections(selectedAccommodationsPerNight, nextAccs);
+
     if (activeTripId) {
       const delAccRes = await SupabaseService.deleteAccommodation(id, activeTripId);
       if (!delAccRes.success) {
@@ -6362,22 +6383,28 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         addNotification(`❌ ${errMsg}`);
         return { success: false, error: errMsg };
       }
-    }
 
-    setAccommodations((prev) => {
-      const nextAccs = prev.filter((a) => a.id !== id);
-      setTrips((prevTrips) =>
-        prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: nextAccs } : t))
-      );
-      const cleanedSel = cleanOrphanedAccommodationSelections(selectedAccommodationsPerNight, nextAccs);
       if (JSON.stringify(cleanedSel) !== JSON.stringify(selectedAccommodationsPerNight)) {
-        setSelectedAccommodationsPerNightState(cleanedSel);
-        if (activeTripId) {
-          SupabaseService.saveSelectedAccommodationsPerNight(activeTripId, cleanedSel);
+        const cleanRes = await SupabaseService.saveSelectedAccommodationsPerNight(activeTripId, cleanedSel);
+        if (!cleanRes.success) {
+          if (activeTripId) {
+            await SupabaseService.saveAccommodation(activeTripId, acc, activeTrip || undefined);
+          }
+          const errMsg = cleanRes.error || 'Falha ao atualizar seleções de hospedagem no banco de dados';
+          addNotification(`❌ ${errMsg}`);
+          return { success: false, error: errMsg };
         }
       }
-      return nextAccs;
-    });
+    }
+
+    if (JSON.stringify(cleanedSel) !== JSON.stringify(selectedAccommodationsPerNight)) {
+      setSelectedAccommodationsPerNightState(cleanedSel);
+    }
+
+    setAccommodations(nextAccs);
+    setTrips((prevTrips) =>
+      prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: nextAccs, selectedAccommodationsPerNight: cleanedSel } : t))
+    );
 
     const expId = generateDeterministicUUID('acc-expense', id);
     const legacyId = `exp-acc-${id}`;
