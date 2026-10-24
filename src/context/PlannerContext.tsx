@@ -6267,11 +6267,20 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       if (activeTripId) {
         const cleanRes = await SupabaseService.saveSelectedAccommodationsPerNight(activeTripId, cleanedSel);
         if (!cleanRes.success) {
+          const origErr = cleanRes.error || 'Erro ao persistir a limpeza das seleções de hospedagem';
+          let compRes: { success: boolean; error?: string } = { success: true };
           if (activeTripId) {
-            await SupabaseService.deleteAccommodation(newAcc.id, activeTripId);
+            compRes = await SupabaseService.deleteAccommodation(newAcc.id, activeTripId);
           }
-          const errMsg = cleanRes.error || 'Erro ao persistir a limpeza das seleções de hospedagem';
-          addNotification(`❌ Falha ao salvar limpeza de hospedagens: ${errMsg}`);
+          if (!compRes.success) {
+            const compErr = compRes.error || 'Erro ao desfazer a nova hospedagem no banco de dados';
+            await reloadAccommodationsFromSupabase();
+            const errMsg = `Falha ao salvar limpeza das seleções de hospedagem (${origErr}). Além disso, a ação compensatória para desfazer a hospedagem recém-criada falhou (${compErr}). O estado da viagem foi recarregado do banco.`;
+            addNotification(`❌ ${errMsg}`);
+            return { success: false, error: errMsg };
+          }
+          const errMsg = `Falha ao salvar limpeza de hospedagens: ${origErr}`;
+          addNotification(`❌ ${errMsg}`);
           return { success: false, error: errMsg };
         }
       }
@@ -6337,11 +6346,20 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       if (activeTripId) {
         const cleanRes = await SupabaseService.saveSelectedAccommodationsPerNight(activeTripId, cleanedSel);
         if (!cleanRes.success) {
+          const origErr = cleanRes.error || 'Erro ao persistir a limpeza das seleções de hospedagem';
+          let compRes: { success: boolean; error?: string } = { success: true };
           if (activeTripId) {
-            await SupabaseService.saveAccommodation(activeTripId, oldAcc, activeTrip || undefined);
+            compRes = await SupabaseService.saveAccommodation(activeTripId, oldAcc, activeTrip || undefined);
           }
-          const errMsg = cleanRes.error || 'Erro ao persistir a limpeza das seleções de hospedagem';
-          addNotification(`❌ Falha ao salvar limpeza de hospedagens: ${errMsg}`);
+          if (!compRes.success) {
+            const compErr = compRes.error || 'Erro ao restaurar a hospedagem anterior no banco de dados';
+            await reloadAccommodationsFromSupabase();
+            const errMsg = `Falha ao salvar limpeza das seleções de hospedagem (${origErr}). Além disso, a ação compensatória para restaurar a hospedagem anterior falhou (${compErr}). O estado da viagem foi recarregado do banco.`;
+            addNotification(`❌ ${errMsg}`);
+            return { success: false, error: errMsg };
+          }
+          const errMsg = `Falha ao salvar limpeza de hospedagens: ${origErr}`;
+          addNotification(`❌ ${errMsg}`);
           return { success: false, error: errMsg };
         }
       }
@@ -6387,10 +6405,19 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       if (JSON.stringify(cleanedSel) !== JSON.stringify(selectedAccommodationsPerNight)) {
         const cleanRes = await SupabaseService.saveSelectedAccommodationsPerNight(activeTripId, cleanedSel);
         if (!cleanRes.success) {
+          const origErr = cleanRes.error || 'Falha ao atualizar seleções de hospedagem no banco de dados';
+          let compRes: { success: boolean; error?: string } = { success: true };
           if (activeTripId) {
-            await SupabaseService.saveAccommodation(activeTripId, acc, activeTrip || undefined);
+            compRes = await SupabaseService.saveAccommodation(activeTripId, acc, activeTrip || undefined);
           }
-          const errMsg = cleanRes.error || 'Falha ao atualizar seleções de hospedagem no banco de dados';
+          if (!compRes.success) {
+            const compErr = compRes.error || 'Erro ao restaurar a hospedagem excluída no banco de dados';
+            await reloadAccommodationsFromSupabase();
+            const errMsg = `Falha ao salvar limpeza das seleções de hospedagem (${origErr}). Além disso, a ação compensatória para restaurar a hospedagem excluída falhou (${compErr}). O estado da viagem foi recarregado do banco.`;
+            addNotification(`❌ ${errMsg}`);
+            return { success: false, error: errMsg };
+          }
+          const errMsg = `Falha ao salvar limpeza de hospedagens: ${origErr}`;
           addNotification(`❌ ${errMsg}`);
           return { success: false, error: errMsg };
         }
