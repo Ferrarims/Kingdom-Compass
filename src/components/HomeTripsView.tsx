@@ -1170,152 +1170,95 @@ export const HomeTripsView: React.FC = () => {
                 )}
 
               {/* SECTION 1: TRIP IDENTIFICATION */}
-              <div className="bg-slate-50/70 p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-2xs space-y-3">
-                <h4 className="font-bold text-sm text-[#1A2B4C] font-serif border-b pb-1.5 flex items-center gap-2">
-                  <Compass className="w-4 h-4 text-[#D4AF37]" />
-                  1. Identificação da Viagem
-                </h4>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">
-                      Nome da Viagem *
-                    </label>
-                    <input
-                      type="text"
-                      value={tripName}
-                      onChange={(e) => setTripName(e.target.value)}
-                      placeholder="Ex: Magia em Família - Orlando 2026"
-                      className="w-full p-2.5 rounded-xl border border-slate-200 text-xs font-semibold focus:ring-2 focus:ring-[#D4AF37] focus:outline-none"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block font-bold text-slate-700 mb-1">
-                      Destino Principal *
-                    </label>
-                    <input
-                      type="text"
-                      value={destination}
-                      onChange={(e) => setDestination(e.target.value)}
-                      placeholder="Ex: Walt Disney World & Universal Orlando"
-                      className="w-full p-2.5 rounded-xl border border-slate-200 text-xs font-semibold focus:ring-2 focus:ring-[#D4AF37] focus:outline-none"
-                      required
-                    />
-                  </div>
-                </div>
-
-                {/* Trip Code & Access Control Box with Email Button */}
-                <div className="bg-gradient-to-r from-[#1A2B4C]/5 via-amber-500/10 to-[#1A2B4C]/5 p-3.5 rounded-2xl border border-amber-300/70 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-xl bg-white border border-amber-300 flex items-center justify-center font-bold text-[#1A2B4C] shrink-0 shadow-2xs">
-                      <Key className="w-4 h-4 text-[#D4AF37]" />
+              <div>
+                <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">1. Identificação da Viagem</h4>
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Nome da Viagem *</label>
+                      <input
+                        type="text"
+                        value={tripName}
+                        onChange={(e) => setTripName(e.target.value)}
+                        placeholder="Ex: Magia em Família - Orlando 2026"
+                        className="w-full p-2.5 rounded-xl border border-slate-200 text-xs font-semibold focus:ring-2 focus:ring-[#D4AF37] focus:outline-none"
+                        required
+                      />
                     </div>
                     <div>
-                      <span className="font-bold text-[#1A2B4C] text-xs font-serif flex items-center gap-2">
-                        Código desta Viagem:
-                        <span className="font-mono text-amber-900 bg-white px-2 py-0.5 rounded-md border border-amber-200 shadow-2xs">
-                          {editingTrip?.tripCode || editingTrip?.id || 'NOVA-VIAGEM'}
-                        </span>
-                      </span>
-                      <p className="text-[11px] text-slate-600 mt-0.5">
-                        Os viajantes usam este Código + E-mail para acessar com total privacidade.
-                      </p>
+                      <label className="block font-bold text-slate-700 mb-1">Destino Principal *</label>
+                      <input
+                        type="text"
+                        value={destination}
+                        onChange={(e) => setDestination(e.target.value)}
+                        placeholder="Ex: Walt Disney World & Universal Orlando"
+                        className="w-full p-2.5 rounded-xl border border-slate-200 text-xs font-semibold focus:ring-2 focus:ring-[#D4AF37] focus:outline-none"
+                        required
+                      />
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    id="btn-send-email-trip-edit"
-                    onClick={() => setShowEmailModal(true)}
-                    className="w-full sm:w-auto px-4 py-2 rounded-xl bg-[#1A2B4C] hover:bg-[#2C4475] text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer shrink-0"
-                  >
-                    <Mail className="w-3.5 h-3.5 text-[#D4AF37]" />
-                    <span>Enviar Informações por E-mail</span>
-                  </button>
+                  <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-xl bg-white border border-slate-200 flex items-center justify-center font-bold text-[#1A2B4C] shrink-0 shadow-2xs">
+                        <Key className="w-4 h-4 text-[#D4AF37]" />
+                      </div>
+                      <div>
+                        <span className="font-bold text-[#1A2B4C] text-xs flex items-center gap-2">
+                          Código:
+                          <span className="font-mono text-slate-700 bg-white px-2 py-0.5 rounded-md border border-slate-200 shadow-2xs">
+                            {editingTrip?.tripCode || editingTrip?.id || 'NOVA-VIAGEM'}
+                          </span>
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowEmailModal(true)}
+                      className="w-full sm:w-auto px-4 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shrink-0"
+                    >
+                      <Mail className="w-3.5 h-3.5" />
+                      <span>Enviar Código</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
               {/* SECTION 2: DATES & FLEXIBILITY */}
-              <div className="bg-slate-50/70 p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-2xs space-y-4">
-                <div className="flex items-center justify-between border-b pb-2">
-                  <h4 className="font-bold text-sm text-[#1A2B4C] font-serif flex items-center gap-2">
-                    <Calendar className="w-4 h-4 text-[#D4AF37]" />
-                    2. Planejamento de Datas & Duração da Viagem
-                  </h4>
-                </div>
-
-                {/* Flexible Dates Toggle Switch Box */}
-                <div className="p-4 rounded-xl bg-amber-50/90 border border-amber-300/80 space-y-4 shadow-2xs">
+              <div>
+                <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">2. Datas e Planejamento</h4>
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4">
                   <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <span className="font-bold text-[#1A2B4C] block text-xs sm:text-sm flex items-center gap-1.5">
-                        <Calendar className="w-4 h-4 text-[#D4AF37]" />
-                        <span>Viagem com data não definida?</span>
-                      </span>
-                      <p className="text-[11px] text-amber-900 mt-0.5">
-                        Ative caso ainda não tenha as datas exatas. Você só precisará colocar a quantidade de dias da viagem.
-                      </p>
-                    </div>
-
+                    <label className="text-xs font-bold text-slate-700">Data não definida?</label>
                     <button
                       type="button"
-                      id="toggle-flexible-dates"
                       onClick={() => setIsFlexibleDates(!isFlexibleDates)}
                       className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
                         isFlexibleDates ? 'bg-[#D4AF37]' : 'bg-slate-300'
                       }`}
-                      title={isFlexibleDates ? 'Definir datas exatas' : 'Alternar para data não definida'}
                     >
-                      <span
-                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                          isFlexibleDates ? 'translate-x-6' : 'translate-x-1'
-                        }`}
-                      />
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${isFlexibleDates ? 'translate-x-6' : 'translate-x-1'}`} />
                     </button>
                   </div>
 
                   {isFlexibleDates ? (
-                    <div className="space-y-4 pt-3 border-t border-amber-200 animate-in fade-in duration-200">
-                      {/* Duração da Viagem em dias */}
-                      <div className="bg-white p-3.5 rounded-xl border border-amber-200 space-y-1 shadow-2xs">
-                        <div className="flex items-center justify-between gap-2">
-                          <label className="text-xs font-bold uppercase tracking-wider text-[#1A2B4C] flex items-center gap-1.5">
-                            <Clock className="w-4 h-4 text-[#D4AF37]" />
-                            Quantos dias vai ser a viagem? (Duração Total)
-                          </label>
-                          <span className="text-xs font-bold text-amber-900 bg-amber-100 px-2.5 py-0.5 rounded-md">
-                            {durationDays} {durationDays === 1 ? 'Dia' : 'Dias'} de Viagem
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-500">
-                          Coloque apenas a quantidade de dias da viagem. O roteiro será organizado dia a dia (Dia 1, Dia 2...) até que as datas definitivas sejam estabelecidas.
-                        </p>
-                        <div className="flex items-center gap-2 pt-1.5">
-                          <input
-                            type="number"
-                            min={1}
-                            max={60}
-                            value={durationDays}
-                            onChange={(e) => {
-                              const val = parseInt(e.target.value, 10) || 1;
-                              setDurationDays(val);
-                            }}
-                            className="w-full sm:w-44 p-2.5 rounded-lg border border-amber-300 text-sm font-bold text-[#1A2B4C] focus:ring-2 focus:ring-[#D4AF37] outline-hidden bg-white shadow-2xs"
-                            required
-                          />
-                          <span className="text-xs text-slate-600 font-medium">dias de roteiro e programação</span>
-                        </div>
+                    <div className="space-y-4 pt-2 border-t border-slate-100">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">Duração Total (dias)</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={60}
+                          value={durationDays}
+                          onChange={(e) => setDurationDays(parseInt(e.target.value, 10) || 1)}
+                          className="w-full sm:w-44 p-2.5 rounded-lg border border-slate-200 text-sm font-bold focus:ring-2 focus:ring-[#D4AF37] outline-hidden"
+                        />
                       </div>
                     </div>
                   ) : (
-                    /* Quando Datas Fixas estiver selecionado */
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2 animate-in fade-in duration-200">
-                      <div className="bg-white p-3 rounded-xl border border-slate-200">
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
-                          Data Exata de Saída (Início)
-                        </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-100">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">Saída</label>
                         <input
                           type="date"
                           value={startDate}
@@ -1324,158 +1267,83 @@ export const HomeTripsView: React.FC = () => {
                             setStartDate(newStart);
                             if (newStart) {
                               const currentEnd = getTripEndDate(startDate, durationDays);
-                              const newDur = calculateDurationFromDates(newStart, currentEnd);
-                              setDurationDays(newDur);
+                              setDurationDays(calculateDurationFromDates(newStart, currentEnd));
                             }
                           }}
-                          className="w-full p-2 rounded-lg border border-slate-200 text-xs font-semibold text-[#1A2B4C]"
-                          required
+                          className="w-full p-2.5 rounded-lg border border-slate-200 text-xs font-semibold"
                         />
                       </div>
-
-                      <div className="bg-white p-3 rounded-xl border border-slate-200">
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
-                          Data Exata de Retorno (Fim)
-                        </label>
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1">Retorno (Duração: {durationDays} dias)</label>
                         <input
                           type="date"
                           value={getTripEndDate(startDate, durationDays)}
                           onChange={(e) => {
                             const newEnd = e.target.value;
-                            if (newEnd && startDate) {
-                              const newDur = calculateDurationFromDates(startDate, newEnd);
-                              setDurationDays(newDur);
-                            }
+                            if (newEnd && startDate) setDurationDays(calculateDurationFromDates(startDate, newEnd));
                           }}
-                          className="w-full p-2 rounded-lg border border-slate-200 text-xs font-semibold text-[#1A2B4C]"
-                          required
+                          className="w-full p-2.5 rounded-lg border border-slate-200 text-xs font-semibold"
                         />
-                      </div>
-
-                      <div className="bg-white p-3 rounded-xl border border-slate-200 flex flex-col justify-between">
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
-                          Duração da Viagem
-                        </label>
-                        <div className="p-2 rounded-lg bg-blue-50/80 border border-blue-200 flex items-center justify-between text-xs">
-                          <span className="font-bold text-blue-900 flex items-center gap-1">
-                            <Clock className="w-3.5 h-3.5 text-[#D4AF37]" />
-                            <span>Calculada:</span>
-                          </span>
-                          <span className="font-bold px-2 py-0.5 rounded-md bg-blue-100 text-blue-800 text-xs">
-                            {calculateDurationFromDates(startDate, getTripEndDate(startDate, durationDays))} Dias
-                          </span>
-                        </div>
-                        <p className="text-[10px] text-slate-500 font-medium mt-1.5">
-                          {formatDisplayDate(startDate, false)} até {formatDisplayDate(getTripEndDate(startDate, durationDays), false)}
-                        </p>
                       </div>
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* SECTION 3: WHO IS GOING (TRAVELERS) */}
-              <div className="bg-slate-50/70 p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-2xs space-y-4">
-                <div className="flex items-center justify-between border-b pb-1.5">
-                  <h4 className="font-bold text-sm text-[#1A2B4C] font-serif flex items-center gap-2">
-                    <Users className="w-4 h-4 text-[#D4AF37]" />
-                    3. Integrantes do Grupo ("Quem Vai" - {travelers.length} {travelers.length === 1 ? 'pessoa' : 'pessoas'})
-                  </h4>
-                </div>
-
-                {/* Add new traveler with Name and Email inputs */}
-                <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2.5">
+              {/* SECTION 3: TRAVELERS */}
+              <div>
+                <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">3. Integrantes do Grupo ({travelers.length})</h4>
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                        Nome do Integrante *
-                      </label>
-                      <input
-                        type="text"
-                        data-prevent-modal-enter="true"
-                        value={newTravelerName}
-                        onChange={(e) => setNewTravelerName(e.target.value)}
-                        placeholder="Ex: Nome do participante..."
-                        className="w-full p-2.5 rounded-lg border border-slate-200 text-xs bg-white text-[#1A2B4C] focus:ring-1 focus:ring-[#1A2B4C] outline-hidden"
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleAddTraveler();
-                          }
-                        }}
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                        E-mail do Integrante *
-                      </label>
-                      <input
-                        type="email"
-                        data-prevent-modal-enter="true"
-                        value={newTravelerEmail}
-                        onChange={(e) => setNewTravelerEmail(e.target.value)}
-                        placeholder="Ex: integrante@email.com"
-                        className="w-full p-2.5 rounded-lg border border-slate-200 text-xs bg-white text-[#1A2B4C] focus:ring-1 focus:ring-[#1A2B4C] outline-hidden"
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleAddTraveler();
-                          }
-                        }}
-                      />
-                    </div>
+                    <input
+                      type="text"
+                      value={newTravelerName}
+                      onChange={(e) => setNewTravelerName(e.target.value)}
+                      placeholder="Nome"
+                      className="p-2.5 rounded-lg border border-slate-200 text-xs"
+                    />
+                    <input
+                      type="email"
+                      value={newTravelerEmail}
+                      onChange={(e) => setNewTravelerEmail(e.target.value)}
+                      placeholder="E-mail"
+                      className="p-2.5 rounded-lg border border-slate-200 text-xs"
+                    />
                   </div>
+                  <button
+                    type="button"
+                    onClick={handleAddTraveler}
+                    disabled={!newTravelerName.trim()}
+                    className="w-full px-4 py-2 rounded-lg bg-slate-800 text-white text-xs font-bold cursor-pointer hover:bg-slate-900 transition-colors"
+                  >
+                    Adicionar Integrante
+                  </button>
 
-                  <div className="flex justify-end pt-0.5">
-                    <button
-                      type="button"
-                      onClick={handleAddTraveler}
-                      disabled={!newTravelerName.trim()}
-                      className="px-4 py-2 rounded-lg bg-[#1A2B4C] text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer hover:bg-[#2A437E] disabled:opacity-50 transition-colors shadow-2xs"
-                    >
-                      <Plus className="w-4 h-4" />
-                      Adicionar Integrante
-                    </button>
-                  </div>
-                </div>
-
-                {/* Travelers Badges List */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 pt-1">
-                  {travelers.map((t) => (
-                    <div
-                      key={t.id}
-                      className="p-2.5 rounded-xl bg-white border border-slate-200 flex items-center justify-between text-xs shadow-2xs hover:border-[#D4AF37] transition-colors"
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0 pr-1">
-                        <div
-                          className="w-7 h-7 rounded-full flex items-center justify-center font-bold text-[11px] text-white shrink-0 shadow-xs"
-                          style={{ backgroundColor: t.avatarColor || '#D4AF37' }}
+                  <div className="space-y-2 pt-2 border-t border-slate-100">
+                    {travelers.map((t) => (
+                      <div key={t.id} className="flex items-center justify-between p-2 bg-slate-50 rounded-lg text-xs">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full flex items-center justify-center font-bold text-[10px] text-white" style={{ backgroundColor: t.avatarColor || '#D4AF37' }}>
+                            {t.name.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <span className="font-bold text-slate-800 block">{t.name}</span>
+                            <span className="text-[10px] text-slate-500">{t.email}</span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveTraveler(t.id)}
+                          className="text-slate-400 hover:text-red-600 p-1 cursor-pointer transition-colors"
                         >
-                          {(t?.name || 'V').charAt(0).toUpperCase()}
-                        </div>
-                        <div className="min-w-0">
-                          <span className="font-bold text-slate-800 block truncate" title={t?.name || ''}>
-                            {t?.name || 'Viajante'}
-                          </span>
-                          <span className="text-[10px] text-slate-500 block truncate" title={t?.email || ''}>
-                            {t?.email || ''}
-                          </span>
-                        </div>
+                          ✕
+                        </button>
                       </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveTraveler(t.id)}
-                        className="text-slate-400 hover:text-red-600 p-1 cursor-pointer font-bold text-xs shrink-0 rounded-md hover:bg-red-50 transition-colors"
-                        title="Remover integrante"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
               </div>
+
 
               </div>
 
