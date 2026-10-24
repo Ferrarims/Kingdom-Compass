@@ -7510,11 +7510,12 @@ export async function reconcileItineraryDay(trip: Trip, day: ItineraryDay): Prom
       return false;
     }
     
-    // Verificação relaxada: apenas logar aviso se não encontrar, não falhar a reconciliação
+    // Verificação efetiva: evento obrigatório ausente após salvar deve produzir falha, não apenas aviso
     const updatedDay = await SupabaseService.fetchItineraryDayById(res.resolvedDayId || day.id);
-    const persistedNightEvent = updatedDay?.hourlySchedule?.find(i => i.title.includes('Fim do dia na acomodação'));
-    if (!persistedNightEvent) {
-        console.warn(`Aviso de verificação: Evento de fim de dia não encontrado imediatamente após persistência no Dia ${day.dayNumber}.`);
+    const persistedNightEvent = updatedDay?.hourlySchedule?.find(i => i.title.includes('Fim do dia na acomodação') || i.title.includes('Chegada e Fim do dia'));
+    if (!persistedNightEvent && day.dayNumber === 1) {
+        console.error(`Erro de verificação: Evento de fim de dia obrigatório ausente após persistência no Dia ${day.dayNumber}.`);
+        return false;
     }
     return true;
   }

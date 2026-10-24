@@ -1,7 +1,7 @@
 import { supabase, isSupabaseMissingTableError } from './supabaseClient';
 import { ensureValidUUID, generateDeterministicUUID, generateUUID } from '../utils/uuid';
 import { ensurePreparationDocsForTravelers } from '../utils/prepDocs';
-import { deduplicateHourlySchedule, syncAllEventsToHourlySchedule, ensureHourlyScheduleItems } from '../utils/parkScheduleUtils';
+import { deduplicateHourlySchedule, syncAllEventsToHourlySchedule, ensureHourlyScheduleItems, compareScheduleItemOrder } from '../utils/parkScheduleUtils';
 import { normalizeAttractionName } from '../utils/attractionUtils';
 import { validatePartialPayment } from '../utils/currency';
 import {
@@ -5231,6 +5231,34 @@ export const SupabaseService = {
       if (upsertErr) {
         console.error('Erro ao salvar item em hourly_schedules:', upsertErr.message);
         return { success: false, error: upsertErr.message };
+      }
+
+      // Also update itinerary_days.hourly_schedule JSON array so JSON and relational table stay in sync
+      try {
+        const { data: dayRow } = await supabase
+          .from('itinerary_days')
+          .select('hourly_schedule')
+          .eq('id', itineraryDayId)
+          .maybeSingle();
+
+        if (dayRow) {
+          const currentList = Array.isArray(dayRow.hourly_schedule) ? dayRow.hourly_schedule : [];
+          const idx = currentList.findIndex((i: any) => i.id === rowId);
+          let newList: HourlyScheduleItem[];
+          if (idx >= 0) {
+            newList = [...currentList];
+            newList[idx] = itemWithValidId;
+          } else {
+            newList = [...currentList, itemWithValidId];
+          }
+          newList.sort(compareScheduleItemOrder);
+          await supabase
+            .from('itinerary_days')
+            .update({ hourly_schedule: newList, updated_at: new Date().toISOString() })
+            .eq('id', itineraryDayId);
+        }
+      } catch (jsonSyncErr) {
+        console.warn('Warning: failed to sync hourly schedule item to itinerary_days JSON:', jsonSyncErr);
       }
 
       return { success: true, rowId };

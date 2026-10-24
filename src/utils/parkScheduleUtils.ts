@@ -451,6 +451,75 @@ export function addTimeWithDateOffset(
 }
 
 /**
+ * Pure calculation function for park logistics and transportation minutes.
+ * Rules:
+ * - turnstiles = valid entry time - 30;
+ * - parking = turnstiles - parking access to gate;
+ * - departure = parking - outbound drive;
+ * - wake up = departure - 30;
+ * - park exit = max(closing time, latest activity end);
+ * - arrival at car = park exit + gate-to-car walk;
+ * - return start = arrival at car + 5;
+ * - arrival at accommodation = return start + return drive;
+ * - end of day = max(22:30 (1350 mins), arrival at accommodation, required lodging activities).
+ */
+export function calculateLogisticsMinutes(params: {
+  openingTime?: string;
+  earlyEntryTime?: string;
+  closingTime?: string;
+  driveToParkMins?: number;
+  parkingToGateMins?: number;
+  driveBackMins?: number;
+  gateToCarMins?: number;
+  latestActivityEndMinutes?: number;
+}) {
+  const targetTime = params.earlyEntryTime || params.openingTime || '09:00';
+  const [tH, tM] = targetTime.split(':').map(v => parseInt(v, 10));
+  const targetMins = (isNaN(tH) ? 9 : tH) * 60 + (isNaN(tM) ? 0 : tM);
+
+  const turnstilesMins = Math.max(0, targetMins - 30);
+  const parkingMins = params.parkingToGateMins ?? 15;
+  const outboundDriveMins = params.driveToParkMins ?? 28;
+
+  const parkingArrivalMins = Math.max(0, turnstilesMins - parkingMins);
+  const departureFromHotelMins = Math.max(0, parkingArrivalMins - outboundDriveMins);
+  const wakeUpMins = Math.max(0, departureFromHotelMins - 30);
+
+  const [cH, cM] = (params.closingTime || '21:00').split(':').map(v => parseInt(v, 10));
+  const rawCloseMins = (isNaN(cH) ? 21 : cH) * 60 + (isNaN(cM) ? 0 : cM);
+  const effectiveCloseMins = rawCloseMins <= targetMins && !isNaN(cH) && cH <= 5 ? rawCloseMins + 1440 : rawCloseMins;
+
+  const latestAct = params.latestActivityEndMinutes ?? effectiveCloseMins;
+  const parkExitMins = Math.max(effectiveCloseMins, latestAct);
+  const gateToCar = params.gateToCarMins ?? parkingMins;
+  const arrivalAtCarMins = parkExitMins + gateToCar;
+  const startReturnMins = arrivalAtCarMins + 5;
+  const returnDriveMins = params.driveBackMins ?? outboundDriveMins;
+  const arrivalAtHotelMins = startReturnMins + returnDriveMins;
+
+  const dayEndMins = Math.max(1350, arrivalAtHotelMins); // 1350 mins = 22:30
+
+  return {
+    wakeUpMins,
+    departureFromHotelMins,
+    parkingArrivalMins,
+    turnstilesMins,
+    parkExitMins,
+    arrivalAtCarMins,
+    startReturnMins,
+    arrivalAtHotelMins,
+    dayEndMins,
+  };
+}
+
+export function formatMins(m: number): string {
+  const norm = ((m % 1440) + 1440) % 1440;
+  const hours = Math.floor(norm / 60);
+  const mins = norm % 60;
+  return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+}
+
+/**
  * REGRA 6: AJUSTE DO CHECK-OUT
  * O horário calculado de saída para o aeroporto é a referência.
  * - Se o check-out da acomodação estiver marcado DEPOIS da saída necessária para o aeroporto,
@@ -625,7 +694,7 @@ export function deduplicateHourlySchedule(items: HourlyScheduleItem[] = []): Hou
   if (!items || items.length === 0) return [];
 
   const seenIds = new Set<string>();
-  const seenTimeTitles = new Set<string>();
+  const seenKeys = new Set<string>();
   let hasMorningAcc = false;
   let hasNightAcc = false;
   let hasParkClosing = false;
@@ -642,15 +711,26 @@ export function deduplicateHourlySchedule(items: HourlyScheduleItem[] = []): Hou
     const title = (item.title || '').trim();
     const time = (item.time || '00:00').trim();
     const normTitle = normalizeScheduleTitle(title);
-    const timeTitleKey = `${time}_${normTitle}`;
+    const sourceType = item.sourceType || 'manual';
+    const sourceId = item.sourceId || normTitle;
+
+    // Manual items are always preserved and never wiped out by automatic deduplication
+    if (sourceType === 'manual') {
+      if (id && seenIds.has(id)) continue;
+      if (id) seenIds.add(id);
+      result.push(item);
+      continue;
+    }
+
+    const stableKey = `${time}_${sourceType}_${sourceId}_${normTitle}`;
 
     // 1. Check ID uniqueness if ID is meaningful
     if (id && seenIds.has(id)) {
       continue;
     }
 
-    // 2. Check exact Time + Normalized Title match
-    if (seenTimeTitles.has(timeTitleKey)) {
+    // 2. Check exact stable key match
+    if (seenKeys.has(stableKey)) {
       continue;
     }
 
@@ -669,14 +749,14 @@ export function deduplicateHourlySchedule(items: HourlyScheduleItem[] = []): Hou
       hasMorningAcc = true;
     }
 
-    // 4. Deduplicate multiple "Fim do dia na acomodação" / "Chegada ao hotel"
+    // 4. Deduplicate multiple "Fim do dia na acomodação" / "Chegada ao hotel" (strictly excluding flights/landings)
     const isNightAcc =
-      normTitle.includes('fim do dia na acomodacao') ||
-      normTitle.includes('fim do dia na hospedagem') ||
-      normTitle.includes('fim do dia no hotel') ||
-      normTitle.startsWith('chegada em ') ||
-      id.includes('hourly-acc-night') ||
-      id.includes('auto-retorno');
+      (normTitle.includes('fim do dia na acomodacao') ||
+       normTitle.includes('fim do dia na hospedagem') ||
+       normTitle.includes('fim do dia no hotel') ||
+       id.includes('hourly-acc-night') ||
+       id.includes('auto-retorno')) &&
+      sourceType !== 'flight';
 
     if (isNightAcc) {
       if (hasNightAcc) {
@@ -687,16 +767,17 @@ export function deduplicateHourlySchedule(items: HourlyScheduleItem[] = []): Hou
 
     // 5. Deduplicate multiple Check-out items on the same day
     const isCheckout =
-      normTitle.includes('check-out') ||
-      id.includes('auto-acc-checkout') ||
-      (item.sourceId && item.sourceId.includes('acc-checkout'));
+      (normTitle.includes('check-out') ||
+       id.includes('auto-acc-checkout') ||
+       (item.sourceId && item.sourceId.includes('acc-checkout'))) &&
+      sourceType !== 'flight';
 
     if (isCheckout) {
       const checkoutKey = `checkout_${item.sourceId || normTitle}`;
-      if (seenTimeTitles.has(checkoutKey)) {
+      if (seenKeys.has(checkoutKey)) {
         continue;
       }
-      seenTimeTitles.add(checkoutKey);
+      seenKeys.add(checkoutKey);
     }
 
     // 6. Deduplicate multiple Inter-Accommodation Transfer items on the same day
@@ -708,10 +789,10 @@ export function deduplicateHourlySchedule(items: HourlyScheduleItem[] = []): Hou
 
     if (isSplitDrive) {
       const splitKey = `split_drive_${item.sourceId || normTitle}`;
-      if (seenTimeTitles.has(splitKey)) {
+      if (seenKeys.has(splitKey)) {
         continue;
       }
-      seenTimeTitles.add(splitKey);
+      seenKeys.add(splitKey);
     }
 
     // 7. Deduplicate multiple Park Closing / Return departure items on the same day
@@ -740,7 +821,7 @@ export function deduplicateHourlySchedule(items: HourlyScheduleItem[] = []): Hou
     }
 
     if (id) seenIds.add(id);
-    seenTimeTitles.add(timeTitleKey);
+    seenKeys.add(stableKey);
     result.push(item);
   }
 
@@ -3715,10 +3796,16 @@ export function syncAllEventsToHourlySchedule(
             );
           });
 
-          const checkInTime = nightAcc.checkInTime || '16:00';
-          const nightTime = checkInTime.localeCompare('21:00') > 0
-            ? addMinutesToTimeString(checkInTime, 90)
-            : '22:30';
+          const parkClosingTime = day.parkBooking?.parkHours?.closingTime || '22:00';
+          const metrics = getDriveAndParkingMetrics(day.park || day.parkBooking?.parkName || '', nightAcc.name, nightAcc.address);
+          const logistics = calculateLogisticsMinutes({
+            closingTime: parkClosingTime,
+            driveToParkMins: metrics.driveMins,
+            parkingToGateMins: metrics.maxParkingMins,
+            driveBackMins: metrics.driveMins,
+          });
+          const nightTime = formatMins(logistics.arrivalAtHotelMins);
+          const nightNotes = `Fechamento ${parkClosingTime} + caminhada ${metrics.maxParkingMins} min + embarque 5 min + carro ${metrics.driveMins} min = chegada/fim às ${nightTime}. Destino: ${nightAccName}.`;
 
           const nightItem: HourlyScheduleItem = {
             id: `auto-retorno-${day.dayNumber || '1'}`,
@@ -3726,7 +3813,7 @@ export function syncAllEventsToHourlySchedule(
             title: `🌙 Fim do dia na acomodação (${nightAccName})`,
             location: nightLocation,
             category: nightCategory,
-            notes: `Retorno para ${nightAccName} e descanso.`,
+            notes: nightNotes,
             sourceType: 'accommodation',
             sourceId: nightAcc.id,
             completed: false,
