@@ -90,6 +90,7 @@ export const HomeTripsView: React.FC = () => {
   const [portalSuccess, setPortalSuccess] = useState<string | null>(null);
   const [isCreatingPortalTrip, setIsCreatingPortalTrip] = useState(false);
   const [isSavingTrip, setIsSavingTrip] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const portalQuickCreateLockRef = useRef(false);
   const saveTripModalLockRef = useRef(false);
 
@@ -281,6 +282,7 @@ export const HomeTripsView: React.FC = () => {
     ]);
     setNewTravelerName('');
     setNewTravelerEmail('');
+    setSaveError(null);
     setIsModalOpen(true);
   };
 
@@ -311,6 +313,7 @@ export const HomeTripsView: React.FC = () => {
     setTravelers(trip.travelers || []);
     setNewTravelerName('');
     setNewTravelerEmail('');
+    setSaveError(null);
     setIsModalOpen(true);
   };
 
@@ -400,7 +403,9 @@ export const HomeTripsView: React.FC = () => {
           travelersCount: currentTravelers.length,
         });
         if (res && !res.success) {
-          alert(`Erro ao salvar viagem: ${res.error || 'Erro desconhecido'}`);
+          setSaveError(res.error || 'Erro ao salvar viagem.');
+          setIsSavingTrip(false);
+          saveTripModalLockRef.current = false;
           return;
         }
       } else {
@@ -422,17 +427,20 @@ export const HomeTripsView: React.FC = () => {
           travelers: currentTravelers,
         });
         if (res && !res.success) {
-          alert(`Erro ao criar viagem: ${res.error || 'Erro desconhecido'}`);
+          setSaveError(res.error || 'Erro ao criar viagem.');
+          setIsSavingTrip(false);
+          saveTripModalLockRef.current = false;
           return;
         }
       }
 
       setIsModalOpen(false);
-    } catch (err: any) {
-      alert(`Erro inesperado ao salvar viagem: ${err?.message || 'Erro desconhecido'}`);
-    } finally {
-      saveTripModalLockRef.current = false;
       setIsSavingTrip(false);
+      saveTripModalLockRef.current = false;
+    } catch (err: any) {
+      setSaveError(err?.message || 'Erro inesperado ao salvar viagem.');
+      setIsSavingTrip(false);
+      saveTripModalLockRef.current = false;
     }
   };
 
@@ -1154,8 +1162,15 @@ export const HomeTripsView: React.FC = () => {
             <form onSubmit={handleSaveTrip} className="flex flex-col flex-1 min-h-0 overflow-hidden text-xs">
               <div className="p-5 sm:p-6 space-y-6 flex-1 overflow-y-auto min-h-0 custom-scrollbar">
 
+                {saveError && (
+                  <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-start gap-2 shadow-2xs">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-red-500 mt-0.5" />
+                    <span>{saveError}</span>
+                  </div>
+                )}
+
               {/* SECTION 1: TRIP IDENTIFICATION */}
-              <div className="space-y-3">
+              <div className="bg-slate-50/70 p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-2xs space-y-3">
                 <h4 className="font-bold text-sm text-[#1A2B4C] font-serif border-b pb-1.5 flex items-center gap-2">
                   <Compass className="w-4 h-4 text-[#D4AF37]" />
                   1. Identificação da Viagem
@@ -1223,7 +1238,7 @@ export const HomeTripsView: React.FC = () => {
               </div>
 
               {/* SECTION 2: DATES & FLEXIBILITY */}
-              <div className="space-y-4 pt-2">
+              <div className="bg-slate-50/70 p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-2xs space-y-4">
                 <div className="flex items-center justify-between border-b pb-2">
                   <h4 className="font-bold text-sm text-[#1A2B4C] font-serif flex items-center gap-2">
                     <Calendar className="w-4 h-4 text-[#D4AF37]" />
@@ -1360,7 +1375,7 @@ export const HomeTripsView: React.FC = () => {
               </div>
 
               {/* SECTION 3: WHO IS GOING (TRAVELERS) */}
-              <div className="space-y-3 pt-2">
+              <div className="bg-slate-50/70 p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-2xs space-y-4">
                 <div className="flex items-center justify-between border-b pb-1.5">
                   <h4 className="font-bold text-sm text-[#1A2B4C] font-serif flex items-center gap-2">
                     <Users className="w-4 h-4 text-[#D4AF37]" />
