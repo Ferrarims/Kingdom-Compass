@@ -2510,18 +2510,21 @@ export function applyAccommodationMorningRule(
     }
   }
 
-  // Se o usuário já tiver criado um item MANUAL de início do dia no cronograma, não criar duplicado automático
-  const hasManualMorning = result.some((item) => {
-    if (item.sourceType !== 'manual') return false;
+  // Se o usuário ou o sistema já tiver criado um item de início do dia / acordar, não criar duplicado automático
+  const hasExistingMorning = result.some((item) => {
     const t = (item.title || '').toLowerCase();
+    const id = (item.id || '').toLowerCase();
     return (
+      id.startsWith('auto-acordar') ||
+      id.startsWith('auto-inicio') ||
+      id.includes('acc-morning') ||
       t.includes('início do dia') ||
       t.includes('inicio do dia') ||
       t.includes('acordar')
     );
   });
 
-  if (hasManualMorning) {
+  if (hasExistingMorning) {
     return result;
   }
 
@@ -3502,25 +3505,64 @@ export function syncAllEventsToHourlySchedule(
           const toCoords = estimateAccommodationCoordinates(toName, toAddr);
           const driveMins = calculateDriveTimeMinutes(fromCoords, toCoords);
 
-          // Purgar duplicidades ou eventos de retorno ao Airbnb no final deste dia
+          // Purgar duplicidades, eventos de retorno ao Airbnb no final deste dia ou eventos matinais tardios no Airbnb
           items = items.filter((item) => {
             if (item.sourceType === 'manual') return true;
             const tLower = (item.title || '').toLowerCase();
+            const idLower = (item.id || '').toLowerCase();
             if (tLower.includes(fromName.toLowerCase()) && (tLower.includes('fim do dia') || tLower.includes('retorno') || tLower.includes('ida para'))) {
+              return false;
+            }
+            // Purgar eventos matinais no Airbnb posicionados às 07:00 ou mais tarde
+            if ((tLower.includes('início do dia na acomodação') || tLower.includes('inicio do dia na acomodação') || idLower.startsWith('auto-inicio')) && item.time >= '06:30') {
               return false;
             }
             return true;
           });
 
-          // Inserir evento de deslocamento da manhã da acomodação anterior até a nova
+          const parkNameForDay = day.park && day.park !== 'Sem Parque' ? day.park : (day.parkBooking?.parkName || 'Parque');
+
+          // Horário-alvo no parque: se houver Early Entry (ex: 08:30) ou abertura normal, o portão/catraca é às 08:00
+          const keyPickupTime = '07:00'; // Parada de 30 min no hotel para pré check-in / chaves das 07:00 às 07:30
+          const morningDriveTime = subtractTimeWithDateOffset(day.date || '', keyPickupTime, Math.max(15, driveMins)).time; // e.g. 06:19
+          const wakeUpTime = subtractTimeWithDateOffset(day.date || '', morningDriveTime, 30).time; // e.g. 05:49
+
+          // Purge auto-estacionamento / auto-saida genericos que assumiam trajeto direto Airbnb -> parque
+          items = items.filter((i) => {
+            if (i.sourceType === 'manual') return true;
+            const idLower = (i.id || '').toLowerCase();
+            const tLower = (i.title || '').toLowerCase();
+            if (idLower === `auto-saida-${day.dayNumber}` || idLower === `auto-saida-${day.date}` || (tLower.startsWith('🚗 saída de') && tLower.includes(fromName.toLowerCase()))) {
+              return false;
+            }
+            if (idLower === `auto-estacionamento-${day.dayNumber}` || idLower === `auto-estacionamento-${day.date}`) {
+              return false;
+            }
+            return true;
+          });
+
+          // 1. Inserir/Atualizar "Acordar — Modern Retreat Resort" às 05:49 (30 min antes do deslocamento)
+          const wakeUpItem: HourlyScheduleItem = {
+            id: `auto-acordar-${day.dayNumber || day.date}`,
+            time: wakeUpTime,
+            title: `⏰ Acordar — ${fromName}`,
+            location: fromAddr || fromName,
+            category: morningAcc.type === 'airbnb' || morningAcc.type === 'house' ? 'airbnb' : 'hotel',
+            notes: `Despertar 30 min antes da saída para ${toName} às ${morningDriveTime}. Café da manhã e preparativos na acomodação da manhã.`,
+            sourceType: 'accommodation',
+            sourceId: morningAcc.id,
+            completed: false,
+          };
+          const existingWakeUpIdx = items.findIndex((i) => i.id === `auto-acordar-${day.dayNumber || day.date}` || (i.title || '').includes(`Acordar — ${fromName}`));
+          if (existingWakeUpIdx >= 0) {
+            items[existingWakeUpIdx] = { ...items[existingWakeUpIdx], ...wakeUpItem, id: items[existingWakeUpIdx].id };
+          } else {
+            items.push(wakeUpItem);
+          }
+
+          // 2. Inserir/Atualizar evento de deslocamento da manhã às 06:19
           const driveTitle = `🚗 Deslocamento: ${fromName} ➔ ${toName}`;
           const existingDriveIdx = items.findIndex((i) => i.id === `auto-acc-transit-${day.date}` || (i.title || '').includes(`Deslocamento: ${fromName}`));
-
-          const earlyParkItem = items.find((i) => (i.title || '').toLowerCase().includes('saída de') || (i.title || '').toLowerCase().includes('estacionamento') || (i.title || '').toLowerCase().includes('abertura'));
-          const earlyParkTime = earlyParkItem?.time || '07:30';
-
-          const keyPickupTime = subtractTimeWithDateOffset(day.date || '', earlyParkTime, 35).time;
-          const morningDriveTime = subtractTimeWithDateOffset(day.date || '', keyPickupTime, Math.max(15, driveMins)).time;
 
           const transitDriveItem: HourlyScheduleItem = {
             id: `auto-acc-transit-${day.date}`,
@@ -3540,7 +3582,7 @@ export function syncAllEventsToHourlySchedule(
             items.push(transitDriveItem);
           }
 
-          // Inserir evento de parada de 30 min para pré check-in e retirada da chave
+          // 3. Inserir/Atualizar parada de 30 min para pré check-in e retirada da chave às 07:00
           const keyPickupTitle = `🔑 Retirada de Chaves & Pré Check-in: ${toName}`;
           const existingKeyIdx = items.findIndex((i) => i.id === `auto-acc-keypickup-${day.date}` || (i.title || '').includes('Retirada de Chaves'));
 
@@ -3561,10 +3603,63 @@ export function syncAllEventsToHourlySchedule(
           } else {
             items.push(keyPickupItem);
           }
+
+          // 4. Inserir/Atualizar transferência do hotel para o parque às 07:30
+          const parkTransferTime = addMinutesToTimeString(keyPickupTime, 30); // 07:30
+          const parkTransferTitle = `🚗 Transferência: ${toName} ➔ ${parkNameForDay}`;
+          const existingParkTransferIdx = items.findIndex((i) => i.id === `auto-acc-park-transfer-${day.date}` || (i.title || '').includes(`Transferência: ${toName}`));
+
+          const parkTransferItem: HourlyScheduleItem = {
+            id: `auto-acc-park-transfer-${day.date}`,
+            time: parkTransferTime,
+            title: parkTransferTitle,
+            location: parkNameForDay,
+            category: 'transport',
+            notes: `Deslocamento de ${toName} para ${parkNameForDay} para chegada às catracas às 08:00 (30 min antes da Entrada Antecipada / Early Entry das 08:30).`,
+            sourceType: 'transport',
+            sourceId: `transfer-${accCheckingInToday.id}-${parkNameForDay}`,
+            completed: false,
+          };
+
+          if (existingParkTransferIdx >= 0) {
+            items[existingParkTransferIdx] = { ...items[existingParkTransferIdx], ...parkTransferItem, id: items[existingParkTransferIdx].id };
+          } else {
+            items.push(parkTransferItem);
+          }
         }
 
         // REGRA 1 & 2: Fim do dia na acomodação se houver acomodação ativa para a noite
         if (nightAcc) {
+          const nightAccName = nightAcc.name || 'Acomodação';
+          const nightLocation = nightAcc.address && nightAcc.address.trim() ? nightAcc.address.trim() : nightAccName;
+          const isNightAirbnb = nightAcc.type === 'airbnb' || nightAcc.type === 'house' || (nightAccName && nightAccName.toLowerCase().includes('airbnb'));
+          const nightCategory: HourlyScheduleItem['category'] = isNightAirbnb ? 'airbnb' : 'hotel';
+
+          // Atualizar quaisquer eventos de término/saída do parque para apontar para a hospedagem da noite (nightAcc)
+          const parkNameStr = day.park && day.park !== 'Sem Parque' ? day.park : (day.parkBooking?.parkName || 'Parque');
+          items = items.map((item) => {
+            if (item.sourceType === 'manual') return item;
+            const idLower = (item.id || '').toLowerCase();
+            const tLower = (item.title || '').toLowerCase();
+
+            if (idLower.startsWith('auto-saida-parque') || (tLower.includes('término das atividades em') && tLower.includes('ida para'))) {
+              return {
+                ...item,
+                title: `🌙 Término das atividades em ${parkNameStr} e Ida para ${nightAccName}`,
+                notes: `Fechamento do parque ${parkNameStr} e retorno para ${nightAccName}.`,
+              };
+            }
+
+            if (idLower.startsWith('auto-carro-retorno') || tLower.includes('chegada ao carro no estacionamento')) {
+              return {
+                ...item,
+                notes: `Embarque no veículo e início da viagem de volta para ${nightAccName}.`,
+              };
+            }
+
+            return item;
+          });
+
           const existingNightIdx = items.findIndex((item) => {
             const tLower = (item.title || '').toLowerCase();
             const idLower = (item.id || '').toLowerCase();
@@ -3588,7 +3683,7 @@ export function syncAllEventsToHourlySchedule(
             title: `🌙 Fim do dia na acomodação (${nightAccName})`,
             location: nightLocation,
             category: nightCategory,
-            notes: 'Retorno para a hospedagem e descanso.',
+            notes: `Retorno para ${nightAccName} e descanso.`,
             sourceType: 'accommodation',
             sourceId: nightAcc.id,
             completed: false,
@@ -4343,10 +4438,11 @@ export function syncAccommodationsWithItineraryDays(params: {
   accommodations: AccommodationBooking[];
   flights: FlightSegment[];
   carRentals?: CarRentalBooking[];
+  selectedAccommodationsPerNight?: Record<string, string>;
   startDate: string;
   durationDays: number;
 }): Omit<ItineraryDay, 'date'>[] {
-  const { currentDays, accommodations, flights, carRentals, startDate, durationDays } = params;
+  const { currentDays, accommodations, flights, carRentals, selectedAccommodationsPerNight, startDate, durationDays } = params;
   if (!currentDays || currentDays.length === 0) return [];
 
   const effectiveStartDate = startDate || '2026-11-01';
@@ -4356,6 +4452,7 @@ export function syncAccommodationsWithItineraryDays(params: {
     flights: flights || [],
     accommodations: accommodations || [],
     carRentals: carRentals || [],
+    selectedAccommodationsPerNight: selectedAccommodationsPerNight || {},
     startDate: effectiveStartDate,
     totalDays: effectiveTotalDays,
   };
@@ -4439,10 +4536,11 @@ export function syncAccommodationsWithItineraryDays(params: {
     // Se for dia de parque, re-executar generateParkScheduleResult com a acomodação correspondente a este dia
     const hasPark = day.park && day.park !== 'Sem Parque' && day.park !== 'Parque a Definir';
     if (hasPark) {
-      // Localizar acomodação ativa nesta data
-      const activeAcc = accommodations.find((a) =>
-        a.checkInDate && a.checkOutDate && dDate >= a.checkInDate && dDate <= a.checkOutDate
-      ) || accommodations.find((a) => a.checkInDate === dDate) || accommodations[0];
+      // Localizar acomodação ativa nesta data para pernoite/itinerário
+      const activeAcc = resolveAccommodationForNight(accommodations, dDate, tripContext.selectedAccommodationsPerNight) ||
+        accommodations.find((a) => a.checkInDate && a.checkOutDate && dDate >= a.checkInDate && dDate < a.checkOutDate) ||
+        accommodations.find((a) => a.checkInDate === dDate) ||
+        accommodations[0];
 
       const pb = day.parkBooking;
       const res = generateParkScheduleResult(
