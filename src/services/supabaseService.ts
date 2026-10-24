@@ -1,5 +1,5 @@
 import { supabase, isSupabaseMissingTableError } from './supabaseClient';
-import { ensureValidUUID, generateDeterministicUUID } from '../utils/uuid';
+import { ensureValidUUID, generateDeterministicUUID, generateUUID } from '../utils/uuid';
 import { ensurePreparationDocsForTravelers } from '../utils/prepDocs';
 import { deduplicateHourlySchedule, syncAllEventsToHourlySchedule, ensureHourlyScheduleItems } from '../utils/parkScheduleUtils';
 import { normalizeAttractionName } from '../utils/attractionUtils';
@@ -635,9 +635,7 @@ export function mapHourlyScheduleToDb(
     ? (timeMatch[1].length === 4 ? `0${timeMatch[1]}` : timeMatch[1])
     : '08:00';
 
-  const rowId = item.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.id)
-    ? item.id
-    : ensureValidUUID(item.id, 'hourly', `${itineraryDayId}-${index}-${item.id || ''}-${item.sourceType || 'gen'}-${item.sourceId || ''}-${time}-${(item.title || '').trim()}`);
+  const rowId = generateUUID();
 
   return {
     id: rowId,
