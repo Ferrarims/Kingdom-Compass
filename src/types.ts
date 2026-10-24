@@ -225,6 +225,7 @@ export interface PhotoPackageItem {
 
 export interface ParkDayBooking {
   id: string;
+  itineraryDayId?: string;
   dayNumber: number;
   date: string; // YYYY-MM-DD
   parkName: string; // e.g. "Magic Kingdom"

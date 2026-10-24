@@ -750,6 +750,7 @@ export function mapDbToParkBooking(row: any): ParkDayBooking {
 
   return {
     id: row.id,
+    itineraryDayId: row.itinerary_day_id || undefined,
     dayNumber: Number(row.day_number) || 1,
     date: row.date || '',
     parkName: row.park_name || '',
