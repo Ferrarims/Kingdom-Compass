@@ -96,6 +96,7 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
   const [newAdjDate, setNewAdjDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
   const [isLoadingAdjustments, setIsLoadingAdjustments] = useState<boolean>(false);
   const [isSavingAdjustment, setIsSavingAdjustment] = useState<boolean>(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Load adjustments directly from Supabase settlement_payments
   useEffect(() => {
@@ -422,7 +423,13 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
   const handleAddAdjustment = async (e: React.FormEvent) => {
     e.preventDefault();
     const num = newAdjAmount || 0;
-    if (!num || isNaN(num) || num <= 0 || newAdjFrom === newAdjTo) return;
+    if (!num || isNaN(num) || num <= 0 || newAdjFrom === newAdjTo) {
+      setSaveError('Dados inválidos. Verifique o valor e os integrantes.');
+      return;
+    }
+
+    setSaveError(null);
+    setIsSavingAdjustment(true);
 
     const tempId = 'adj-' + Date.now();
     const desc = newAdjDesc.trim() || 'Ajuste / Pagamento direto';
@@ -431,7 +438,7 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
 
     const newPayment: SettlementPayment = {
       id: tempId,
-      tripId: settings.id,
+      tripId: settings.id!,
       fromTravelerId: newAdjFrom,
       toTravelerId: newAdjTo,
       amountBrl: num,
@@ -460,26 +467,27 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
     setNewAdjDesc('');
 
     // Persist to Supabase
-    if (settings.id) {
-      setIsSavingAdjustment(true);
-      try {
-        const res = await SupabaseService.saveSettlementPayment(settings.id, newPayment, {
-          tripCode: settings.tripCode,
-          tripName: settings.tripName,
-          destination: settings.destination,
-          travelers: settings.travelers,
-        });
-        if (res.success && res.data) {
-          const savedId = res.data.id;
-          setAdjustments((prev) =>
-            prev.map((a) => (a.id === tempId ? { ...a, id: savedId } : a))
-          );
-        }
-      } catch (err) {
-        console.error('Erro ao salvar ajuste no Supabase:', err);
-      } finally {
-        setIsSavingAdjustment(false);
+    try {
+      const res = await SupabaseService.saveSettlementPayment(settings.id, newPayment, {
+        tripCode: settings.tripCode,
+        tripName: settings.tripName,
+        destination: settings.destination,
+        travelers: settings.travelers,
+      });
+      if (res.success && res.data) {
+        const savedId = res.data.id;
+        setAdjustments((prev) =>
+          prev.map((a) => (a.id === tempId ? { ...a, id: savedId } : a))
+        );
+      } else {
+        throw new Error(res.error || 'Erro ao salvar ajuste.');
       }
+    } catch (err: any) {
+      setSaveError(err?.message || 'Erro inesperado ao salvar ajuste.');
+      // Revert optimistic update
+      setAdjustments((prev) => prev.filter((a) => a.id !== tempId));
+    } finally {
+      setIsSavingAdjustment(false);
     }
   };
 
@@ -665,6 +673,13 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
 
         {/* Modal Body */}
         <div className="p-5 sm:p-6 overflow-y-auto min-h-0 custom-scrollbar flex-1 space-y-6">
+          {saveError && (
+            <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-start gap-2 shadow-2xs">
+              <AlertCircle className="w-4 h-4 shrink-0 text-red-500 mt-0.5" />
+              <span>{saveError}</span>
+            </div>
+          )}
+          
           {/* TAB 1: GASTOS POR VIAJANTE */}
           {activeTab === 'travelers' && (
             <div className="space-y-4">
@@ -1009,113 +1024,47 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
               </div>
 
               {/* Form Add Adjustment */}
-              <form onSubmit={handleAddAdjustment} className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
-                      Devedor / Pagador
-                    </label>
-                    <select
-                      value={newAdjFrom}
-                      onChange={(e) => setNewAdjFrom(e.target.value)}
-                      className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
-                    >
-                      {travelers.map((t) => (
-                        <option key={t.id} value={t.id}>{t.name}</option>
-                      ))}
-                    </select>
+              <div className="space-y-2">
+                <h4 className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Adicionar Ajuste</h4>
+                <form onSubmit={handleAddAdjustment} className="p-4 rounded-2xl bg-white border border-slate-200 space-y-4 shadow-2xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Devedor (Pagador)</label>
+                      <select
+                        value={newAdjFrom}
+                        onChange={(e) => setNewAdjFrom(e.target.value)}
+                        className="w-full text-xs p-2.5 rounded-lg border border-slate-200 bg-white"
+                      >
+                        {travelers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Credor (Beneficiário)</label>
+                      <select
+                        value={newAdjTo}
+                        onChange={(e) => setNewAdjTo(e.target.value)}
+                        className="w-full text-xs p-2.5 rounded-lg border border-slate-200 bg-white"
+                      >
+                        {travelers.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select>
+                    </div>
                   </div>
-
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
-                      Credor / Beneficiário
-                    </label>
-                    <select
-                      value={newAdjTo}
-                      onChange={(e) => setNewAdjTo(e.target.value)}
-                      className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
-                    >
-                      {travelers.map((t) => (
-                        <option key={t.id} value={t.id}>{t.name}</option>
-                      ))}
-                    </select>
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div className="sm:col-span-1">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Valor (R$)</label>
+                      <MoneyInput currency="BRL" value={newAdjAmount} onChange={(val) => setNewAdjAmount(val)} />
+                    </div>
+                    <div className="sm:col-span-2">
+                       <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Motivo</label>
+                       <input type="text" placeholder="Ex: Ajuste de despesa, reembolso..." value={newAdjDesc} onChange={(e) => setNewAdjDesc(e.target.value)} className="w-full text-xs p-2.5 rounded-lg border border-slate-200" />
+                    </div>
                   </div>
-
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
-                      Valor (R$)
-                    </label>
-                    <MoneyInput
-                      currency="BRL"
-                      value={newAdjAmount}
-                      onChange={(val) => setNewAdjAmount(val)}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
-                      Forma de Pagamento
-                    </label>
-                    <select
-                      value={newAdjMethod}
-                      onChange={(e) => setNewAdjMethod(e.target.value)}
-                      className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
-                    >
-                      <option value="PIX">PIX</option>
-                      <option value="Dinheiro">Dinheiro (Espécie)</option>
-                      <option value="Cartão de Crédito">Cartão de Crédito</option>
-                      <option value="Cartão de Débito">Cartão de Débito</option>
-                      <option value="Transferência Bancária">Transferência (TED/DOC)</option>
-                      <option value="Outro">Outro Acerto</option>
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
-                  <div className="sm:col-span-2">
-                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
-                      Descrição / Motivo do Ajuste
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Ex: Adiantamento no café da manhã, reembolso de Uber, desconto..."
-                      value={newAdjDesc}
-                      onChange={(e) => setNewAdjDesc(e.target.value)}
-                      className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
-                      Data do Pagamento
-                    </label>
-                    <input
-                      type="date"
-                      value={newAdjDate}
-                      onChange={(e) => setNewAdjDate(e.target.value)}
-                      className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
-                    />
-                  </div>
-                </div>
-
-                <div className="flex justify-end pt-1">
-                  <button
-                    type="submit"
-                    disabled={isSavingAdjustment}
-                    className="px-5 py-2.5 rounded-xl bg-[#1A2B4C] hover:bg-[#2A437E] text-white text-xs font-bold transition-all cursor-pointer flex items-center gap-2 shadow-xs disabled:opacity-50"
-                  >
-                    {isSavingAdjustment ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" /> Salvar...
-                      </>
-                    ) : (
-                      <>
-                        <Plus className="w-3.5 h-3.5 text-[#D4AF37]" /> Salvar
-                      </>
-                    )}
+                  <button type="submit" disabled={isSavingAdjustment} className="w-full py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] disabled:opacity-50">
+                    {isSavingAdjustment ? 'Salvando...' : 'Adicionar Ajuste'}
                   </button>
-                </div>
-              </form>
+                </form>
+              </div>
 
               {/* Adjustments list */}
               <div className="space-y-2">
