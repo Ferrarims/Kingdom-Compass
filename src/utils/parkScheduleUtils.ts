@@ -3490,6 +3490,79 @@ export function syncAllEventsToHourlySchedule(
           }
         }
 
+        // REGRA DE TRANSIÇÃO COM CHECK-IN NO MESMO DIA (Sem check-out da acomodação da manhã):
+        // Exemplo: 08/01/2027 - Dormiu no Airbnb, faz pré check-in / retirada de chave no Hard Rock Hotel de manhã e vai ao parque
+        if (morningAcc && accCheckingInToday && morningAcc.id !== accCheckingInToday.id && !accCheckingOutToday) {
+          const fromName = morningAcc.name || 'Acomodação da Manhã';
+          const toName = accCheckingInToday.name || 'Nova Acomodação';
+          const fromAddr = (morningAcc.address || '').trim();
+          const toAddr = (accCheckingInToday.address || '').trim();
+
+          const fromCoords = estimateAccommodationCoordinates(fromName, fromAddr);
+          const toCoords = estimateAccommodationCoordinates(toName, toAddr);
+          const driveMins = calculateDriveTimeMinutes(fromCoords, toCoords);
+
+          // Purgar duplicidades ou eventos de retorno ao Airbnb no final deste dia
+          items = items.filter((item) => {
+            if (item.sourceType === 'manual') return true;
+            const tLower = (item.title || '').toLowerCase();
+            if (tLower.includes(fromName.toLowerCase()) && (tLower.includes('fim do dia') || tLower.includes('retorno') || tLower.includes('ida para'))) {
+              return false;
+            }
+            return true;
+          });
+
+          // Inserir evento de deslocamento da manhã da acomodação anterior até a nova
+          const driveTitle = `🚗 Deslocamento: ${fromName} ➔ ${toName}`;
+          const existingDriveIdx = items.findIndex((i) => i.id === `auto-acc-transit-${day.date}` || (i.title || '').includes(`Deslocamento: ${fromName}`));
+
+          const earlyParkItem = items.find((i) => (i.title || '').toLowerCase().includes('saída de') || (i.title || '').toLowerCase().includes('estacionamento') || (i.title || '').toLowerCase().includes('abertura'));
+          const earlyParkTime = earlyParkItem?.time || '07:30';
+
+          const keyPickupTime = subtractTimeWithDateOffset(day.date || '', earlyParkTime, 35).time;
+          const morningDriveTime = subtractTimeWithDateOffset(day.date || '', keyPickupTime, Math.max(15, driveMins)).time;
+
+          const transitDriveItem: HourlyScheduleItem = {
+            id: `auto-acc-transit-${day.date}`,
+            time: morningDriveTime,
+            title: driveTitle,
+            location: toAddr || toName,
+            category: 'transport',
+            notes: `Deslocamento da acomodação da manhã (${fromName}) até ${toName} (~${driveMins} min de trajeto via Maps) para retirada de chave e pré check-in antes do parque.`,
+            sourceType: 'transport',
+            sourceId: `transit-${morningAcc.id}-${accCheckingInToday.id}`,
+            completed: false,
+          };
+
+          if (existingDriveIdx >= 0) {
+            items[existingDriveIdx] = { ...items[existingDriveIdx], ...transitDriveItem, id: items[existingDriveIdx].id };
+          } else {
+            items.push(transitDriveItem);
+          }
+
+          // Inserir evento de parada de 30 min para pré check-in e retirada da chave
+          const keyPickupTitle = `🔑 Retirada de Chaves & Pré Check-in: ${toName}`;
+          const existingKeyIdx = items.findIndex((i) => i.id === `auto-acc-keypickup-${day.date}` || (i.title || '').includes('Retirada de Chaves'));
+
+          const keyPickupItem: HourlyScheduleItem = {
+            id: `auto-acc-keypickup-${day.date}`,
+            time: keyPickupTime,
+            title: keyPickupTitle,
+            location: toAddr || toName,
+            category: accCheckingInToday.type === 'airbnb' || accCheckingInToday.type === 'house' ? 'airbnb' : 'hotel',
+            notes: `Parada de 30 min em ${toName} para pré check-in e retirada da chave/express pass antes da ida ao parque. Observação: O quarto estará disponível a partir do horário oficial (${accCheckingInToday.checkInTime || '16:00'}).`,
+            sourceType: 'accommodation',
+            sourceId: accCheckingInToday.id,
+            completed: false,
+          };
+
+          if (existingKeyIdx >= 0) {
+            items[existingKeyIdx] = { ...items[existingKeyIdx], ...keyPickupItem, id: items[existingKeyIdx].id };
+          } else {
+            items.push(keyPickupItem);
+          }
+        }
+
         // REGRA 1 & 2: Fim do dia na acomodação se houver acomodação ativa para a noite
         if (nightAcc) {
           const existingNightIdx = items.findIndex((item) => {
