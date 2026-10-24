@@ -2862,7 +2862,11 @@ export const MapView: React.FC = () => {
           onClick={handleEditRouteModalBackdrop}
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-hidden animate-in fade-in duration-200"
         >
-          <div className="bg-white rounded-3xl max-w-6xl w-full shadow-2xl border border-slate-200 overflow-hidden h-[90vh] max-h-[92vh] flex flex-col my-auto animate-in zoom-in-95 duration-150">
+          <div
+            className="bg-white rounded-3xl max-w-5xl w-full shadow-2xl border border-slate-200 overflow-hidden h-[90vh] max-h-[92vh] flex flex-col my-auto animate-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
             <div className="bg-[#1A2B4C] text-white p-5 sm:p-6 flex items-center justify-between border-b border-[#D4AF37]/30 shrink-0">
               <div className="flex items-center gap-3">
                 <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-2xl bg-[#D4AF37]/20 border border-[#D4AF37]/40 flex items-center justify-center text-[#D4AF37] shrink-0">
@@ -2873,7 +2877,7 @@ export const MapView: React.FC = () => {
                     Roteiro do Dia {activeDay.dayNumber} • Pontos de Parada & Trajetos
                   </span>
                   <h2 className="text-base sm:text-xl font-bold font-serif text-white tracking-tight">
-                    Personalizar Rota do Dia {activeDay.dayNumber}
+                    Personalizar Rota
                   </h2>
                 </div>
               </div>
