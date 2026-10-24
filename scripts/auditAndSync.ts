@@ -20,7 +20,7 @@ import { generateDeterministicUUID } from '../src/utils/uuid.js';
 const TARGET_TRIP_ID = '78bbd4b1-2857-43d0-9520-2318a3b157a3';
 
 async function main() {
-  console.log('=== STARTING STRICT AUDIT & PRECISE RECONCILIATION ===');
+  console.log('=== STARTING STRICT FINAL AUDIT & RECONCILIATION ===');
 
   const { data: tripRows, error: tripErr } = await supabase
     .from('trips')
@@ -87,6 +87,8 @@ async function main() {
   };
 
   const pendingItemsReport: string[] = [];
+  const calculatedTimesReport: string[] = [];
+  const estimatedTimesReport: string[] = [];
 
   for (const day of days) {
     let syncedItems = syncAllEventsToHourlySchedule(day, tripContext);
@@ -103,7 +105,7 @@ async function main() {
     if (day.date === '2026-12-31') {
       syncedItems = syncedItems.filter((i) => {
         const t = (i.title || '').toLowerCase();
-        return !t.includes('fim do dia') && !t.includes('retorno') && !t.includes('chegada ao carro') && !t.includes('término das atividades');
+        return !t.includes('fim do dia') && !t.includes('retorno') && !t.includes('chegada ao carro') && !t.includes('término das atividades') && !t.includes('pós-virada');
       });
 
       const hasNYE = syncedItems.some((i) => (i.title || '').toLowerCase().includes('ano-novo') || (i.title || '').toLowerCase().includes('réveillon'));
@@ -114,38 +116,36 @@ async function main() {
           title: '🎆 Celebração de Réveillon e Virada de Ano em Busch Gardens',
           location: 'Busch Gardens Tampa Bay',
           category: 'park',
-          notes: 'Espetáculo de fogos de artifício e celebração de Ano-Novo em Busch Gardens Tampa Bay. [Duração do evento e horário de término pendentes de confirmação oficial; saída, caminhada até o carro e trajeto de retorno serão calculados após a confirmação do término real].',
+          notes: 'Espetáculo de fogos de artifício e celebração de Ano-Novo em Busch Gardens Tampa Bay. [Duração do evento e horário de término pendentes de confirmação oficial. Saída, caminhada até o carro, início do trajeto e chegada à acomodação pós-meia-noite NÃO foram calculados como fatos confirmados e serão gravados em 01/01 somente após confirmação do término real].',
           sourceType: 'park',
           completed: false,
         });
-        pendingItemsReport.push('31/12/2026: Duração e horário de término da Celebração de Réveillon pendentes de confirmação oficial.');
+        pendingItemsReport.push('31/12/2026: Duração e término da Celebração de Réveillon pendentes; retorno pós-meia-noite aguarda confirmação oficial.');
       }
     }
 
-    // 2. Post-midnight return on 01/01/2027
+    // 2. 01/01/2027 — Post-midnight return removed until NYE end time is confirmed
     if (day.date === '2027-01-01') {
-      const nightAcc = resolveAccommodationForNight(accommodations, '2026-12-31', trip.selectedAccommodationsPerNight) || accommodations[0];
-      const accName = nightAcc ? nightAcc.name : 'Modern Retreat Resort';
-
-      const hasNyeReturn = syncedItems.some((i) => (i.title || '').toLowerCase().includes('pós-virada') || (i.notes || '').toLowerCase().includes('réveillon'));
-      if (!hasNyeReturn) {
-        syncedItems.unshift({
-          id: 'auto-nye-return-2026-12-31',
-          time: '02:01',
-          title: `🌙 Retorno ao ${accName} (Pós-Virada)`,
-          location: accName,
-          category: 'hotel',
-          notes: 'Chegada à acomodação após a celebração de Réveillon em Busch Gardens Tampa Bay. [Horário sujeito a recalculo exato após confirmação do término do evento].',
-          sourceType: 'accommodation',
-          completed: false,
-        });
+      syncedItems = syncedItems.filter((i) => {
+        const t = (i.title || '').toLowerCase();
+        return !t.includes('pós-virada');
+      });
+      // Add explicit note about morning start dependency
+      const morningItem = syncedItems.find((i) => (i.title || '').toLowerCase().includes('início do dia'));
+      if (morningItem) {
+        morningItem.notes = 'Despertar, café da manhã e preparativos para Disney\'s Animal Kingdom. [O início exato da manhã e descanso dependem da confirmação do horário de retorno pós-Réveillon].';
       }
+      pendingItemsReport.push('01/01/2027: Horário do início da manhã sujeito a ajuste dependendo da confirmação do término do Réveillon de 31/12.');
     }
 
     // 3. General Park Days Routing & Morning Precision
     if (isParkDay && day.date !== '2026-12-31') {
-      const nightAcc = resolveAccommodationForNight(accommodations, day.date!, trip.selectedAccommodationsPerNight) || accommodations[0];
-      const accName = nightAcc ? nightAcc.name : 'Acomodação';
+      const nightAcc = resolveAccommodationForNight(accommodations, day.date!, trip.selectedAccommodationsPerNight);
+      const accName = nightAcc ? nightAcc.name : 'Acomodação (Seleção Pendente)';
+      if (!nightAcc) {
+        pendingItemsReport.push(`${day.date}: Acomodação noturna sem seleção explícita em noites sobrepostas.`);
+      }
+
       const transitInfo = getDriveAndParkingMetrics(day.park!, nightAcc?.name, nightAcc?.address);
       const walkTimeMins = transitInfo.maxParkingMins;
       const transitMins = transitInfo.driveMins;
@@ -203,6 +203,8 @@ async function main() {
         finalTurnstile = '08:00';
       }
 
+      calculatedTimesReport.push(`${day.date} (${day.park}): Saída acomodação às ${finalDep} | Chegada catracas às ${finalTurnstile}`);
+
       let [cH, cM] = closingTime.split(':').map((v) => parseInt(v, 10));
       const closeTotalMins = cH * 60 + cM;
 
@@ -225,6 +227,8 @@ async function main() {
       const arrivalH = Math.floor(arrivalMins / 60) % 24;
       const arrivalM = arrivalMins % 60;
       const arrivalTimeStr = `${String(arrivalH).padStart(2, '0')}:${String(arrivalM).padStart(2, '0')}`;
+
+      calculatedTimesReport.push(`${day.date} (${day.park}): Saída parque às ${exitTimeStr} | Chegada carro às ${carTimeStr} | Início retorno às ${carStartDriveStr} | Chegada hospedagem às ${arrivalTimeStr}`);
 
       syncedItems = syncedItems.filter((i) => {
         const t = (i.title || '').toLowerCase();
@@ -283,6 +287,7 @@ async function main() {
     day.hourlySchedule = deduplicateHourlySchedule(syncedItems);
   }
 
+  // Safe Upsert with protection of existing valid records and no premature clearing
   console.log('Persisting updated schedules securely to Supabase...');
 
   for (const day of days) {
@@ -293,6 +298,7 @@ async function main() {
       return dbRow;
     });
 
+    // Upsert itinerary day first
     const { error: dErr } = await supabase
       .from('itinerary_days')
       .upsert(dayDbRow, { onConflict: 'id' });
@@ -302,6 +308,7 @@ async function main() {
       process.exit(1);
     }
 
+    // Clear old hourly schedules for this day only after successful day upsert
     const { error: delErr } = await supabase
       .from('hourly_schedules')
       .delete()
@@ -331,10 +338,6 @@ async function main() {
     const jsonItems = dbDay?.hourly_schedule || [];
     const dbItems = dbRows || [];
 
-    console.log(`\n------------------------------------------------------------`);
-    console.log(`Date: ${targetDay.date} (Day ${targetDay.dayNumber}: ${targetDay.title} | Park: ${targetDay.park})`);
-    console.log(`JSON items count: ${jsonItems.length} | DB rows count: ${dbItems.length}`);
-
     if (jsonItems.length !== dbItems.length) {
       console.log(`❌ MISMATCH COUNT for ${targetDay.date}! JSON: ${jsonItems.length}, DB: ${dbItems.length}`);
       allChecksPassed = false;
@@ -344,7 +347,6 @@ async function main() {
       const jItem = jsonItems[i];
       const dItem = dbItems[i];
       if (!jItem || !dItem) {
-        console.log(`  [${i + 1}] ❌ MISSING ITEM: JSON exists = ${!!jItem}, DB exists = ${!!dItem}`);
         allChecksPassed = false;
         continue;
       }
@@ -363,15 +365,20 @@ async function main() {
       if (!allMatch) {
         allChecksPassed = false;
         console.log(`  [${i + 1}] ❌ FIELD DIFF at ${jItem.time} - ${jItem.title}:`);
-        if (!matchTime) console.log(`      Time diff: JSON(${jItem.time}) vs DB(${dItem.time})`);
-        if (!matchTitle) console.log(`      Title diff: JSON(${jItem.title}) vs DB(${dItem.title})`);
-        if (!matchLoc) console.log(`      Location diff: JSON(${jItem.location}) vs DB(${dItem.location})`);
-        if (!matchCat) console.log(`      Category diff: JSON(${jItem.category}) vs DB(${dItem.category})`);
-      } else {
-        console.log(`  [${i + 1}] ✅ [${dItem.time}] ${dItem.title} (Loc: ${dItem.location || 'N/A'}, Cat: ${dItem.category}, Src: ${dItem.source_type || 'none'})`);
       }
     }
   }
+
+  console.log(`\n=== DATA PARITY STATUS ===`);
+  console.log(`Parity between itinerary_days.hourly_schedule and hourly_schedules: ${allChecksPassed ? '100% MATCH' : 'DISCREPANCIES FOUND'}`);
+
+  console.log(`\n=== CALCULATED TIMES REPORT ===`);
+  calculatedTimesReport.forEach((c) => console.log(`- ${c}`));
+
+  console.log(`\n=== ESTIMATED TIMES REPORT ===`);
+  estimatedTimesReport.push('Tempos de estacionamento/caminhada (walkTimeMins) baseados na tabela padrão de acesso aos parques.');
+  estimatedTimesReport.push('Tempos de tráfego de carro (transitMins) baseados em distância geodésica multiplicada por fator de rodovia/trânsito.');
+  estimatedTimesReport.forEach((e) => console.log(`- ${e}`));
 
   console.log(`\n=== PENDING ITEMS REPORT ===`);
   pendingItemsReport.forEach((p) => console.log(`- ${p}`));
