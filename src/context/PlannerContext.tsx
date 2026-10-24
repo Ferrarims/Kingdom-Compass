@@ -47,6 +47,11 @@ import {
 } from '../data/initialData';
 import { generateUUID, generateDeterministicUUID, ensureValidUUID } from '../utils/uuid';
 import { ensurePreparationDocsForTravelers } from '../utils/prepDocs';
+import {
+  arePhotoPackagesEquivalent,
+  getCanonicalPhotoPackageId,
+  collectPackageCandidateIds,
+} from '../utils/photoPackageUtils';
 
 // Helper to deduplicate items by id to prevent duplicate key React errors
 export function deduplicateById<T extends { id?: string }>(items: T[]): T[] {
@@ -2104,31 +2109,38 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     // 5. Pacotes de Fotos
     const photoPackagesFromDays: PhotoPackageItem[] = [];
-    const seenPkgKeys = new Set<string>();
     (rawDaysList || []).forEach((day) => {
       const pkg = day.parkBooking?.photoPackage;
       if (pkg && (pkg.id || pkg.name)) {
-        const canonicalKey = (pkg.name || '').trim().toLowerCase() || pkg.id;
-        if (!seenPkgKeys.has(canonicalKey) && !seenPkgKeys.has(pkg.id)) {
-          seenPkgKeys.add(canonicalKey);
-          seenPkgKeys.add(pkg.id);
+        const alreadyAdded = photoPackagesFromDays.some((existing) =>
+          arePhotoPackagesEquivalent(existing, pkg)
+        );
+        if (!alreadyAdded) {
           photoPackagesFromDays.push(pkg);
         }
       }
     });
 
     photoPackagesFromDays.forEach((pkg) => {
-      const canonicalPkgId = ensureValidUUID(pkg.id, 'photo-pkg', `${activeTripId || 'trip'}-${(pkg.name || 'pkg').trim()}`);
+      const canonicalPkgId = getCanonicalPhotoPackageId(activeTripId || 'trip', pkg);
       const expId = generateDeterministicUUID('photo-expense', canonicalPkgId);
       const isZero = isZeroCost(pkg.costUSD, pkg.costBRL);
+      const { candidateIds, deterministicExpenseIds } = collectPackageCandidateIds(
+        activeTripId || 'trip',
+        pkg,
+        rawDaysList,
+        updatedExpenses
+      );
 
       if (isZero) {
         // Custo zero: remove estritamente a despesa vinculada sem alterar o roteiro
         for (let i = updatedExpenses.length - 1; i >= 0; i--) {
           const e = updatedExpenses[i];
-          const isSameId = e.id === expId || e.sourceId === pkg.id || e.sourceId === canonicalPkgId;
-          const isSameTitle = (e.sourceType === 'photo_package' || e.category === 'Pacotes de Fotos') && pkg.name && e.title?.toLowerCase().includes(pkg.name.toLowerCase());
-          if (isSameId || isSameTitle) {
+          const isSameId =
+            e.id === expId ||
+            deterministicExpenseIds.includes(e.id) ||
+            (e.sourceType === 'photo_package' && (candidateIds.includes(e.sourceId || '') || e.sourceId === canonicalPkgId));
+          if (isSameId) {
             updatedExpenses.splice(i, 1);
           }
         }
@@ -2142,9 +2154,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
         const matchingIndices: number[] = [];
         updatedExpenses.forEach((e, idx) => {
-          const isSameId = e.id === expId || (e.sourceType === 'photo_package' && (e.sourceId === canonicalPkgId || e.sourceId === pkg.id));
-          const isSameTitle = (e.sourceType === 'photo_package' || e.category === 'Pacotes de Fotos') && pkg.name && e.title.toLowerCase().includes(pkg.name.toLowerCase());
-          if (isSameId || isSameTitle) {
+          const isSameId =
+            e.id === expId ||
+            deterministicExpenseIds.includes(e.id) ||
+            (e.sourceType === 'photo_package' && (candidateIds.includes(e.sourceId || '') || e.sourceId === canonicalPkgId));
+          if (isSameId) {
             matchingIndices.push(idx);
           }
         });
@@ -3614,16 +3628,24 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     const prevDays = [...rawDays];
     const prevExpenses = [...expenses];
-    const cleanPkgId = ensureValidUUID(packageId, 'photo-pkg', `${activeTripId}-${packageName?.trim() || 'pkg'}`);
-    const normalizedTargetName = (packageName || '').trim().toLowerCase();
+    const targetPkg: Partial<PhotoPackageItem> = { id: packageId, name: packageName };
+    const { canonicalId, candidateIds, deterministicExpenseIds } = collectPackageCandidateIds(
+      activeTripId,
+      targetPkg,
+      rawDays,
+      expenses
+    );
 
-    // 1. Atualizar dias no estado local (limpa photoPackage e hasPhotoPackage)
+    // 1. Atualizar dias no estado local (limpa photoPackage e hasPhotoPackage para todos os dias com pacote equivalente ou ID correspondente)
     const updatedDays = rawDays.map((d) => {
       if (!d.parkBooking) return d;
       const pkg = d.parkBooking.photoPackage;
       const isMatch = Boolean(
-        (pkg && (pkg.id === packageId || pkg.id === cleanPkgId)) ||
-        (normalizedTargetName && pkg?.name && pkg.name.trim().toLowerCase() === normalizedTargetName)
+        pkg && (
+          candidateIds.includes(pkg.id) ||
+          pkg.id === canonicalId ||
+          arePhotoPackagesEquivalent(targetPkg, pkg)
+        )
       );
 
       if (isMatch) {
@@ -3639,12 +3661,14 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       return d;
     });
 
-    // 2. Limpar despesas vinculadas no estado local
+    // 2. Limpar despesas vinculadas no estado local restritas à viagem e à origem photo_package
     const updatedExpenses = expenses.filter(
       (e) =>
         !(
-          (e.sourceType === 'photo_package' && (e.sourceId === packageId || e.sourceId === cleanPkgId)) ||
-          (e.category === 'Pacotes de Fotos' && normalizedTargetName && e.title?.toLowerCase().includes(normalizedTargetName))
+          e.sourceType === 'photo_package' &&
+          (candidateIds.includes(e.sourceId || '') ||
+            e.sourceId === canonicalId ||
+            deterministicExpenseIds.includes(e.id))
         )
     );
 
@@ -3663,9 +3687,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       )
     );
 
-    // 3. Excluir no Supabase e validar confirmação
+    // 3. Excluir no Supabase e validar confirmação com candidateIds
     try {
-      const res = await SupabaseService.deleteParkPhotoPackage(activeTripId, packageId, packageName);
+      const res = await SupabaseService.deleteParkPhotoPackage(activeTripId, packageId, packageName, candidateIds);
       if (!res.success) {
         // Rollback do estado local
         setRawDays(prevDays);

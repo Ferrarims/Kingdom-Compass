@@ -3555,12 +3555,13 @@ export const SupabaseService = {
   /**
    * Delete Park Photo Package and its records strictly scoped to tripId,
    * validating deletion across expenses, park_photo_packages, and park_day_bookings
-   * with rollback on failure.
+   * with affected-rows confirmation and rollback on failure.
    */
   async deleteParkPhotoPackage(
     tripId: string,
     id: string,
-    packageName?: string
+    packageName?: string,
+    candidateIds?: string[]
   ): Promise<{ success: boolean; error?: string }> {
     try {
       if (!tripId || !tripId.trim()) {
@@ -3571,39 +3572,45 @@ export const SupabaseService = {
       }
 
       const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
-      const cleanId = ensureValidUUID(id, 'photo-pkg', `${tripId}-${packageName?.trim() || 'pkg'}`);
-      const validIds = Array.from(new Set([id, cleanId].filter(Boolean)));
-      const expId1 = generateDeterministicUUID('photo-expense', id);
-      const expId2 = generateDeterministicUUID('photo-expense', cleanId);
-      const validExpUuids = Array.from(new Set([expId1, expId2].filter((u) =>
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u)
-      )));
+      const cleanId = ensureValidUUID(id, 'photo-pkg', `${cleanTripId}-${packageName?.trim() || 'pkg'}`);
+      const rawCandidates = [id, cleanId, ...(candidateIds || [])].filter((x): x is string => Boolean(x && typeof x === 'string' && x.trim()));
+      const allCandidateIds = Array.from(new Set(rawCandidates));
 
-      // 1. Snapshot de segurança antes de qualquer exclusão
+      // Gerar UUIDs determinísticos de despesas vinculadas a todos os identificadores candidatos
+      const allDeterministicExpUuids = Array.from(
+        new Set(
+          allCandidateIds
+            .map((cid) => generateDeterministicUUID('photo-expense', cid))
+            .filter((u) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u))
+        )
+      );
+
+      // 1. Instantâneo de segurança antes de qualquer exclusão (NÃO engolir nenhum erro)
       let snapshotExpenses: any[] = [];
       let snapshotPackages: any[] = [];
       let snapshotBookings: any[] = [];
 
-      // Snapshot expenses
+      // Snapshot expenses por source_id restrito a trip_id e source_type = 'photo_package'
       const { data: expRows1, error: expErr1 } = await supabase
         .from('expenses')
         .select('*')
         .eq('trip_id', cleanTripId)
         .eq('source_type', 'photo_package')
-        .in('source_id', validIds);
+        .in('source_id', allCandidateIds);
 
-      if (expErr1 && !isSupabaseMissingTableError(expErr1)) {
-        return { success: false, error: `Falha ao carregar instantâneo de despesas do pacote: ${expErr1.message}` };
+      if (expErr1) {
+        return { success: false, error: `Falha ao carregar instantâneo de despesas por origem: ${expErr1.message}` };
       }
 
+      // Snapshot expenses por ID determinístico restrito a trip_id e source_type = 'photo_package'
       const { data: expRows2, error: expErr2 } = await supabase
         .from('expenses')
         .select('*')
         .eq('trip_id', cleanTripId)
         .eq('source_type', 'photo_package')
-        .in('id', validExpUuids);
+        .in('id', allDeterministicExpUuids);
 
-      if (expErr2 && !isSupabaseMissingTableError(expErr2)) {
+      if (expErr2) {
         return { success: false, error: `Falha ao carregar instantâneo de despesas determinísticas: ${expErr2.message}` };
       }
 
@@ -3616,50 +3623,49 @@ export const SupabaseService = {
         }
       }
 
-      // Snapshot park_photo_packages
-      let pkgQuery = supabase.from('park_photo_packages').select('*').eq('trip_id', cleanTripId);
-      if (packageName && packageName.trim()) {
-        pkgQuery = pkgQuery.or(`id.in.(${validIds.map(v => `"${v}"`).join(',')}),name.ilike."%${packageName.trim()}%"`);
-      } else {
-        pkgQuery = pkgQuery.in('id', validIds);
-      }
-      const { data: pkgRows, error: pkgFetchErr } = await pkgQuery;
-      if (pkgFetchErr && !isSupabaseMissingTableError(pkgFetchErr)) {
+      // Snapshot park_photo_packages restrito a trip_id e identificadores do pacote
+      const { data: pkgRows, error: pkgFetchErr } = await supabase
+        .from('park_photo_packages')
+        .select('*')
+        .eq('trip_id', cleanTripId)
+        .in('id', allCandidateIds);
+
+      if (pkgFetchErr) {
         return { success: false, error: `Falha ao carregar instantâneo de park_photo_packages: ${pkgFetchErr.message}` };
       }
       if (pkgRows) snapshotPackages = pkgRows;
 
-      // Snapshot park_day_bookings
+      // Snapshot park_day_bookings restrito a trip_id e photo_package associado
       const { data: bkRows, error: bkFetchErr } = await supabase
         .from('park_day_bookings')
         .select('*')
         .eq('trip_id', cleanTripId)
-        .in('photo_package', validIds);
+        .in('photo_package', allCandidateIds);
 
-      if (bkFetchErr && !isSupabaseMissingTableError(bkFetchErr)) {
+      if (bkFetchErr) {
         return { success: false, error: `Falha ao carregar instantâneo de reservas de parque: ${bkFetchErr.message}` };
       }
       if (bkRows) snapshotBookings = bkRows;
 
-      // Função de restauração compensatória
+      // Função de restauração compensatória detalhada (NÃO engolir erros na restauração)
       const rollbackAll = async (): Promise<{ success: boolean; error?: string }> => {
         const errors: string[] = [];
         if (snapshotExpenses.length > 0) {
           const { error: rExpErr } = await supabase.from('expenses').upsert(snapshotExpenses, { onConflict: 'id' });
-          if (rExpErr && !isSupabaseMissingTableError(rExpErr)) {
-            errors.push(`Despesas: ${rExpErr.message}`);
+          if (rExpErr) {
+            errors.push(`expenses: ${rExpErr.message}`);
           }
         }
         if (snapshotPackages.length > 0) {
           const { error: rPkgErr } = await supabase.from('park_photo_packages').upsert(snapshotPackages, { onConflict: 'id' });
-          if (rPkgErr && !isSupabaseMissingTableError(rPkgErr)) {
-            errors.push(`Pacotes secundários: ${rPkgErr.message}`);
+          if (rPkgErr) {
+            errors.push(`park_photo_packages: ${rPkgErr.message}`);
           }
         }
         if (snapshotBookings.length > 0) {
           const { error: rBkErr } = await supabase.from('park_day_bookings').upsert(snapshotBookings, { onConflict: 'id' });
-          if (rBkErr && !isSupabaseMissingTableError(rBkErr)) {
-            errors.push(`Agendamentos do dia: ${rBkErr.message}`);
+          if (rBkErr) {
+            errors.push(`park_day_bookings: ${rBkErr.message}`);
           }
         }
         if (errors.length > 0) {
@@ -3668,49 +3674,140 @@ export const SupabaseService = {
         return { success: true };
       };
 
-      // Etapa 1: Excluir despesas vinculadas no Supabase
-      const delExpRes = await deleteExpensesBySourceInDb(cleanTripId, 'photo_package', id);
-      if (!delExpRes.success) {
-        await rollbackAll();
-        return { success: false, error: `Falha ao excluir despesas vinculadas: ${delExpRes.error}` };
-      }
-      if (cleanId !== id) {
-        const delExpRes2 = await deleteExpensesBySourceInDb(cleanTripId, 'photo_package', cleanId);
-        if (!delExpRes2.success) {
-          await rollbackAll();
-          return { success: false, error: `Falha ao excluir despesas vinculadas (ID canônico): ${delExpRes2.error}` };
+      // 2. Etapa A: Excluir despesas vinculadas em expenses e confirmar linhas afetadas
+      if (snapshotExpenses.length > 0) {
+        const expIdsToDelete = snapshotExpenses.map((e) => e.id);
+        const { data: deletedExpRows, error: delExpErr } = await supabase
+          .from('expenses')
+          .delete()
+          .eq('trip_id', cleanTripId)
+          .eq('source_type', 'photo_package')
+          .in('id', expIdsToDelete)
+          .select('id');
+
+        if (delExpErr) {
+          const rollRes = await rollbackAll();
+          return {
+            success: false,
+            error: `Falha ao excluir despesas vinculadas do pacote (${delExpErr.message}). ${
+              rollRes.success
+                ? 'Dados anteriores foram restaurados com sucesso no banco de dados.'
+                : `A restauração falhou (${rollRes.error}). O banco de dados pode estar em estado inconsistente.`
+            }`,
+          };
         }
-      }
 
-      // Etapa 2: Excluir da tabela park_photo_packages
-      let delPkgQuery = supabase.from('park_photo_packages').delete().eq('trip_id', cleanTripId);
-      if (packageName && packageName.trim()) {
-        delPkgQuery = delPkgQuery.or(`id.in.(${validIds.map(v => `"${v}"`).join(',')}),name.ilike."%${packageName.trim()}%"`);
+        if (!deletedExpRows || deletedExpRows.length === 0) {
+          const rollRes = await rollbackAll();
+          return {
+            success: false,
+            error: `Nenhuma linha de despesa vinculada foi afetada ao tentar excluir do Supabase. ${
+              rollRes.success
+                ? 'Dados anteriores foram restaurados com sucesso no banco de dados.'
+                : `A restauração falhou (${rollRes.error}). O banco de dados pode estar em estado inconsistente.`
+            }`,
+          };
+        }
       } else {
-        delPkgQuery = delPkgQuery.in('id', validIds);
-      }
-      const { error: delPkgErr } = await delPkgQuery;
-      if (delPkgErr && !isSupabaseMissingTableError(delPkgErr)) {
-        const rollRes = await rollbackAll();
-        return {
-          success: false,
-          error: `Falha ao excluir registros em park_photo_packages (${delPkgErr.message}). ${rollRes.success ? 'Dados restaurados.' : 'Restauração falhou: ' + rollRes.error}`,
-        };
+        // Se o snapshot estava vazio, executar limpeza defensiva por candidateIds
+        await supabase
+          .from('expenses')
+          .delete()
+          .eq('trip_id', cleanTripId)
+          .eq('source_type', 'photo_package')
+          .in('source_id', allCandidateIds);
       }
 
-      // Etapa 3: Atualizar park_day_bookings para limpar referências de photo_package
-      const { error: updBkErr } = await supabase
-        .from('park_day_bookings')
-        .update({ photo_package: null, has_photo_package: false, updated_at: new Date().toISOString() })
-        .eq('trip_id', cleanTripId)
-        .in('photo_package', validIds);
+      // 3. Etapa B: Excluir registros em park_photo_packages e confirmar linhas afetadas
+      if (snapshotPackages.length > 0) {
+        const pkgIdsToDelete = snapshotPackages.map((p) => p.id);
+        const { data: deletedPkgRows, error: delPkgErr } = await supabase
+          .from('park_photo_packages')
+          .delete()
+          .eq('trip_id', cleanTripId)
+          .in('id', pkgIdsToDelete)
+          .select('id');
 
-      if (updBkErr && !isSupabaseMissingTableError(updBkErr)) {
-        const rollRes = await rollbackAll();
-        return {
-          success: false,
-          error: `Falha ao desvincular pacote dos agendamentos de parque (${updBkErr.message}). ${rollRes.success ? 'Dados restaurados.' : 'Restauração falhou: ' + rollRes.error}`,
-        };
+        if (delPkgErr) {
+          const rollRes = await rollbackAll();
+          return {
+            success: false,
+            error: `Falha ao excluir registros em park_photo_packages (${delPkgErr.message}). ${
+              rollRes.success
+                ? 'Dados anteriores foram restaurados com sucesso no banco de dados.'
+                : `A restauração falhou (${rollRes.error}). O banco de dados pode estar em estado inconsistente.`
+            }`,
+          };
+        }
+
+        if (!deletedPkgRows || deletedPkgRows.length === 0) {
+          const rollRes = await rollbackAll();
+          return {
+            success: false,
+            error: `Nenhum registro de pacote foi removido em park_photo_packages (0 linhas afetadas). ${
+              rollRes.success
+                ? 'Dados anteriores foram restaurados com sucesso no banco de dados.'
+                : `A restauração falhou (${rollRes.error}). O banco de dados pode estar em estado inconsistente.`
+            }`,
+          };
+        }
+      } else {
+        // Se o snapshot estava vazio, limpeza defensiva por candidateIds
+        await supabase
+          .from('park_photo_packages')
+          .delete()
+          .eq('trip_id', cleanTripId)
+          .in('id', allCandidateIds);
+      }
+
+      // 4. Etapa C: Desvincular pacote em park_day_bookings e confirmar linhas afetadas
+      if (snapshotBookings.length > 0) {
+        const bkIdsToUpdate = snapshotBookings.map((b) => b.id);
+        const { data: updatedBkRows, error: updBkErr } = await supabase
+          .from('park_day_bookings')
+          .update({
+            photo_package: null,
+            has_photo_package: false,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('trip_id', cleanTripId)
+          .in('id', bkIdsToUpdate)
+          .select('id');
+
+        if (updBkErr) {
+          const rollRes = await rollbackAll();
+          return {
+            success: false,
+            error: `Falha ao desvincular pacote dos agendamentos de parque (${updBkErr.message}). ${
+              rollRes.success
+                ? 'Dados anteriores foram restaurados com sucesso no banco de dados.'
+                : `A restauração falhou (${rollRes.error}). O banco de dados pode estar em estado inconsistente.`
+            }`,
+          };
+        }
+
+        if (!updatedBkRows || updatedBkRows.length === 0) {
+          const rollRes = await rollbackAll();
+          return {
+            success: false,
+            error: `Nenhum agendamento de parque foi desvinculado (0 linhas afetadas). ${
+              rollRes.success
+                ? 'Dados anteriores foram restaurados com sucesso no banco de dados.'
+                : `A restauração falhou (${rollRes.error}). O banco de dados pode estar em estado inconsistente.`
+            }`,
+          };
+        }
+      } else {
+        // Limpeza defensiva se existirem registros residuais
+        await supabase
+          .from('park_day_bookings')
+          .update({
+            photo_package: null,
+            has_photo_package: false,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('trip_id', cleanTripId)
+          .in('photo_package', allCandidateIds);
       }
 
       return { success: true };

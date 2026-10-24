@@ -39,6 +39,7 @@ import {
   DiningReservationItem,
   ShowReservationItem,
   PhotoPackageItem,
+  ExpenseItem,
 } from '../types';
 import { PARKS_GUIDE_DATA } from '../data/initialData';
 import { formatDisplayDate, usePlanner, isZeroCost } from '../context/PlannerContext';
@@ -57,6 +58,12 @@ import {
   getDriveAndParkingMetrics,
 } from '../utils/parkScheduleUtils';
 import { generateDeterministicUUID, ensureValidUUID } from '../utils/uuid';
+import { SupabaseService } from '../services/supabaseService';
+import {
+  getCanonicalPhotoPackageId,
+  collectPackageCandidateIds,
+  arePhotoPackagesEquivalent,
+} from '../utils/photoPackageUtils';
 
 interface ParkBookingModalProps {
   isOpen: boolean;
@@ -419,9 +426,13 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       setHasPhotoPackage(dayHasPkg);
 
       if (existingPkg) {
-        const canonicalId = (existingPkg.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(existingPkg.id))
-          ? existingPkg.id
-          : ensureValidUUID(existingPkg.id, 'photo-pkg', `${activeTripId || 'trip'}-${(existingPkg.name || 'pkg').trim()}`);
+        const canonicalId = getCanonicalPhotoPackageId(activeTripId || 'trip', existingPkg);
+        const { candidateIds, deterministicExpenseIds } = collectPackageCandidateIds(
+          activeTripId || 'trip',
+          existingPkg,
+          allDays,
+          expenses
+        );
         setPhotoPkgId(canonicalId);
         setPhotoPkgName(existingPkg.name || '');
         setPhotoPkgType(existingPkg.type || 'trip_30days');
@@ -444,8 +455,9 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
         // SSoT: Recuperar status e valor pago diretamente da tabela central de expenses
         const linkedExpense = expenses.find(
           (e) =>
-            (e.sourceType === 'photo_package' && (e.sourceId === canonicalId || e.sourceId === existingPkg.id)) ||
-            (e.category === 'Pacotes de Fotos' && existingPkg.name && e.title?.toLowerCase().includes(existingPkg.name.toLowerCase()))
+            e.id === generateDeterministicUUID('photo-expense', canonicalId) ||
+            deterministicExpenseIds.includes(e.id) ||
+            (e.sourceType === 'photo_package' && (e.sourceId === canonicalId || candidateIds.includes(e.sourceId || '')))
         );
 
         if (linkedExpense) {
@@ -464,7 +476,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
             normalizedStatus = 'Pendente';
           }
           setPhotoPkgPaymentStatus(normalizedStatus);
-          setPhotoPkgPaidValueBRL(existingPkg.paidValueBRL !== undefined ? Number(existingPkg.paidValueBRL) : 0);
+          setPhotoPkgPaidValueBRL(0);
           setPhotoPkgPayerId(existingPkg.payerId || settings?.currentUserId || 'all');
         }
 
@@ -1126,16 +1138,78 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
 
     const effectiveEarlyEntry = hasEarlyEntry && earlyEntryTime.trim() ? earlyEntryTime.trim() : undefined;
 
+    // Snapshot de segurança antes de qualquer gravação remota ou mutação
+    const snapshotAllDays: ItineraryDay[] = JSON.parse(JSON.stringify(allDays));
+    const snapshotExpenses: ExpenseItem[] = JSON.parse(JSON.stringify(expenses));
+    const snapshotActiveDay: ItineraryDay = JSON.parse(JSON.stringify(activeDay));
+    const modifiedDayIds: string[] = [];
+
+    // Helper de reversão compensatória integral caso qualquer etapa falhe
+    const rollbackAllSaveState = async (stepFailed: string, errorDetail: string) => {
+      const compErrors: string[] = [];
+      try {
+        if (activeTripId) {
+          // Restaurar despesas no Supabase
+          const rExp = await SupabaseService.syncExpenses(activeTripId, snapshotExpenses);
+          if (!rExp.success) {
+            compErrors.push(`expenses (${rExp.error || 'falha ao sincronizar'})`);
+          }
+          // Restaurar dia ativo no Supabase
+          const rDay = await updateItineraryDay(activeDay.id, snapshotActiveDay);
+          if (!rDay.success) {
+            compErrors.push(`itinerary_days (${rDay.error || 'falha ao sincronizar'})`);
+          }
+          // Restaurar eventuais outros dias que foram alterados na propagação
+          for (const dId of modifiedDayIds) {
+            const originalDay = snapshotAllDays.find((d) => d.id === dId);
+            if (originalDay) {
+              const rOther = await updateItineraryDay(dId, originalDay);
+              if (!rOther.success) {
+                compErrors.push(`dia ${originalDay.dayNumber} (${rOther.error})`);
+              }
+            }
+          }
+        }
+      } catch (rCatch: any) {
+        compErrors.push(`exceção no rollback (${rCatch?.message || 'erro inesperado'})`);
+      }
+
+      if (compErrors.length > 0) {
+        alert(
+          `❌ Falha ao salvar "${stepFailed}": ${errorDetail}.\n\nAtenção: a reversão automática falhou em: ${compErrors.join(
+            '; '
+          )}. O banco de dados pode estar em estado inconsistente.\n\nSeus dados no formulário foram preservados para nova tentativa.`
+        );
+      } else {
+        alert(
+          `❌ Falha ao salvar "${stepFailed}": ${errorDetail}.\n\nTodas as alterações foram revertidas com sucesso e os dados anteriores foram restaurados no banco de dados.\n\nSeus dados no formulário foram preservados para nova tentativa.`
+        );
+      }
+    };
+
     // Identificador canônico estável para o pacote compartilhado entre múltiplos dias
-    const canonicalPackageId = (photoPkgId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(photoPkgId))
-      ? photoPkgId
-      : ensureValidUUID(photoPkgId, 'photo-pkg', `${activeTripId || 'trip'}-${(photoPkgName || 'pkg').trim()}`);
+    const candidatePkg: Partial<PhotoPackageItem> = {
+      id: photoPkgId,
+      name: photoPkgName,
+      type: photoPkgType,
+      complex: photoPkgComplex,
+      confirmationCode: photoPkgCode,
+    };
+    const canonicalPackageId = getCanonicalPhotoPackageId(activeTripId || 'trip', candidatePkg);
+    const { candidateIds, deterministicExpenseIds } = collectPackageCandidateIds(
+      activeTripId || 'trip',
+      candidatePkg,
+      allDays,
+      expenses
+    );
 
     const parsedUsd = photoPkgCostUSD || 0;
     const parsedBrl = photoPkgCostBRL || (parsedUsd * dollarRate);
     const isZero = isZeroCost(parsedUsd, parsedBrl);
     const photoExpenseId = generateDeterministicUUID('photo-expense', canonicalPackageId);
 
+    // SSoT: paidValueBRL e paidValueUSD são omitidos intencionalmente de finalPhotoPackage
+    // para garantir que a tabela 'expenses' seja a única fonte de verdade.
     const finalPhotoPackage: PhotoPackageItem | undefined = hasPhotoPackage
       ? {
           id: canonicalPackageId,
@@ -1150,95 +1224,11 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
           costBRL: photoPkgCostBRL !== null && photoPkgCostBRL !== undefined ? photoPkgCostBRL : undefined,
           status: photoPkgStatus,
           paymentStatus: photoPkgPaymentStatus,
-          paidValueBRL: photoPkgPaymentStatus === 'Pago' ? (photoPkgCostBRL || 0) : (photoPkgPaymentStatus === 'Parcial' ? (photoPkgPaidValueBRL || 0) : 0),
-          paidValueUSD: photoPkgPaymentStatus === 'Pago' ? (photoPkgCostUSD || 0) : (photoPkgPaymentStatus === 'Parcial' ? ((photoPkgPaidValueBRL || 0) / dollarRate) : 0),
           payerId: photoPkgPayerId || 'all',
           travelerIds: photoPkgTravelerIds && photoPkgTravelerIds.length > 0 ? photoPkgTravelerIds : ['all'],
           notes: photoPkgNotes.trim() || undefined,
         }
       : undefined;
-
-    // Sincronização financeira conforme as regras canônicas:
-    if (hasPhotoPackage && finalPhotoPackage) {
-      if (!isZero) {
-        // Caso 1: Custo > 0 -> Inserir ou atualizar despesa única vinculada (com source_type e source_id estável)
-        const expenseStatus = photoPkgPaymentStatus;
-        const finalPaidBRL = expenseStatus === 'Pago' ? parsedBrl : (expenseStatus === 'Parcial' ? (photoPkgPaidValueBRL || 0) : 0);
-        const finalPaidUSD = expenseStatus === 'Pago' ? parsedUsd : (expenseStatus === 'Parcial' ? ((photoPkgPaidValueBRL || 0) / dollarRate) : 0);
-        const expenseTitle = `Pacote de Fotos: ${finalPhotoPackage.name}`;
-
-        const existingExpense = expenses.find(
-          (e) => e.id === photoExpenseId || (e.sourceType === 'photo_package' && (e.sourceId === canonicalPackageId || e.sourceId === photoPkgId))
-        );
-
-        let financeRes: { success: boolean; error?: string };
-        if (existingExpense) {
-          financeRes = await updateExpense(existingExpense.id, {
-            id: photoExpenseId,
-            title: expenseTitle,
-            category: 'Pacotes de Fotos',
-            estimatedValueUSD: parsedUsd,
-            estimatedValueBRL: parsedBrl,
-            paidValueUSD: finalPaidUSD,
-            paidValueBRL: finalPaidBRL,
-            status: expenseStatus,
-            payerId: photoPkgPayerId || 'all',
-            responsibleTravelerId: photoPkgPayerId || 'all',
-            travelerIds: photoPkgTravelerIds && photoPkgTravelerIds.length > 0 ? photoPkgTravelerIds : ['all'],
-            sourceType: 'photo_package',
-            sourceId: canonicalPackageId,
-            notes: finalPhotoPackage.confirmationCode ? `Voucher / Confirmação: #${finalPhotoPackage.confirmationCode}` : undefined,
-          });
-        } else {
-          financeRes = await addExpense({
-            id: photoExpenseId,
-            title: expenseTitle,
-            category: 'Pacotes de Fotos',
-            estimatedValueUSD: parsedUsd,
-            estimatedValueBRL: parsedBrl,
-            paidValueUSD: finalPaidUSD,
-            paidValueBRL: finalPaidBRL,
-            status: expenseStatus,
-            payerId: photoPkgPayerId || 'all',
-            responsibleTravelerId: photoPkgPayerId || 'all',
-            travelerIds: photoPkgTravelerIds && photoPkgTravelerIds.length > 0 ? photoPkgTravelerIds : ['all'],
-            sourceType: 'photo_package',
-            sourceId: canonicalPackageId,
-            excluded: false,
-            notes: finalPhotoPackage.confirmationCode ? `Voucher / Confirmação: #${finalPhotoPackage.confirmationCode}` : undefined,
-          });
-        }
-
-        if (!financeRes.success) {
-          alert(`❌ Erro ao salvar despesa do pacote de fotos: ${financeRes.error || 'Falha de conexão'}. O agendamento foi mantido aberto para nova tentativa.`);
-          return;
-        }
-      } else {
-        // Caso 2: Custo == 0 -> Remove SOMENTE a despesa vinculada do Financeiro, PRESERVANDO o pacote e referências nos dias do roteiro
-        const existingExpense = expenses.find(
-          (e) => e.id === photoExpenseId || (e.sourceType === 'photo_package' && (e.sourceId === canonicalPackageId || e.sourceId === photoPkgId)) ||
-          (e.category === 'Pacotes de Fotos' && photoPkgName && e.title.toLowerCase().includes(photoPkgName.toLowerCase()))
-        );
-        if (existingExpense) {
-          const delRes = await deleteExpense(existingExpense.id, { removeSourceItem: false });
-          if (!delRes.success) {
-            alert(`❌ Erro ao remover despesa zerada do pacote de fotos: ${delRes.error || 'Falha de conexão'}. O agendamento foi mantido aberto para nova tentativa.`);
-            return;
-          }
-        }
-      }
-    } else {
-      // Caso 3: hasPhotoPackage === false -> Exclusão explícita do pacote de fotos
-      // Aguardar e validar exclusão da despesa, referências em todos os dias e registros em park_photo_packages
-      const hadExistingPkg = Boolean(activeDay.parkBooking?.hasPhotoPackage || activeDay.parkBooking?.photoPackage || photoPkgId);
-      if (hadExistingPkg) {
-        const delPkgRes = await deletePhotoPackage(canonicalPackageId, photoPkgName);
-        if (!delPkgRes.success) {
-          alert(`❌ Erro ao excluir pacote de fotos do Supabase: ${delPkgRes.error || 'Falha de conexão'}. O agendamento foi mantido aberto para nova tentativa.`);
-          return;
-        }
-      }
-    }
 
     const updatedBooking: ParkDayBooking = {
       id: activeDay.parkBooking?.id || `pb-${activeDay.id}`,
@@ -1263,43 +1253,6 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       notes: notes.trim() || undefined,
     };
 
-    // Propagate multi-park / 30-day package to other days if checked
-    if (applyPhotoPkgToAllDays && hasPhotoPackage && finalPhotoPackage && finalPhotoPackage.includedParks.length > 0) {
-      for (const d of allDays) {
-        if (d.id !== activeDay.id && d.park && d.park !== 'Sem Parque' && !isNonParkEvent(d.park)) {
-          const isParkCovered = finalPhotoPackage.includedParks.some(
-            (p) => p.toLowerCase().includes(d.park.toLowerCase()) || d.park.toLowerCase().includes(p.toLowerCase())
-          );
-          if (isParkCovered) {
-            const currentPb = d.parkBooking || {
-              id: `pb-${d.id}`,
-              dayNumber: d.dayNumber,
-              date: d.date,
-              parkName: d.park,
-              parkPassStatus: 'Confirmado no App',
-              fastPasses: [],
-              diningReservations: [],
-              showsAndParades: [],
-            };
-            const dayUpRes = await updateItineraryDay(d.id, {
-              parkBooking: {
-                ...currentPb,
-                hasPhotoPackage: true,
-                photoPackage: {
-                  ...finalPhotoPackage,
-                  id: canonicalPackageId, // Share the same STABLE ID
-                },
-              },
-            });
-            if (!dayUpRes.success) {
-              alert(`❌ Erro ao propagar pacote para o dia ${d.dayNumber}: ${dayUpRes.error}.`);
-              return;
-            }
-          }
-        }
-      }
-    }
-
     const fallbackAccLocation = getFallbackAccommodationLocation(
       selectedParkName,
       activeDay,
@@ -1308,7 +1261,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       settings?.destination
     );
 
-    // Auto-generate day-by-day itinerary schedule items (departure, transport, opening, closing, return, FastPass, Lunch/Dining, Shows)
+    // Auto-generate day-by-day itinerary schedule items
     const scheduleResult = generateParkScheduleResult(
       selectedParkName,
       openingTime,
@@ -1372,6 +1325,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       },
     };
 
+    // ETAPA 1: Salvar dia do roteiro principal no Supabase
     let saveRes: any;
     if (onSave) {
       saveRes = await onSave(dayUpdates, activeDay.id);
@@ -1380,11 +1334,136 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     }
 
     if (saveRes && typeof saveRes === 'object' && saveRes.success === false) {
-      alert(`❌ Erro ao salvar dados do parque no banco: ${saveRes.error || 'Falha de conexão'}. Mantendo dados para nova tentativa.`);
+      await rollbackAllSaveState('Agendamento do parque', saveRes.error || 'Falha de conexão');
       return;
     }
 
-    // Allocate any past-midnight closing / return items to next day schedule
+    // ETAPA 2: Sincronização financeira conforme as regras canônicas
+    if (hasPhotoPackage && finalPhotoPackage) {
+      if (!isZero) {
+        // Caso 1: Custo > 0 -> Inserir ou atualizar despesa única vinculada (com source_type e source_id estável)
+        const expenseStatus = photoPkgPaymentStatus;
+        const finalPaidBRL = expenseStatus === 'Pago' ? parsedBrl : (expenseStatus === 'Parcial' ? (photoPkgPaidValueBRL || 0) : 0);
+        const finalPaidUSD = expenseStatus === 'Pago' ? parsedUsd : (expenseStatus === 'Parcial' ? ((photoPkgPaidValueBRL || 0) / dollarRate) : 0);
+        const expenseTitle = `Pacote de Fotos: ${finalPhotoPackage.name}`;
+
+        const existingExpense = expenses.find(
+          (e) =>
+            e.id === photoExpenseId ||
+            deterministicExpenseIds.includes(e.id) ||
+            (e.sourceType === 'photo_package' && (e.sourceId === canonicalPackageId || candidateIds.includes(e.sourceId || '')))
+        );
+
+        let financeRes: { success: boolean; error?: string };
+        if (existingExpense) {
+          financeRes = await updateExpense(existingExpense.id, {
+            id: photoExpenseId,
+            title: expenseTitle,
+            category: 'Pacotes de Fotos',
+            estimatedValueUSD: parsedUsd,
+            estimatedValueBRL: parsedBrl,
+            paidValueUSD: finalPaidUSD,
+            paidValueBRL: finalPaidBRL,
+            status: expenseStatus,
+            payerId: photoPkgPayerId || 'all',
+            responsibleTravelerId: photoPkgPayerId || 'all',
+            travelerIds: photoPkgTravelerIds && photoPkgTravelerIds.length > 0 ? photoPkgTravelerIds : ['all'],
+            sourceType: 'photo_package',
+            sourceId: canonicalPackageId,
+            notes: finalPhotoPackage.confirmationCode ? `Voucher / Confirmação: #${finalPhotoPackage.confirmationCode}` : undefined,
+          });
+        } else {
+          financeRes = await addExpense({
+            id: photoExpenseId,
+            title: expenseTitle,
+            category: 'Pacotes de Fotos',
+            estimatedValueUSD: parsedUsd,
+            estimatedValueBRL: parsedBrl,
+            paidValueUSD: finalPaidUSD,
+            paidValueBRL: finalPaidBRL,
+            status: expenseStatus,
+            payerId: photoPkgPayerId || 'all',
+            responsibleTravelerId: photoPkgPayerId || 'all',
+            travelerIds: photoPkgTravelerIds && photoPkgTravelerIds.length > 0 ? photoPkgTravelerIds : ['all'],
+            sourceType: 'photo_package',
+            sourceId: canonicalPackageId,
+            excluded: false,
+            notes: finalPhotoPackage.confirmationCode ? `Voucher / Confirmação: #${finalPhotoPackage.confirmationCode}` : undefined,
+          });
+        }
+
+        if (!financeRes.success) {
+          await rollbackAllSaveState('Despesa vinculada do pacote de fotos', financeRes.error || 'Falha de conexão');
+          return;
+        }
+      } else {
+        // Caso 2: Custo == 0 -> Remove SOMENTE a despesa vinculada do Financeiro, PRESERVANDO o pacote e referências nos dias do roteiro
+        const existingExpense = expenses.find(
+          (e) =>
+            e.id === photoExpenseId ||
+            deterministicExpenseIds.includes(e.id) ||
+            (e.sourceType === 'photo_package' && (e.sourceId === canonicalPackageId || candidateIds.includes(e.sourceId || '')))
+        );
+        if (existingExpense) {
+          const delRes = await deleteExpense(existingExpense.id, { removeSourceItem: false });
+          if (!delRes.success) {
+            await rollbackAllSaveState('Remover despesa zerada do pacote de fotos', delRes.error || 'Falha de conexão');
+            return;
+          }
+        }
+      }
+    } else {
+      // Caso 3: hasPhotoPackage === false -> Exclusão explícita do pacote de fotos
+      // Aguardar e validar exclusão da despesa, referências em todos os dias e registros em park_photo_packages
+      const hadExistingPkg = Boolean(activeDay.parkBooking?.hasPhotoPackage || activeDay.parkBooking?.photoPackage || photoPkgId);
+      if (hadExistingPkg) {
+        const delPkgRes = await deletePhotoPackage(canonicalPackageId, photoPkgName);
+        if (!delPkgRes.success) {
+          await rollbackAllSaveState('Excluir pacote de fotos do Supabase', delPkgRes.error || 'Falha de conexão');
+          return;
+        }
+      }
+    }
+
+    // ETAPA 3: Propagar pacote para outros dias se selecionado
+    if (applyPhotoPkgToAllDays && hasPhotoPackage && finalPhotoPackage && finalPhotoPackage.includedParks.length > 0) {
+      for (const d of allDays) {
+        if (d.id !== activeDay.id && d.park && d.park !== 'Sem Parque' && !isNonParkEvent(d.park)) {
+          const isParkCovered = finalPhotoPackage.includedParks.some(
+            (p) => p.toLowerCase().includes(d.park.toLowerCase()) || d.park.toLowerCase().includes(p.toLowerCase())
+          );
+          if (isParkCovered) {
+            const currentPb = d.parkBooking || {
+              id: `pb-${d.id}`,
+              dayNumber: d.dayNumber,
+              date: d.date,
+              parkName: d.park,
+              parkPassStatus: 'Confirmado no App',
+              fastPasses: [],
+              diningReservations: [],
+              showsAndParades: [],
+            };
+            const dayUpRes = await updateItineraryDay(d.id, {
+              parkBooking: {
+                ...currentPb,
+                hasPhotoPackage: true,
+                photoPackage: {
+                  ...finalPhotoPackage,
+                  id: canonicalPackageId, // Compartilha o ID canônico estável
+                },
+              },
+            });
+            if (!dayUpRes.success) {
+              await rollbackAllSaveState(`Propagar pacote para o dia ${d.dayNumber}`, dayUpRes.error || 'Falha de conexão');
+              return;
+            }
+            modifiedDayIds.push(d.id);
+          }
+        }
+      }
+    }
+
+    // ETAPA 4: Sincronização dos horários excedentes do dia seguinte
     const nextDay = (allDays || []).find((d) => d.dayNumber === activeDay.dayNumber + 1);
     if (nextDay) {
       const cleanedNextSchedule = cleanPreviousDayOverflowItems(nextDay.hourlySchedule || [], activeDay.dayNumber);
@@ -1396,20 +1475,18 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
 
         if (nextDayRes && typeof nextDayRes === 'object' && nextDayRes.success === false) {
           alert(`⚠️ O parque foi salvo com sucesso, mas a sincronização dos eventos do dia seguinte falhou: ${nextDayRes.error || 'Falha de conexão'}.`);
-          return;
         }
       } catch (nextDayError: any) {
         console.error('Erro ao sincronizar eventos excedentes do dia seguinte:', nextDayError);
         const errorMsg = nextDayError?.message || 'Falha de conexão ou erro inesperado';
         alert(`⚠️ O parque foi salvo com sucesso, mas a sincronização dos eventos do dia seguinte falhou: ${errorMsg}.`);
-        return;
       }
     }
 
     onClose();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error saving park booking:', error);
-      alert('Ocorreu um erro ao salvar o agendamento. Por favor, tente novamente.');
+      alert(`Ocorreu um erro ao salvar o agendamento: ${error?.message || 'Erro desconhecido'}. Por favor, tente novamente.`);
     } finally {
       isSavingRef.current = false;
       setIsSaving(false);
