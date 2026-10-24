@@ -134,6 +134,7 @@ export const FinancialPlanner: React.FC = () => {
     setNotes('');
     setResponsibleTravelerId('all');
     setTravelerIds(['all']);
+    setSaveError(null);
     setModalOpen(true);
   };
 
@@ -148,6 +149,7 @@ export const FinancialPlanner: React.FC = () => {
     setNotes(exp.notes || '');
     setResponsibleTravelerId(exp.responsibleTravelerId || 'all');
     setTravelerIds(exp.travelerIds || [exp.responsibleTravelerId || 'all']);
+    setSaveError(null);
     setModalOpen(true);
   };
 
@@ -180,11 +182,12 @@ export const FinancialPlanner: React.FC = () => {
       if (!hasBRL && !hasUSD) isValid = false;
 
       if (!isValid) {
-        alert('Para pagamento Parcial, o valor pago deve ser maior que zero e menor que o valor total.');
+        setSaveError('Para pagamento Parcial, o valor pago deve ser maior que zero e menor que o valor total.');
         return;
       }
     }
 
+    setSaveError(null);
     expenseSubmitLockRef.current = true;
     setIsSaving(true);
     try {
@@ -217,13 +220,14 @@ export const FinancialPlanner: React.FC = () => {
         res = await addExpense(expenseData as ExpenseItem);
       }
       if (res && !res.success) {
-        alert(`Erro ao salvar despesa: ${res.error || 'Erro desconhecido'}`);
+        setSaveError(res.error || 'Erro ao salvar despesa.');
+        setIsSaving(false);
+        expenseSubmitLockRef.current = false;
         return;
       }
       setModalOpen(false);
     } catch (error: any) {
-      console.error('Erro ao salvar despesa:', error);
-      alert(`Erro inesperado ao salvar despesa: ${error?.message || 'Tente novamente.'}`);
+      setSaveError(error?.message || 'Erro inesperado ao salvar despesa.');
     } finally {
       expenseSubmitLockRef.current = false;
       setIsSaving(false);
