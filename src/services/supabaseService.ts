@@ -4786,12 +4786,22 @@ export const SupabaseService = {
           const pbDb = mapParkBookingToDb(day.parkBooking, resolvedDayId, tripId);
 
           // Localizar ID existente de park_day_bookings para esta viagem e dia do roteiro
-          const { data: existingPbRow } = await supabase
+          const { data: existingPbRow, error: fetchPbErr } = await supabase
             .from('park_day_bookings')
             .select('id')
             .eq('trip_id', tripId)
             .eq('itinerary_day_id', resolvedDayId)
             .maybeSingle();
+
+          if (fetchPbErr) {
+            addLog(`Erro ao consultar agendamento existente em park_day_bookings: ${fetchPbErr.message}`);
+            return {
+              success: false,
+              error: `Falha ao consultar agendamento existente do parque no Supabase: ${fetchPbErr.message}`,
+              resolvedDayId,
+              debugLogs,
+            };
+          }
 
           const bookingId = existingPbRow?.id || pbDb.id || ensureValidUUID(day.parkBooking.id, 'park-booking', resolvedDayId);
           pbDb.id = bookingId;
@@ -4926,7 +4936,13 @@ export const SupabaseService = {
           } catch {}
         }
       } catch (pbErr: any) {
-        addLog(`Aviso sync park_day_bookings: ${pbErr?.message}`);
+        addLog(`Erro sync park_day_bookings: ${pbErr?.message}`);
+        return {
+          success: false,
+          error: `Falha ao sincronizar reserva de parque no Supabase: ${pbErr?.message || 'Erro inesperado'}`,
+          resolvedDayId,
+          debugLogs,
+        };
       }
 
       return {
