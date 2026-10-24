@@ -1,4 +1,6 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef, ReactNode } from 'react';
+import { createRulesController, Plan } from '../utils/itineraryRules';
+import { SupabaseItineraryRulesStore } from '../services/itineraryRulesAdapter';
 import {
   GlobalSettings,
   ExpenseItem,
@@ -688,6 +690,9 @@ interface PlannerContextType {
   };
   syncAllToSupabase: () => Promise<boolean>;
   reloadFromSupabase: (silent?: boolean) => Promise<boolean>;
+  onModalOpen: (tripId: string) => Promise<Plan>;
+  onModalSave: (tripId: string, saveSource: () => Promise<void>) => Promise<Plan>;
+  evaluateAndCorrectAllItems: (tripId: string) => Promise<Plan>;
 }
 
 const PlannerContext = createContext<PlannerContextType | undefined>(undefined);
@@ -7346,6 +7351,21 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   };
 
+  const rulesControllerRef = useRef(createRulesController(new SupabaseItineraryRulesStore()));
+  const rulesController = rulesControllerRef.current;
+
+  const onModalOpen = useCallback(async (tripId: string) => {
+    return await rulesController.onModalOpen(tripId);
+  }, [rulesController]);
+
+  const onModalSave = useCallback(async (tripId: string, saveSource: () => Promise<void>) => {
+    return await rulesController.onModalSave(tripId, saveSource);
+  }, [rulesController]);
+
+  const evaluateAndCorrectAllItems = useCallback(async (tripId: string) => {
+    return await rulesController.evaluateAndCorrectAllItems(tripId);
+  }, [rulesController]);
+
   return (
     <PlannerContext.Provider
       value={{
@@ -7458,6 +7478,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         supabaseStatus,
         syncAllToSupabase,
         reloadFromSupabase,
+        onModalOpen,
+        onModalSave,
+        evaluateAndCorrectAllItems,
       }}
     >
       {children}
@@ -7473,51 +7496,15 @@ export const usePlanner = () => {
   return context;
 };
 
+const globalRulesStore = new SupabaseItineraryRulesStore();
+const globalRulesController = createRulesController(globalRulesStore);
+
 export async function reconcileItineraryDay(trip: Trip, day: ItineraryDay): Promise<boolean> {
-  const originalSchedule = JSON.stringify(day.hourlySchedule || []);
-  let reconciledSchedule = syncAllEventsToHourlySchedule(day, trip);
-  
-  const newSchedule = deduplicateHourlySchedule(reconciledSchedule);
-  
-  // Garantir evento de fim de dia no Dia 1 após deduplicação
-  if (day.dayNumber === 1) {
-      const acc = trip.accommodations?.find(a => a.checkInDate === day.date) || trip.accommodations?.[0];
-      if (acc) {
-          const nightEventId = `auto-retorno-${day.dayNumber || '1'}`;
-          const hasNightEvent = newSchedule.some(i => i.id === nightEventId || i.title.includes('Fim do dia na acomodação'));
-          if (!hasNightEvent) {
-              const nightTime = (acc.checkInTime || '16:00').localeCompare('21:00') > 0 ? addMinutesToTimeString(acc.checkInTime || '16:00', 90) : '22:30';
-              newSchedule.push({
-                  id: nightEventId,
-                  time: nightTime,
-                  title: `🌙 Fim do dia na acomodação (${acc.name})`,
-                  location: acc.address || acc.name,
-                  category: 'hotel',
-                  notes: 'Retorno para a hospedagem e descanso.',
-                  sourceType: 'accommodation',
-                  sourceId: acc.id,
-                  completed: false,
-              });
-          }
-      }
+  try {
+    const plan = await globalRulesController.evaluateAndCorrectAllItems(trip.id);
+    return plan.complete;
+  } catch (err) {
+    console.error('Falha na reconciliação pelo motor de regras:', err);
+    return false;
   }
-  
-  if (JSON.stringify(newSchedule) !== originalSchedule) {
-    const dayToPersist = { ...day, hourlySchedule: newSchedule };
-    const res = await SupabaseService.saveItineraryDay(trip.id, dayToPersist, trip);
-    if (!res.success) {
-      console.error(`Falha ao persistir Dia ${day.dayNumber}:`, res.error);
-      return false;
-    }
-    
-    // Verificação efetiva: evento obrigatório ausente após salvar deve produzir falha, não apenas aviso
-    const updatedDay = await SupabaseService.fetchItineraryDayById(res.resolvedDayId || day.id);
-    const persistedNightEvent = updatedDay?.hourlySchedule?.find(i => i.title.includes('Fim do dia na acomodação') || i.title.includes('Chegada e Fim do dia'));
-    if (!persistedNightEvent && day.dayNumber === 1) {
-        console.error(`Erro de verificação: Evento de fim de dia obrigatório ausente após persistência no Dia ${day.dayNumber}.`);
-        return false;
-    }
-    return true;
-  }
-  return true;
 }

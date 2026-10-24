@@ -630,25 +630,26 @@ export function mapHourlyScheduleToDb(
     ? dbCat
     : 'other';
 
-  const cleanTime = (item.time || '08:00').trim();
-  const timeMatch = cleanTime.match(/(\d{1,2}:\d{2})/);
-  const time = timeMatch
-    ? (timeMatch[1].length === 4 ? `0${timeMatch[1]}` : timeMatch[1])
-    : '08:00';
+  const cleanTime = (item.time || '').trim();
+  if (!/^\d{2}:\d{2}$/.test(cleanTime)) {
+    throw new Error(`Horário inválido ou ausente estritamente requerido (HH:mm): "${item.time}"`);
+  }
 
-  const rowId = generateUUID();
+  const rowId = item.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.id)
+    ? item.id
+    : generateUUID();
 
   return {
     id: rowId,
     itinerary_day_id: itineraryDayId,
     trip_id: tripId,
-    time,
+    time: cleanTime,
     title: (item.title || 'Atividade').trim(),
     location: item.location ? item.location.trim() : null,
     category,
     completed: Boolean(item.completed),
     notes: item.notes ? item.notes.trim() : null,
-    source_type: item.sourceType || (item.id?.startsWith('auto-show') ? 'show' : null),
+    source_type: item.sourceType || null,
     source_id: item.sourceId || null,
     created_at: new Date().toISOString(),
   };

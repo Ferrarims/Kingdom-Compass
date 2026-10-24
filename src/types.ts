@@ -154,6 +154,8 @@ export interface HourlyScheduleItem {
   notes?: string;
   sourceType?: 'park' | 'accommodation' | 'flight' | 'car_rental' | 'manual' | 'show' | 'fastpass' | 'dining' | string;
   sourceId?: string;
+  timeZone?: string;
+  ruleBinding?: { jobId: string; role: any };
 }
 
 export interface CustomRouteStop {

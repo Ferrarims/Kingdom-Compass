@@ -1,0 +1,1075 @@
+Implemente estas alterações no código do aplicativo Kingdom Compass. Crie os arquivos de aplicação no seu ambiente. O código central completo está neste documento e deve ser incorporado ao projeto, com os adaptadores necessários.
+
+Não encerre apenas com uma auditoria, um relatório de sucesso ou um script que corrige dados uma vez. A correção precisa funcionar no aplicativo após recarregar a página, abrir qualquer modal da viagem e salvar qualquer modal da viagem.
+
+Repositório: Ferrarims/Kingdom-Compass.
+Viagem usada para validação: 78bbd4b1-2857-43d0-9520-2318a3b157a3.
+A implementação deve servir para qualquer viagem, sem condições específicas para esse ID, hotéis ou datas.
+
+## 1. Resultado obrigatório
+
+1. Um único arquivo contém as regras de cálculo: src/utils/itineraryRules.ts, com o código completo adiante.
+2. Um adaptador liga os tipos e dados reais do aplicativo a esse arquivo: src/services/itineraryRulesAdapter.ts.
+3. Uma única instância de createRulesController existe por PlannerProvider.
+4. Ao abrir um modal: onModalOpen(tripId) lê os dados já salvos da viagem inteira, recalcula todos os itens automáticos, grava as diferenças e verifica a gravação. Não salva o formulário que está sendo aberto.
+5. Ao salvar um modal: onModalSave(tripId, saveSource) aguarda o salvamento real do formulário, relê todas as fontes, recalcula todos os itens, grava todas as datas afetadas e verifica o resultado.
+6. Todos os modais referentes à viagem usam esse fluxo, inclusive hospedagem, seleção de pernoite, parque, horários, shows, refeições, voo, carro e dados de deslocamento. Os demais modais da viagem também executam a conferência; o formulário aberto continua responsável apenas pelos seus próprios dados.
+7. Recalcular a viagem inteira significa todos os dias e eventos, inclusive os itens que mudam de data ao ultrapassar a meia-noite. Não significa apenas o dia selecionado na tela.
+8. A abertura ou o cancelamento de um modal nunca confirma os valores ainda não salvos do formulário.
+9. Os cálculos anteriores deixam de ser executados nos caminhos substituídos. Não mantenha duas implementações disputando os mesmos horários.
+10. A função pública evaluateAndCorrectAllItems(tripId) permite repetir somente a reconciliação quando uma fonte já foi salva e a atualização do roteiro falhou.
+
+## 2. Base conferida e pontos concretos de alteração
+
+Base consultada: commit f22db79c51b90851225b5a6996454a671ab1cfae. As linhas abaixo pertencem a essa versão; localize também pelo nome da função caso tenham mudado.
+
+| Arquivo | Ponto da versão consultada | Alteração exigida |
+|---|---|---|
+| src/utils/parkScheduleUtils.ts | calculateLogisticsMinutes, linha 466 | Substituir a lógica de horários por chamadas ao novo motor. Não limitar horários negativos a zero nem descartar valores que atravessam a meia-noite. |
+| src/utils/parkScheduleUtils.ts | deduplicateHourlySchedule, linha 693 | Não deduplicar só por texto/horário. A identidade automática passa a ser jobId + role; preservar itens manuais e funções diferentes. |
+| src/utils/parkScheduleUtils.ts | applyAccommodationMorningRule, linha 2558; horário fixo na linha 2656 | Retirar a geração de 07:30 dos dias com saída calculada. O novo motor calcula o despertar. |
+| src/utils/parkScheduleUtils.ts | outro início fixo na linha 2788 | Remover sua interferência em dias com logística calculada. 07:30 continua válido para dias livres. |
+| src/utils/parkScheduleUtils.ts | syncAllEventsToHourlySchedule, linha 2927 | Desativar seus blocos antigos de início/fim, check-in/out, ida/retorno e madrugada nos fluxos migrados. Preservar outras funções úteis sem duplicar a regra central. |
+| src/services/supabaseService.ts | mapHourlyScheduleToDb, linha 621; generateUUID na linha 639 | Preservar o UUID de item.id. Não gerar outro UUID em cada gravação. Não transformar horário inválido/ausente em 08:00. |
+| src/services/supabaseService.ts | saveHourlyScheduleItem, linha 5210 | Propagar erros das duas representações e encaminhar o fluxo público pelo coordenador. Não retornar sucesso após falha na atualização do JSON. |
+| src/context/PlannerContext.tsx | carga da viagem, linhas 1096/1102 e 1189/1194 | Substituir a reconciliação exclusiva do primeiro dia e o gerador antigo pela reconciliação de toda a viagem. |
+| src/context/PlannerContext.tsx | updateItineraryDay, linha 3864 | Eliminar o caminho que salva hourlySchedule sem a regra central. Separar persistência bruta interna do método público que reconcilia. |
+| src/context/PlannerContext.tsx | saveHourlyScheduleItem, linha 4083 | Usar o mesmo coordenador e a mesma fila dos outros salvamentos. |
+| src/context/PlannerContext.tsx | chamadas antigas nas linhas 4354, 4358, 6145, 6212 e 6618 | Migrar os chamadores, incluindo mudança de parque, hospedagem e movimentação de itens entre dias. |
+| src/context/PlannerContext.tsx | reconcileItineraryDay, linha 7476 | Substituir a implementação que chama o gerador antigo; uma correção não pode ficar limitada a um único dia. |
+| src/types.ts | HourlyScheduleItem e tipos do contexto | Acrescentar os metadados opcionais e os métodos do coordenador, conforme seção 5. |
+| src/components | componentes que abrem/salvam modais | Integrar efetivamente abertura e salvamento; criar só a função no contexto não conclui a tarefa. |
+
+Confirme os nomes e assinaturas reais antes de editar. Não invente que esses pontos já foram corrigidos.
+
+O Supabase consultado tem 16 itinerary_days, 90 itens no JSON e 90 linhas em hourly_schedules. Contagens iguais não comprovam que horários ou regras estejam corretos.
+
+## 3. Regras de negócio
+
+### Voos
+
+- Chegada ao terminal de origem: decolagem menos 180 minutos.
+- Saída de casa: chegada ao terminal menos o tempo do trajeto casa → aeroporto.
+- Registrar decolagem e pouso de cada segmento, usando a data e o fuso local corretos.
+- Para conexões, considerar a chegada final para os títulos da viagem e para a logística até a primeira hospedagem.
+- Ida que começa e chega no mesmo dia: título Chegada. Se atravessar dias: Saída de casa no início e Chegada no dia da chegada final.
+- Volta no mesmo dia: Fim da Viagem. Se atravessar dias: Retorno para casa no início e Fim da Viagem no dia da chegada final.
+- No retorno, chegar ao terminal pelo menos 180 minutos antes do primeiro voo da volta; incluir os procedimentos de devolução do carro e o deslocamento locadora → terminal.
+- Passageiros diferentes com o mesmo voo não criam deslocamentos duplicados. Não apagar reservas de passageiros para deduplicar o roteiro.
+
+### Hospedagem
+
+- Cobertura de uma noite: checkInDate <= data < checkOutDate.
+- Com mais de uma hospedagem para a mesma noite, exigir a seleção válida salva em selected_accommodations_per_night. Não escolher arbitrariamente a primeira.
+- A acomodação da manhã é a da noite anterior. A do retorno é a selecionada para a noite da jornada, inclusive quando a chegada física ocorre na madrugada seguinte.
+- Primeiro dia: pouso → desembarque/imigração/bagagens → retirada do carro, se houver → trajeto → chegada à acomodação.
+- Check-in efetivo: o maior horário entre chegada calculada e check-in contratual.
+- Chegada física e check-in são funções diferentes. Se chegar antes de o quarto estar disponível, não alterar a hora da chegada para o horário do check-in.
+- Não duplicar check-ins/outs com títulos diferentes para a mesma reserva e a mesma função.
+- Nos dias livres: início às 07:30 e descanso às 22:30.
+- Nos dias de parque: acordar exatamente 30 minutos antes da primeira saída da acomodação.
+- Fim do dia/descanso: o maior instante entre 22:30 da jornada, a chegada calculada e um procedimento obrigatório de hospedagem que termine depois.
+- Chegada antes de 22:30: mostrar a chegada real e um marcador de descanso às 22:30.
+- Chegada às 22:30 ou depois: pode reunir chegada e fim do dia em um item, com função claramente identificada.
+- Primeiro dia também tem fim do dia, calculado com essa regra.
+- Em trocas de hospedagem, checkout usa endereço e ID da acomodação de saída; check-in usa endereço e ID da de chegada.
+- No último dia, checkout efetivo é até o limite contratual e antes de sair. Se precisar sair antes para o voo, antecipar o checkout planejado sem alterar a reserva.
+- Se a partida calculada for pouco depois do checkout, sair no checkout. O limite do que significa “pouco depois” precisa ser configurado; o usuário ainda não definiu uma quantidade.
+- Se houver um intervalo maior depois do checkout, informar a necessidade de combinar bagagens/espera. Não pressupor permanência no quarto.
+
+### Carro
+
+- A retirada contratual é “a partir de”. Preservar esse marco no horário cadastrado, mesmo que seja antes do pouso.
+- A retirada planejada depende da presença do viajante: máximo entre liberação do viajante/chegada à locadora e início contratual.
+- A saída da locadora ocorre depois dos procedimentos de retirada.
+- A devolução contratual é “até”. Preservar o marco do prazo cadastrado. Mostrar a devolução planejada separadamente quando ocorrer antes.
+- Calcular a conclusão dos procedimentos de devolução até o prazo limite e a chegada ao terminal dentro da antecedência do voo.
+- Ao adicionar/alterar o carro, recalcular as rotas e os horários de chegada/check-in que dependem dele.
+- Não somar duas vezes procedimentos de aeroporto e locadora.
+
+### Parque — ida
+
+Defina E como o primeiro horário de entrada realmente utilizável:
+- Early Entry somente se existir nessa data e o grupo tiver direito a esse benefício.
+- Caso contrário, usar abertura normal.
+- Um horário de Early Entry posterior à abertura normal não antecipa o planejamento.
+- Express Pass e Early Entry são benefícios diferentes. Uma reserva de hotel ou um tipo genérico “resort” não comprova automaticamente todos os benefícios.
+- A elegibilidade no dia de checkout do Hard Rock é verificada pelas condições do benefício, separadamente da acomodação em que o grupo dormirá naquela noite.
+
+Fórmulas para ida de carro:
+
+catracas = E - 30 minutos
+estacionamento = catracas - acesso estacionamento → catracas
+saída = estacionamento - trajeto da acomodação da manhã → estacionamento
+acordar = saída - 30 minutos
+
+Estimativas de acesso já usadas no projeto:
+- SeaWorld e Epic Universe: 15 min.
+- Busch Gardens, Animal Kingdom e Hollywood Studios: 20 min.
+- Islands of Adventure e Universal Studios Florida: 25 min.
+- Magic Kingdom: 45 min.
+
+Utilizar configuração específica validada quando existir. Para outro parque sem parâmetro conhecido, mostrar pendência; não inventar duração.
+
+Para caminhada/barco/ônibus: usar o tempo completo de acesso ao parque do modo escolhido. Não criar estacionamento, carro ou embarque em carro fictícios.
+
+### Parque — parada de pré-check-in em outra hospedagem
+
+Calcular de trás para frente:
+1. Chegada às catracas: E - 30.
+2. Subtrair acesso e trajeto do hotel intermediário ao parque.
+3. Reservar 30 minutos de pré-check-in/retirada de chaves.
+4. Subtrair o trajeto da acomodação da manhã ao hotel intermediário.
+5. Acordar 30 minutos antes dessa primeira saída.
+
+O horário de disponibilidade do quarto, por exemplo 16:00, é apenas informativo quando o pré-check-in já foi feito pela manhã. Não obrigar o grupo a abandonar o parque nesse horário.
+
+### Parque — retorno
+
+R = maior instante entre fechamento e término conhecido da última atividade mantida no roteiro.
+chegada ao carro = R + acesso catracas → estacionamento
+início do retorno = chegada ao carro + 5 minutos de embarque
+chegada à acomodação = início do retorno + trajeto até a acomodação da noite
+fim do dia = máximo entre 22:30 da jornada e chegada à acomodação
+
+A ida e a volta podem ter origens/destinos e durações diferentes.
+Escrever nas notas as durações e a origem da estimativa. Não afirmar consulta ao Maps quando a duração foi calculada internamente.
+
+Se uma atividade começa às 23:59 e o fim é desconhecido, o início não prova seu término. Manter pendência do retorno. Não inventar saída e chegada.
+
+### Datas, madrugada e preservação
+
+- Calcular instantes completos, com data e fuso IANA.
+- Um fechamento à 01:00 de uma visita iniciada na véspera pertence à data seguinte.
+- Transferir fechamento, caminhada, retorno, chegada e fim do dia para o itinerary_day da data efetiva.
+- Não aplicar módulo 24 apenas no texto do horário; isso ordenaria o retorno antes da manhã da data errada.
+- Preservar o vínculo com a jornada de origem nos metadados e na descrição quando necessário.
+- Não apagar atividades manuais. Conflitos com elas precisam aparecer como pendência e impedir um relatório falso de “tudo correto”.
+- Dados ausentes de imigração, procedimentos da locadora, trajeto ou término de show são pendências, não zero, lista vazia ou horários escolhidos arbitrariamente.
+- Horários de parque presentes no cadastro são dados de planejamento. Não os rotular como oficialmente confirmados sem evidência dessa confirmação.
+
+## 4. Dados de entrada e adaptador obrigatório
+
+Implemente realmente RulesStore em src/services/itineraryRulesAdapter.ts. Não deixe métodos vazios, TODO, funções de exemplo ou retornos simulados.
+
+load(tripId):
+- Ler trips, accommodations, flight_segments, car_rentals, park_day_bookings, itinerary_days e hourly_schedules da viagem inteira.
+- Tratar erro de qualquer leitura como erro. Retorno vazio só é válido depois de uma consulta bem-sucedida.
+- Paginar se necessário. Nunca usar somente os itens já visíveis ou somente a viagem incompleta do estado React.
+- Ler os parâmetros de logística persistidos e converter para Snapshot.policy e os jobs.
+- Preencher sourcesComplete somente depois de validar todas as leituras e a adaptação.
+- dayTitles contém os títulos efetivamente lidos do banco.
+- storageMismatchDates contém as datas em que JSON e linhas relacionais divergem em identidade, contagem ou campos persistidos.
+- Cada job tem ID estável baseado na reserva/função da jornada. Não derivar identidade de título, índice, horário ou endereço mutável.
+- Mapear os parques pelo itinerary_day_id e pela data do dia correspondente. Não inventar parques para dias livres.
+- Criar um job flight por segmento físico distinto. Usar direction outbound/inbound apenas no primeiro segmento da respectiva jornada e journeyArrival para a chegada final. Os demais segmentos usam direction internal para registrar pouso/decolagem sem repetir a saída de casa ou os títulos.
+- Em cada jornada, escolher o fluxo principal: arrival, transfer, airport-return, park ou free. Não adicionar free sobre uma jornada que já produz início/fim, nem gerar simultaneamente dois fluxos de checkout para a mesma reserva.
+- Um job rental registra os marcos contratuais; arrival e airport-return registram as operações planejadas.
+- Criar jobs activity para horários efetivos de shows, refeições e Fast Passes cadastrados. Usar o ID da respectiva reserva e sourceType show/dining/fastpass. Não inventar um horário quando apenas uma janela ou uma descrição sem hora foi informada.
+- A origem do parque vem da hospedagem resolvida da noite anterior. O destino vem da noite da jornada. Não usar o mesmo tempo de trajeto automaticamente para ambos.
+- Se uma hospedagem/seleção essencial não puder ser resolvida, interromper a adaptação com pendência clara antes de substituir/excluir o roteiro.
+- Respeitar término conhecido de refeições/shows/atividades pertinentes em latestActivityEnd. Se uma atividade que determina o retorno não tem término, usar returnEndUnknown.
+- A opção de pré-check-in é dado de planejamento. Não presumir que toda reserva sobreposta exige uma visita a outro hotel.
+
+Parâmetros ainda não definidos pelo usuário devem poder ser cadastrados e persistidos:
+- duração dos procedimentos de aeroporto;
+- transferência até a locadora;
+- procedimentos de retirada/devolução;
+- trajeto locadora → terminal;
+- trajetos de ida e volta por origem/destino e modo;
+- intervalo considerado curto entre checkout e partida;
+- fusos IANA dos locais;
+- elegibilidade/disponibilidade de benefícios e término de atividades.
+
+Não salve essa configuração apenas em memória ou localStorage. Na base consultada não existe uma coluna de configuração de regras em trips. Inspecione se há um local persistente adequado no projeto atualizado; se não houver, crie uma migration mínima para trips.itinerary_rules_config jsonb, com mapeamento e interface de configuração. Não preencha imigração ou locadora com valores presumidos. Não exponha chave service_role no cliente. Não altere valores financeiros ou horários contratuais das reservas.
+
+O código adiante implementa o cálculo. O adaptador fornece os dados, sem reimplementar as fórmulas.
+
+## 5. Metadados e migração dos itens existentes
+
+A tabela hourly_schedules consultada tem id, itinerary_day_id, trip_id, time, title, location, category, completed, notes, source_type, source_id e created_at. Não possui coluna própria de data, fuso ou função do evento. A data vem de itinerary_days.date.
+
+Utilize os campos extras do JSON existente, sem pressupor colunas inexistentes na tabela normalizada:
+- No tipo HourlyScheduleItem acrescente opcionalmente timeZone?: string.
+- Acrescente ruleBinding?: { jobId: string; role: Role } com importação somente de tipo, se necessário.
+- Ao serializar Plan.events para hourly_schedule, salve {...e.item, timeZone: e.timeZone, ruleBinding: e.binding}.
+- Ao ler, restaure ExistingItem.binding do ruleBinding do JSON; associe a linha normalizada pelo mesmo UUID.
+- Não descarte esses metadados ao mapear ou salvar um item isolado.
+- A persistência da identidade por função também é necessária depois de excluir uma reserva: sem ela o sistema não sabe quais itens automáticos antigos ficaram obsoletos.
+- Caso adote metadados equivalentes em colunas próprias em vez do JSON, implemente a migration, mapeie ambos os lados e ajuste a verificação. Não invente que essas colunas já existem.
+
+Antes de executar a reconciliação:
+- Vincule itens automáticos legados à reserva e à função corretas.
+- Use source_type, source_id, datas e identificação inequívoca da reserva; título pode auxiliar a migração, mas não é a identidade futura.
+- Quando source_id estiver vazio ou houver ambiguidade, não classifique arbitrariamente como manual nem apague. Informe o ID e a pendência.
+- Dois checkouts comprovadamente automáticos da mesma reserva/função são uma duplicidade. Checkout e saída de carro são funções distintas.
+- Proteja itens manuais explicitamente. Se houver conflito entre cópias de um item manual, não escolha uma versão silenciosamente.
+- O motor bloqueia gravação quando encontra automático legado sem vínculo. Resolva a migração e execute novamente, em vez de remover essa proteção.
+
+Padronize category como hotel nas duas representações persistidas de hospedagem. A etiqueta Airbnb na interface deve vir do tipo da reserva, não de salvar valores incompatíveis entre JSON e tabela.
+
+## 6. Persistência e verificação
+
+persist(plan):
+1. Trabalhar com todas as datas de changedDates e com os respectivos IDs reais de itinerary_days.
+2. Tratar também a data original e a nova data de um evento movido pela madrugada.
+3. Se faltar o dia de calendário necessário, tratar sua criação/associação explicitamente. Não jogar o evento na data anterior.
+4. Preservar UUID válido existente. Novos automáticos usam ruleId. UUID de manual novo é criado uma vez na criação, não no mapper.
+5. Fazer upsert em hourly_schedules com os mesmos IDs e vínculos de dia que serão usados no JSON.
+6. Atualizar hourly_schedule e os títulos alterados dos dias correspondentes.
+7. Somente após gravações bem-sucedidas, remover linhas obsoletas comprovadamente pertencentes ao motor. Nunca apagar todos os registros da viagem para depois reinserir.
+8. Conferir error e a quantidade/identidade das linhas afetadas em todas as operações. Um update sem erro mas sem linha atualizada não comprova sucesso.
+9. Não chamar o coordenador novamente dentro da persistência, nem fazer loaders chamarem a reconciliação.
+10. Não remover manual para fazer contagens coincidirem.
+11. Se usar requisições separadas, tratar e expor falha parcial. Não chamar isso de transação ACID.
+12. Se adotar uma RPC transacional real, implemente-a e teste-a com a autorização da viagem; não declarar atomicidade sem essa implementação.
+
+verify(plan):
+- Reler os dados do Supabase após gravar.
+- Conferir IDs, data efetiva via itinerary_day, time, title, location, category, notes, source_type, source_id e completed.
+- Conferir também os metadados de função/fuso armazenados no JSON.
+- Comparar cada representação com o plano calculado, não apenas uma com a outra.
+- Contagens iguais e dois registros com o mesmo erro não significam regras corretas.
+- Falha de leitura/verificação precisa lançar erro. Não aplicar estado local como sucesso.
+
+apply(plan):
+- Atualizar React com os dados já gravados/verificados.
+- Guardar o tripId da operação. Se o usuário mudar de viagem durante a execução, não colocar o resultado da viagem anterior na tela da nova.
+- Não executar syncAllEventsToHourlySchedule ou outro gerador antigo depois de aplicar o plano.
+
+report(issues):
+- Mostrar pendências de modo compreensível.
+- complete=false não pode produzir mensagem “100% validado” ou “nenhuma limitação”.
+- Falta de dados permite manter os itens dependentes com aviso. Não inventar novos horários para esconder a pendência.
+
+Em mapHourlyScheduleToDb:
+- Substituir a geração incondicional do UUID por validação/preservação de item.id.
+- Validar HH:mm estritamente; horário ausente/inválido deve retornar erro, não 08:00.
+- Persistir a mesma categoria e o mesmo conteúdo usados no JSON.
+- Manter sourceId da reserva correta.
+
+## 7. Integração real com abertura e salvamento de modais
+
+Instancie createRulesController uma vez no PlannerProvider, usando ref estável. O adaptador deve ler dados atuais e usar atualizações funcionais do React para não capturar a viagem antiga.
+
+Exponha no contexto os métodos tipados:
+- onModalOpen(tripId)
+- onModalSave(tripId, saveSource)
+- evaluateAndCorrectAllItems(tripId)
+
+Exemplo do fluxo de abertura a adaptar aos componentes reais:
+
+~~~tsx
+const handleOpen = async () => {
+  const tripId = activeTripId;
+  if (!tripId) return;
+  setModalOpen(true);
+  setCheckingRules(true);
+  try {
+    await rulesController.onModalOpen(tripId);
+  } catch (error) {
+    // Exibir o erro/pendência no modal; manter o formulário acessível para correção.
+    showRulesError(error);
+  } finally {
+    setCheckingRules(false);
+  }
+};
+~~~
+
+Exemplo de salvamento, com distinção entre fonte salva e roteiro reconciliado:
+
+~~~tsx
+const handleSave = async () => {
+  const tripId = activeTripId;
+  if (!tripId || saving) return;
+  setSaving(true);
+  let sourceSaved = false;
+  try {
+    const plan = await rulesController.onModalSave(tripId, async () => {
+      // Este método interno salva somente a fonte, SEM chamar onModalSave novamente.
+      const result = await persistSourceOnly(tripId, formData);
+      if (!result.success) throw new Error(result.error || 'Falha ao salvar');
+      sourceSaved = true;
+    });
+    if (plan.complete) {
+      showSavedAndReconciled();
+      setModalOpen(false);
+    } else {
+      // A fonte está salva. Mostrar o que falta para concluir o roteiro.
+      showSavedWithPendingRules(plan.issues);
+      // Uma nova tentativa de reconciliação usa evaluateAndCorrectAllItems.
+      // Não criar a mesma reserva novamente.
+    }
+  } catch (error) {
+    if (sourceSaved) {
+      showSourceSavedButSchedulePending(error);
+      // Guardar o ID salvo e oferecer repetir só a reconciliação.
+    } else {
+      showSaveError(error);
+    }
+  } finally {
+    setSaving(false);
+  }
+};
+~~~
+
+Esses trechos demonstram o fluxo. Implemente os métodos com os nomes e as notificações reais da aplicação; não deixe placeholders no código final.
+
+Exigências:
+- Fazer inventário de todos os modais da viagem e conectar os handlers efetivos.
+- Incluir os modais de criação e edição e os de escolha de acomodação por noite.
+- Não depender de um useEffect sem controle que grave em cada renderização.
+- Atualizar os salvamentos públicos existentes do contexto e separar métodos internos sem recálculo para evitar recursão/fila aguardando a si mesma.
+- Não envolver um salvamento já coordenado em outro onModalSave. Cada ação entra na fila uma vez.
+- Desabilitar duplo clique enquanto salva.
+- Não salvar rascunhos de outro modal durante a abertura.
+- Ao carregar uma viagem, chamar onTripLoaded depois de os dados básicos estarem disponíveis.
+- Alterações/exclusões fora de modal também chamam o coordenador para que não produzam um caminho de gravação sem regras.
+- O contexto não deve capturar uma configuração antiga: load retorna Snapshot.policy com os parâmetros atuais do banco.
+
+## 8. Código completo a criar em src/utils/itineraryRules.ts
+
+O utilitário generateDeterministicUUID já existe em src/utils/uuid.ts. Preserve essa dependência. O código abaixo não depende de React nem acessa o Supabase diretamente: isso fica no adaptador.
+
+```typescript
+import { generateDeterministicUUID } from './uuid';
+
+export type Clock = { date: string; time: string; timeZone: string; offsetMinutes?: number };
+export type Place = { id: string; name: string; address?: string };
+export type Route = { minutes?: number; description: string; estimated: boolean };
+export type Issue = {
+  jobId: string;
+  code: string;
+  message: string;
+  level: 'pending' | 'error';
+};
+export type Role =
+  | 'morning' | 'wake' | 'leave' | 'parking' | 'gate' | 'early' | 'open'
+  | 'close' | 'car' | 'return' | 'arrival' | 'end' | 'precheck'
+  | 'hotelLeave' | 'roomReady' | 'checkout' | 'airport'
+  | 'pickupAllowed' | 'pickup' | 'dropoff' | 'dropoffDeadline'
+  | 'takeoff' | 'land' | 'activity';
+export type ScheduleItem = {
+  id: string;
+  time: string;
+  title: string;
+  location?: string;
+  category: 'transport' | 'park' | 'hotel' | 'flight' | 'other' | 'dining' | 'shopping';
+  completed?: boolean;
+  notes?: string;
+  sourceType?: string;
+  sourceId?: string;
+};
+export type ExistingItem = {
+  date: string;
+  timeZone: string;
+  item: ScheduleItem;
+  binding?: { jobId: string; role: Role };
+};
+export type RuleEvent = ExistingItem & {
+  binding: { jobId: string; role: Role };
+  at: number;
+};
+export type Policy = {
+  airportLeadMinutes: number;
+  gateLeadMinutes: number;
+  wakeLeadMinutes: number;
+  boardingMinutes: number;
+  precheckMinutes: number;
+  normalStart: string;
+  normalEnd: string;
+  nearCheckoutMinutes?: number;
+};
+export const DEFAULT_POLICY: Policy = {
+  airportLeadMinutes: 180,
+  gateLeadMinutes: 30,
+  wakeLeadMinutes: 30,
+  boardingMinutes: 5,
+  precheckMinutes: 30,
+  normalStart: '07:30',
+  normalEnd: '22:30',
+  // Imigração, locadora e intervalo curto NÃO recebem valores inventados.
+};
+type BaseJob = { id: string; sourceId: string };
+export type Job =
+  | (BaseJob & {
+      kind: 'activity'; at: Clock; title: string; place: Place;
+      sourceType: 'show' | 'dining' | 'fastpass'; notes?: string;
+    })
+  | (BaseJob & {
+      kind: 'flight'; direction: 'outbound' | 'inbound' | 'internal';
+      departure: Clock; arrival: Clock; origin: Place; destination: Place;
+      journeyArrival?: Clock;
+      home?: Place; homeToAirport?: Route;
+    })
+  | (BaseJob & {
+      kind: 'rental'; earliestPickup: Clock; returnDeadline: Clock;
+      pickupPlace: Place; returnPlace: Place;
+    })
+  | (BaseJob & {
+      kind: 'arrival'; landing: Clock; airport: Place; stay: Place;
+      checkIn: Clock; airportProcessingMinutes?: number; routeToStay: Route;
+      rental?: {
+        id: string; place: Place; earliest: Clock;
+        airportToRental: Route; serviceMinutes?: number;
+      };
+    })
+  | (BaseJob & {
+      kind: 'airport-return'; stay: Place; airport: Place;
+      checkOut: Clock; takeoff: Clock; directRoute?: Route;
+      luggagePlanConfirmed?: boolean;
+      rental?: {
+        id: string; place: Place; deadline: Clock;
+        toRental: Route; serviceMinutes?: number; toTerminal: Route;
+      };
+    })
+  | (BaseJob & {
+      kind: 'transfer'; from: Place; to: Place;
+      departure: Clock; checkOut: Clock; checkIn: Clock; route: Route;
+    })
+  | (BaseJob & {
+      kind: 'free'; date: string; timeZone: string; stay: Place;
+      sleptPreviousNight: boolean;
+    })
+  | (BaseJob & {
+      kind: 'park'; date: string; timeZone: string; name: string;
+      opening: string; closing: string; origin: Place; night: Place;
+      mode: 'car' | 'walk' | 'boat' | 'bus';
+      outbound: Route; inbound: Route;
+      parkingToGateMinutes?: number; gateToParkingMinutes?: number;
+      early?: { time: string; eligible: boolean; available: boolean };
+      latestActivityEnd?: Clock; returnEndUnknown?: boolean;
+      morningProvisional?: boolean;
+      detour?: { stay: Place; fromOrigin: Route; roomAvailable?: Clock };
+      earlyCheckout?: { at: Clock; contractualLimit: Clock; luggageConfirmed: boolean };
+    });
+
+export type Snapshot = {
+  tripId: string;
+  sourcesComplete: boolean;
+  jobs: Job[];
+  existing: ExistingItem[];
+  storageMismatchDates: string[];
+  dayTitles: Record<string, string>;
+  policy?: Partial<Policy>;
+};
+export type Plan = {
+  tripId: string;
+  events: ExistingItem[];
+  titles: Record<string, string>;
+  issues: Issue[];
+  changedDates: string[];
+  complete: boolean;
+};
+export type StayNight = {
+  id: string; name: string; checkInDate: string; checkOutDate: string;
+};
+
+const MIN = 60_000;
+const ROLES: Role[] = [
+  'morning','wake','leave','parking','gate','early','open','close','car',
+  'return','arrival','end','precheck','hotelLeave','roomReady','checkout',
+  'airport','pickupAllowed','pickup','dropoff','dropoffDeadline','takeoff','land','activity',
+];
+const AUTO_SOURCES = new Set(['park','flight','transport','accommodation','car_rental','show','dining','fastpass']);
+const ACCESS: Record<string, number> = {
+  'seaworld orlando': 15, 'seaworld': 15,
+  'busch gardens tampa bay': 20, 'busch gardens': 20,
+  'disneys animal kingdom': 20, 'animal kingdom': 20,
+  'disneys hollywood studios': 20, 'hollywood studios': 20,
+  'magic kingdom': 45,
+  'universals epic universe': 15, 'epic universe': 15,
+  'universals islands of adventure': 25, 'islands of adventure': 25,
+  'universal studios florida': 25,
+};
+const normalize = (s: string) => s.toLowerCase().normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '').replace(/[^\w\s]/g, '')
+  .replace(/\s+/g, ' ').trim();
+const location = (p: Place) => p.address || p.name;
+
+function minuteValue(value: number | undefined, label: string): number {
+  if (value === undefined || !Number.isFinite(value) || value < 0 || !Number.isInteger(value)) {
+    throw new Error('Defina ' + label + ' em minutos inteiros, inclusive zero se aplicável.');
+  }
+  return value;
+}
+function routeMinutes(r: Route | undefined, label: string): number {
+  return minuteValue(r?.minutes, label);
+}
+function routeNote(r: Route): string {
+  return (r.estimated ? 'Estimativa: ' : 'Duração informada: ') +
+    r.minutes + ' min. Fonte: ' + r.description + '.';
+}
+const formatters = new Map<string, Intl.DateTimeFormat>();
+function formatter(zone: string): Intl.DateTimeFormat {
+  if (!zone) throw new Error('Fuso IANA ausente.');
+  let f = formatters.get(zone);
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-CA', {
+      timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    });
+    formatters.set(zone, f);
+  }
+  return f;
+}
+export function clockAt(at: number, timeZone: string): Clock {
+  const parts: Record<string, string> = {};
+  for (const p of formatter(timeZone).formatToParts(new Date(at))) parts[p.type] = p.value;
+  return {
+    date: parts.year + '-' + parts.month + '-' + parts.day,
+    time: parts.hour + ':' + parts.minute,
+    timeZone,
+  };
+}
+export function toInstant(c: Clock): number {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(c.date) || !/^\d{2}:\d{2}$/.test(c.time)) {
+    throw new Error('Data/horário inválido: ' + c.date + ' ' + c.time);
+  }
+  const [y,m,d] = c.date.split('-').map(Number);
+  const [h,n] = c.time.split(':').map(Number);
+  const local = Date.UTC(y,m-1,d,h,n);
+  if (h > 23 || n > 59 || new Date(Date.UTC(y,m-1,d)).toISOString().slice(0,10) !== c.date) {
+    throw new Error('Data/horário inválido.');
+  }
+  if (c.offsetMinutes !== undefined) {
+    if (!Number.isInteger(c.offsetMinutes) || Math.abs(c.offsetMinutes) > 840) {
+      throw new Error('Deslocamento UTC inválido.');
+    }
+    const instant = local - c.offsetMinutes * MIN;
+    const back = clockAt(instant,c.timeZone);
+    if (back.date !== c.date || back.time !== c.time) throw new Error('Offset não corresponde ao fuso/data.');
+    return instant;
+  }
+  let guess = local;
+  for (let i = 0; i < 6; i++) {
+    const p = clockAt(guess, c.timeZone);
+    const [py,pm,pd] = p.date.split('-').map(Number);
+    const [ph,pn] = p.time.split(':').map(Number);
+    const delta = local - Date.UTC(py,pm-1,pd,ph,pn);
+    if (delta === 0) {
+      for (const offset of [-120,-60,-30,30,60,120]) {
+        const other = clockAt(guess + offset * MIN, c.timeZone);
+        if (other.date === c.date && other.time === c.time) {
+          throw new Error('Horário ambíguo por mudança de fuso; fornecer offsetMinutes no adaptador.');
+        }
+      }
+      return guess;
+    }
+    guess += delta;
+  }
+  throw new Error('Horário inexistente na mudança de fuso.');
+}
+export function shiftDate(date: string, days: number): string {
+  const [y,m,d] = date.split('-').map(Number);
+  return new Date(Date.UTC(y,m-1,d+days)).toISOString().slice(0,10);
+}
+export function resolveNight<T extends StayNight>(
+  stays: T[], date: string, selections: Record<string,string>,
+): T | undefined {
+  const covering = stays.filter(s => s.checkInDate <= date && date < s.checkOutDate);
+  if (covering.length === 0) return undefined;
+  const selected = covering.find(s => s.id === selections[date]);
+  if (selected) return selected;
+  if (covering.length === 1) return covering[0];
+  throw new Error('Escolha de pernoite pendente em ' + date + '.');
+}
+export function ruleId(tripId: string, jobId: string, role: Role): string {
+  return generateDeterministicUUID('itinerary-rules-v1', tripId + '|' + jobId + '|' + role);
+}
+function signature(e: ExistingItem): string {
+  const i = e.item;
+  return JSON.stringify([
+    e.date,e.timeZone,i.id,i.time,i.title,i.location || '',
+    i.category === ('airbnb' as string) ? 'hotel' : i.category,
+    !!i.completed,i.notes || '',i.sourceType || '',i.sourceId || '',
+  ]);
+}
+const ROLE_ORDER: Partial<Record<Role,number>> = {
+  wake:0,morning:0,checkout:10,pickupAllowed:15,pickup:20,precheck:20,
+  leave:30,hotelLeave:30,parking:40,gate:50,early:60,open:70,activity:80,
+  close:90,car:100,return:110,dropoff:120,dropoffDeadline:125,
+  airport:130,takeoff:140,land:150,arrival:160,roomReady:170,end:180,
+};
+function byDate(a: ExistingItem, b: ExistingItem): number {
+  return a.date.localeCompare(b.date) || a.item.time.localeCompare(b.item.time) ||
+    (ROLE_ORDER[a.binding?.role as Role] ?? 85) - (ROLE_ORDER[b.binding?.role as Role] ?? 85) ||
+    a.item.id.localeCompare(b.item.id);
+}
+
+/**
+ * Jobs são adaptados de fontes completas. As durações nunca são extraídas
+ * automaticamente de texto livre. Um binding vincula item legado a fonte/função.
+ */
+export function evaluateItineraryRules(
+  snapshot: Snapshot, customPolicy: Partial<Policy> = {},
+): Plan {
+  if (!snapshot.sourcesComplete) throw new Error('Leitura incompleta: reconciliação bloqueada.');
+  const policy = { ...DEFAULT_POLICY, ...customPolicy, ...snapshot.policy };
+  for (const [key,value] of Object.entries({
+    airportLeadMinutes: policy.airportLeadMinutes, gateLeadMinutes: policy.gateLeadMinutes,
+    wakeLeadMinutes: policy.wakeLeadMinutes, boardingMinutes: policy.boardingMinutes,
+    precheckMinutes: policy.precheckMinutes,
+  })) minuteValue(value, key);
+  const issues: Issue[] = [];
+  const output: ExistingItem[] = [];
+  const titles: Record<string,string> = {};
+  const generated = new Set<string>();
+  const blocked = new Set<string>();
+  const jobIds = new Set(snapshot.jobs.map(j => j.id));
+  if (jobIds.size !== snapshot.jobs.length) throw new Error('Jobs com IDs duplicados.');
+  const owned = new Map<string, ExistingItem[]>();
+  const canonical = new Map<string,{jobId:string;role:Role}>();
+  for (const j of snapshot.jobs) for (const role of ROLES) {
+    canonical.set(ruleId(snapshot.tripId,j.id,role), {jobId:j.id,role});
+  }
+  const identify = (e: ExistingItem) => e.binding || canonical.get(e.item.id);
+  for (const e of snapshot.existing) {
+    if (e.item.sourceType === 'manual') continue;
+    const b = identify(e);
+    if (b) {
+      const key = b.jobId + '|' + b.role;
+      owned.set(key, [...(owned.get(key) || []), e]);
+    }
+  }
+  const issue = (jobId: string, code: string, message: string, level: Issue['level'] = 'pending') =>
+    issues.push({jobId,code,message,level});
+  const at = (date: string, time: string, timeZone: string) => toInstant({date,time,timeZone});
+  const normalEnd = (date: string, zone: string) => at(date,policy.normalEnd,zone);
+  const stage = (j: Job, roles: Role[], fn: () => void) => {
+    const lengthBefore = output.length;
+    const keysBefore = new Set(generated);
+    try { fn(); }
+    catch (error) {
+      output.splice(lengthBefore);
+      generated.clear();
+      for (const k of keysBefore) generated.add(k);
+      for (const r of roles) blocked.add(j.id + '|' + r);
+      issue(j.id,'MISSING_OR_INVALID_INPUT',error instanceof Error ? error.message : String(error));
+    }
+  };
+  const emit = (
+    j: Job, role: Role, instant: number, zone: string, title: string,
+    place: string, sourceType: string, notes = '', sourceId = j.sourceId,
+  ) => {
+    if (!Number.isFinite(instant)) throw new Error('Instante inválido em ' + role);
+    const key = j.id + '|' + role;
+    if (generated.has(key)) throw new Error('Função duplicada: ' + key);
+    generated.add(key);
+    const previous = (owned.get(key) || []).slice().sort((a,b)=>a.item.id.localeCompare(b.item.id));
+    const c = clockAt(instant,zone);
+    const previousUuid = previous.find(e=>/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(e.item.id));
+    const id = previousUuid?.item.id || ruleId(snapshot.tripId,j.id,role);
+    if (snapshot.existing.some(e=>e.item.id === id && e.item.sourceType === 'manual')) {
+      throw new Error('ID de evento automático colide com atividade manual.');
+    }
+    const category: ScheduleItem['category'] =
+      sourceType === 'flight' ? 'flight' :
+      ['park','show','fastpass'].includes(sourceType) ? 'park' :
+      sourceType === 'dining' ? 'dining' :
+      sourceType === 'accommodation' ? 'hotel' : 'transport';
+    output.push({
+      date:c.date,timeZone:zone,at:instant,binding:{jobId:j.id,role},
+      item:{id,time:c.time,title,location:place,category,
+        completed:previous.some(e=>!!e.item.completed),notes,sourceType,sourceId},
+    } as RuleEvent);
+  };
+  const lodgingEnd = (j: Job, date: string, zone: string, stay: Place, arrival: number, requiredEnd = arrival) => {
+    const end = Math.max(normalEnd(date,zone),arrival,requiredEnd);
+    const c = clockAt(arrival,zone);
+    const suffix = c.date !== date ? ' — jornada de ' + date : '';
+    emit(j,'arrival',arrival,zone,
+      (end === arrival ? 'Chegada e fim do dia — ' : 'Chegada à acomodação — ') + stay.name + suffix,
+      location(stay),'accommodation','Chegada calculada pelos trechos desta jornada.',stay.id);
+    if (end !== arrival) emit(j,'end',end,zone,'Fim do dia / descanso — ' + stay.name,
+      location(stay),'accommodation','Marcador de descanso posterior à chegada.',stay.id);
+  };
+  const parkDates = new Set(snapshot.jobs.filter(j=>j.kind === 'park').map(j=>(j as Extract<Job,{kind:'park'}>).date));
+
+  for (const j of snapshot.jobs) {
+    if (j.kind === 'activity') stage(j,['activity'],()=>{
+      emit(j,'activity',toInstant(j.at),j.at.timeZone,j.title,
+        location(j.place),j.sourceType,j.notes || 'Horário da atividade cadastrada.');
+    });
+    if (j.kind === 'flight') {
+      stage(j,['takeoff','land'],()=>{
+        const departure = toInstant(j.departure), arrival = toInstant(j.arrival);
+        if (arrival <= departure) throw new Error('Chegada do voo não é posterior à decolagem.');
+        emit(j,'takeoff',departure,j.departure.timeZone,'Decolagem — ' + j.origin.name,
+          location(j.origin),'flight','Horário da reserva; fuso do aeroporto de origem.');
+        emit(j,'land',arrival,j.arrival.timeZone,'Pouso — ' + j.destination.name,
+          location(j.destination),'flight','Horário da reserva; fuso do destino.');
+        const finalArrival = j.journeyArrival || j.arrival;
+        if (toInstant(finalArrival) < arrival) throw new Error('Chegada final da viagem antecede o segmento.');
+        if (j.direction === 'outbound') {
+          titles[j.departure.date] = j.departure.date === finalArrival.date ? 'Chegada' : 'Saída de casa';
+          titles[finalArrival.date] = 'Chegada';
+        } else if (j.direction === 'inbound') {
+          titles[j.departure.date] = j.departure.date === finalArrival.date ? 'Fim da Viagem' : 'Retorno para casa';
+          titles[finalArrival.date] = 'Fim da Viagem';
+        }
+      });
+      if (j.direction === 'outbound') stage(j,['wake','leave','airport'],()=>{
+        if (!j.home) throw new Error('Informar endereço/cidade de saída de casa.');
+        const terminal = toInstant(j.departure) - policy.airportLeadMinutes * MIN;
+        const leave = terminal - routeMinutes(j.homeToAirport,'trajeto casa → aeroporto') * MIN;
+        emit(j,'wake',leave-policy.wakeLeadMinutes*MIN,j.departure.timeZone,
+          'Acordar / preparativos',location(j.home),'transport');
+        emit(j,'leave',leave,j.departure.timeZone,'Saída de casa → ' + j.origin.name,
+          location(j.home),'transport',routeNote(j.homeToAirport!));
+        emit(j,'airport',terminal,j.departure.timeZone,'Chegada ao aeroporto — ' + j.origin.name,
+          location(j.origin),'transport','Antecedência de ' + policy.airportLeadMinutes + ' min.');
+        const leaveDate = clockAt(leave,j.departure.timeZone).date;
+        if (leaveDate !== (j.journeyArrival || j.arrival).date) titles[leaveDate] = 'Saída de casa';
+      });
+    }
+
+    if (j.kind === 'rental') stage(j,['pickupAllowed','dropoffDeadline'],()=>{
+      emit(j,'pickupAllowed',toInstant(j.earliestPickup),j.earliestPickup.timeZone,
+        'Retirada permitida a partir deste horário',location(j.pickupPlace),'car_rental',
+        'Marco contratual. A retirada planejada depende da liberação do viajante.');
+      emit(j,'dropoffDeadline',toInstant(j.returnDeadline),j.returnDeadline.timeZone,
+        'Prazo máximo para concluir a devolução do carro',location(j.returnPlace),'car_rental',
+        'Devolver antes é permitido. Este marco não representa a chegada planejada.');
+    });
+
+    if (j.kind === 'arrival') stage(j,['pickup','leave','arrival','roomReady','end'],()=>{
+      const zone = j.checkIn.timeZone;
+      const ready = toInstant(j.landing) +
+        minuteValue(j.airportProcessingMinutes,'desembarque/imigração/bagagens, sem incluir a locadora')*MIN;
+      let leave = ready, origin = j.airport;
+      if (j.rental) {
+        const rentalArrival = ready + routeMinutes(j.rental.airportToRental,'aeroporto → locadora')*MIN;
+        const pickup = Math.max(rentalArrival,toInstant(j.rental.earliest));
+        const service = minuteValue(j.rental.serviceMinutes,'procedimentos de retirada do carro');
+        emit(j,'pickup',pickup,zone,'Retirada planejada do carro',location(j.rental.place),'car_rental',
+          'Depois da liberação no aeroporto e do início contratual. Procedimentos: ' + service + ' min.',j.rental.id);
+        leave = pickup + service*MIN;
+        origin = j.rental.place;
+      }
+      const arrival = leave + routeMinutes(j.routeToStay,'origem de chegada → acomodação')*MIN;
+      const checkIn = Math.max(arrival,toInstant(j.checkIn));
+      emit(j,'leave',leave,zone,'Deslocamento: ' + origin.name + ' → ' + j.stay.name,
+        location(origin),'transport',routeNote(j.routeToStay));
+      emit(j,'roomReady',checkIn,zone,'Check-in previsto — ' + j.stay.name,
+        location(j.stay),'accommodation','Contratual: ' + j.checkIn.time +
+        '. Chegada estimada: ' + clockAt(arrival,zone).time + '.',j.stay.id);
+      lodgingEnd(j,clockAt(toInstant(j.landing),zone).date,zone,j.stay,arrival,checkIn);
+    });
+
+    if (j.kind === 'transfer') stage(j,['morning','checkout','leave','roomReady','arrival','end'],()=>{
+      const leave = toInstant(j.departure), zone = j.departure.timeZone;
+      const arrival = leave + routeMinutes(j.route,'acomodação anterior → nova acomodação')*MIN;
+      const checkOut = Math.min(toInstant(j.checkOut),leave);
+      const checkIn = Math.max(toInstant(j.checkIn),arrival);
+      const morning = Math.min(at(j.departure.date,policy.normalStart,zone),checkOut-policy.wakeLeadMinutes*MIN);
+      emit(j,'morning',morning,zone,'Início do dia — ' + j.from.name,location(j.from),'accommodation','',j.from.id);
+      emit(j,'checkout',checkOut,zone,'Check-out — ' + j.from.name,location(j.from),'accommodation',
+        'Limite contratual: ' + j.checkOut.time + '.',j.from.id);
+      emit(j,'leave',leave,zone,'Deslocamento: ' + j.from.name + ' → ' + j.to.name,
+        location(j.from),'transport',routeNote(j.route));
+      emit(j,'roomReady',checkIn,zone,'Check-in previsto — ' + j.to.name,location(j.to),'accommodation',
+        'Contratual: ' + j.checkIn.time + '. Chegada estimada: ' + clockAt(arrival,zone).time + '.',j.to.id);
+      lodgingEnd(j,j.departure.date,zone,j.to,arrival,checkIn);
+    });
+
+    if (j.kind === 'airport-return') stage(j,['morning','checkout','leave','dropoff','airport'],()=>{
+      const target = toInstant(j.takeoff)-policy.airportLeadMinutes*MIN;
+      const zone = j.checkOut.timeZone;
+      let leave: number;
+      let firstDrive: number;
+      let returnService = 0, terminalDrive = 0;
+      if (j.rental) {
+        firstDrive = routeMinutes(j.rental.toRental,'acomodação → locadora');
+        returnService = minuteValue(j.rental.serviceMinutes,'procedimentos de devolução');
+        terminalDrive = routeMinutes(j.rental.toTerminal,'locadora → terminal');
+        leave = Math.min(target-(returnService+terminalDrive)*MIN,
+          toInstant(j.rental.deadline)-returnService*MIN)-firstDrive*MIN;
+      } else {
+        firstDrive = routeMinutes(j.directRoute,'acomodação → terminal');
+        leave = target-firstDrive*MIN;
+      }
+      const contractual = toInstant(j.checkOut);
+      const gap = (leave-contractual)/MIN;
+      if (gap >= 0) {
+        if (policy.nearCheckoutMinutes === undefined) {
+          throw new Error('Definir o intervalo considerado curto entre checkout e partida.');
+        } else if (gap <= minuteValue(policy.nearCheckoutMinutes,'intervalo curto de checkout')) {
+          leave = contractual;
+        } else if (!j.luggagePlanConfirmed) {
+          issue(j.id,'LUGGAGE_PLAN','Há intervalo após checkout; definir bagagens/espera.');
+        }
+      }
+      const checkout = Math.min(contractual,leave);
+      const morning = Math.min(at(j.checkOut.date,policy.normalStart,zone),checkout-policy.wakeLeadMinutes*MIN);
+      emit(j,'morning',morning,zone,'Acordar / organizar saída — ' + j.stay.name,
+        location(j.stay),'accommodation','Antes do primeiro compromisso de saída.',j.stay.id);
+      emit(j,'checkout',checkout,zone,'Check-out — ' + j.stay.name,location(j.stay),'accommodation',
+        'Limite contratual: ' + j.checkOut.time + '.',j.stay.id);
+      emit(j,'leave',leave,zone,'Saída para ' + j.airport.name,location(j.stay),'transport',
+        'Planejado para chegar ao terminal pelo menos ' + policy.airportLeadMinutes + ' min antes da decolagem.');
+      let terminal = leave+firstDrive*MIN;
+      if (j.rental) {
+        const end = terminal+returnService*MIN;
+        if (end > toInstant(j.rental.deadline)) throw new Error('Devolução ultrapassa o prazo contratual.');
+        emit(j,'dropoff',terminal,zone,'Devolução planejada do carro',location(j.rental.place),'car_rental',
+          'Procedimentos: ' + returnService + ' min. Conclusão: ' + clockAt(end,zone).time + '.',j.rental.id);
+        terminal = end+terminalDrive*MIN;
+      }
+      if (terminal > target) throw new Error('Chegada ao terminal não respeita as três horas.');
+      emit(j,'airport',terminal,j.takeoff.timeZone,'Chegada ao terminal — ' + j.airport.name,
+        location(j.airport),'transport','Antes do horário-alvo ' + clockAt(target,j.takeoff.timeZone).time + '.');
+    });
+
+    if (j.kind === 'free') {
+      if (parkDates.has(j.date)) {
+        issue(j.id,'FREE_PARK_CONFLICT','Dia livre e parque atribuídos à mesma data. Corrigir adaptação das fontes.','error');
+        continue;
+      }
+      stage(j,['morning','end'],()=>{
+        if (j.sleptPreviousNight) emit(j,'morning',at(j.date,policy.normalStart,j.timeZone),j.timeZone,
+          'Início do dia — ' + j.stay.name,location(j.stay),'accommodation','Dia sem saída estruturada.',j.stay.id);
+        emit(j,'end',normalEnd(j.date,j.timeZone),j.timeZone,'Fim do dia / descanso — ' + j.stay.name,
+          location(j.stay),'accommodation','Dia livre; nenhum deslocamento de parque foi criado.',j.stay.id);
+      });
+    }
+
+    if (j.kind === 'park') {
+      const zone = j.timeZone;
+      const opening = at(j.date,j.opening,zone);
+      let entry = opening, early: number | undefined;
+      if (j.early?.eligible && j.early.available) {
+        const candidate = at(j.date,j.early.time,zone);
+        if (candidate < opening) { entry = candidate; early = candidate; }
+        else issue(j.id,'INVALID_EARLY','Early Entry não antecede a abertura; usar abertura normal.');
+      }
+      const gate = entry-policy.gateLeadMinutes*MIN;
+      const knownAccess = ACCESS[normalize(j.name)];
+      const pOut = j.mode === 'car' ? j.parkingToGateMinutes ?? knownAccess : 0;
+      const pBack = j.mode === 'car' ? j.gateToParkingMinutes ?? pOut : 0;
+      const provisional = j.morningProvisional ? ' Planejamento provisório após a jornada anterior.' : '';
+      stage(j,['gate','early','open','roomReady'],()=>{
+        emit(j,'gate',gate,zone,'Chegada às catracas — ' + j.name,j.name,'park',
+          policy.gateLeadMinutes + ' min antes da entrada válida.' + provisional);
+        if (early !== undefined) emit(j,'early',early,zone,'Early Entry — ' + j.name,j.name,'park',
+          'Elegibilidade e disponibilidade informadas para esta data.');
+        emit(j,'open',opening,zone,'Abertura normal — ' + j.name,j.name,'park','Horário cadastrado de planejamento.');
+        if (j.detour?.roomAvailable) emit(j,'roomReady',toInstant(j.detour.roomAvailable),zone,
+          'Quarto disponível — ' + j.detour.stay.name,location(j.detour.stay),'accommodation',
+          'Informativo; não exige retorno durante o passeio.',j.detour.stay.id);
+      });
+      stage(j,['wake','leave','precheck','hotelLeave','parking','checkout'],()=>{
+        const access = minuteValue(pOut,'acesso à entrada');
+        const drive = routeMinutes(j.outbound,'ida até estacionamento/entrada');
+        const parking = gate-access*MIN;
+        const lastLeave = parking-drive*MIN;
+        let firstLeave = lastLeave;
+        if (j.detour) firstLeave -= (policy.precheckMinutes+
+          routeMinutes(j.detour.fromOrigin,'origem → hotel de pré-check-in'))*MIN;
+        emit(j,'wake',firstLeave-policy.wakeLeadMinutes*MIN,zone,'Acordar — ' + j.origin.name,
+          location(j.origin),'accommodation','Exatamente 30 min antes da primeira saída.'+provisional,j.origin.id);
+        emit(j,'leave',firstLeave,zone,'Saída de ' + j.origin.name,
+          location(j.origin),'transport',j.detour ? routeNote(j.detour.fromOrigin) : routeNote(j.outbound));
+        if (j.detour) {
+          const service = lastLeave-policy.precheckMinutes*MIN;
+          emit(j,'precheck',service,zone,'Pré-check-in / chaves — ' + j.detour.stay.name,
+            location(j.detour.stay),'accommodation','Parada de ' + policy.precheckMinutes + ' min.',j.detour.stay.id);
+          emit(j,'hotelLeave',lastLeave,zone,'Saída do hotel → ' + j.name,
+            location(j.detour.stay),'transport',routeNote(j.outbound));
+        }
+        if (j.mode === 'car') emit(j,'parking',parking,zone,'Chegada ao estacionamento — ' + j.name,
+          j.name,'transport','Acesso até as catracas: ' + access + ' min.');
+        if (j.earlyCheckout) {
+          const checkout = toInstant(j.earlyCheckout.at);
+          if (checkout < firstLeave-policy.wakeLeadMinutes*MIN || checkout > firstLeave ||
+              checkout > toInstant(j.earlyCheckout.contractualLimit)) {
+            throw new Error('Checkout precisa ocorrer depois de acordar, antes da saída e até o limite contratual.');
+          }
+          emit(j,'checkout',checkout,zone,'Check-out planejado — ' + j.origin.name,location(j.origin),'accommodation',
+            'Limite: '+j.earlyCheckout.contractualLimit.time+
+            (j.earlyCheckout.luggageConfirmed ? '.' : '. Guarda-volumes pendente.'),j.origin.id);
+          if (!j.earlyCheckout.luggageConfirmed) issue(j.id,'LUGGAGE_PLAN','Confirmar guarda-volumes antes do parque.');
+        }
+      });
+      stage(j,['close','car','return','arrival','end'],()=>{
+        let closing = at(j.date,j.closing,zone);
+        if (closing <= opening) closing = at(shiftDate(j.date,1),j.closing,zone);
+        if (j.returnEndUnknown) throw new Error('Término da última atividade pendente; retorno não confirmado.');
+        const exit = Math.max(closing,j.latestActivityEnd ? toInstant(j.latestActivityEnd) : closing);
+        const access = minuteValue(pBack,'acesso de volta ao transporte');
+        const drive = routeMinutes(j.inbound,'volta à acomodação da noite');
+        const car = exit+access*MIN;
+        const board = j.mode === 'car' ? policy.boardingMinutes : 0;
+        const startReturn = car+board*MIN;
+        const arrival = startReturn+drive*MIN;
+        emit(j,'close',exit,zone,'Término das atividades — ' + j.name,j.name,'park',
+          'Depois do fechamento e das atividades com término conhecido.');
+        if (j.mode === 'car') emit(j,'car',car,zone,'Chegada ao carro — ' + j.name,j.name,'transport',
+          'Percurso de '+access+' min; embarque de '+board+' min antes da partida.');
+        emit(j,'return',startReturn,zone,'Retorno → ' + j.night.name,j.name,'transport',
+          routeNote(j.inbound)+' Destino: '+location(j.night)+'.');
+        lodgingEnd(j,j.date,zone,j.night,arrival);
+      });
+    }
+  }
+
+  // Preservar manuais, fontes não gerenciadas e funções bloqueadas por falta de dados.
+  for (const e of snapshot.existing) {
+    const b = identify(e);
+    if (e.item.sourceType === 'manual') { output.push(e); continue; }
+    if (b) {
+      if (blocked.has(b.jobId+'|'+b.role)) {
+        const warning = '[PENDENTE: regra não recalculada por falta de dados] ';
+        output.push({...e,item:{...e.item,notes:warning+(e.item.notes || '').replace(
+          /^\[PENDENTE: regra não recalculada por falta de dados\] /,'')}});
+      }
+      // Outras funções gerenciadas são substituídas ou removidas se a fonte foi excluída.
+      continue;
+    }
+    output.push(e);
+    if (AUTO_SOURCES.has(e.item.sourceType || '')) {
+      issue('legacy','UNBOUND_AUTOMATIC','Vincular o item automático legado '+e.item.id+
+        ' à fonte e função antes de concluir a migração.','error');
+    }
+  }
+  const ids = new Set<string>();
+  for (const e of output) {
+    if (ids.has(e.item.id)) issue('global','DUPLICATE_ID','ID duplicado: '+e.item.id,'error');
+    ids.add(e.item.id);
+  }
+  output.sort(byDate);
+  const dates = new Set([...snapshot.existing.map(e=>e.date),...output.map(e=>e.date),
+    ...snapshot.storageMismatchDates,...Object.keys(titles)]);
+  const changedDates = [...dates].filter(date=>{
+    if (snapshot.storageMismatchDates.includes(date)) return true;
+    if (titles[date] !== undefined && titles[date] !== snapshot.dayTitles[date]) return true;
+    const old = snapshot.existing.filter(e=>e.date === date).map(signature).sort();
+    const next = output.filter(e=>e.date === date).map(signature).sort();
+    return JSON.stringify(old) !== JSON.stringify(next);
+  }).sort();
+  return {
+    tripId:snapshot.tripId,events:output,titles,issues,changedDates,
+    complete:issues.length === 0,
+  };
+}
+
+export interface RulesStore {
+  /** Ler todas as fontes e as duas representações; lançar erro em qualquer falha. */
+  load(tripId: string): Promise<Snapshot>;
+  /** Salvar todos os dias alterados, inclusive origem/destino da madrugada. */
+  persist(plan: Plan): Promise<void>;
+  /** Relê banco e exige igualdade dos campos/IDs/data no JSON e na tabela. */
+  verify(plan: Plan): Promise<void>;
+  /** Atualiza React com o resultado salvo, sem executar geradores antigos. */
+  apply(plan: Plan): void;
+  /** Exibe pendências; complete=false jamais vira mensagem de validação aprovada. */
+  report(issues: Issue[]): void;
+}
+
+/**
+ * Instanciar uma vez por PlannerProvider.
+ * Todos os modais usam a MESMA fila; o loader não pode chamar este controlador.
+ */
+export function createRulesController(store: RulesStore, policy: Partial<Policy> = {}) {
+  let queue: Promise<unknown> = Promise.resolve();
+  const enqueue = <T,>(work: () => Promise<T>): Promise<T> => {
+    const task = queue.then(work);
+    queue = task.then(()=>undefined,()=>undefined);
+    return task;
+  };
+  const evaluateAndCorrectAllItems = async (tripId: string): Promise<Plan> => {
+    const snapshot = await store.load(tripId);
+    if (snapshot.tripId !== tripId) throw new Error('Loader retornou outra viagem.');
+    const plan = evaluateItineraryRules(snapshot,policy);
+    if (plan.issues.some(i=>i.level === 'error')) {
+      store.report(plan.issues);
+      throw new Error('Conflito estrutural: não foi possível salvar a reconciliação.');
+    }
+    if (plan.changedDates.length) await store.persist(plan);
+    await store.verify(plan);
+    store.apply(plan);
+    store.report(plan.issues);
+    return plan;
+  };
+  return {
+    onTripLoaded: (tripId: string) => enqueue(()=>evaluateAndCorrectAllItems(tripId)),
+    onModalOpen: (tripId: string) => enqueue(()=>evaluateAndCorrectAllItems(tripId)),
+    onModalSave: (tripId: string, saveSource: () => Promise<void>) =>
+      enqueue(async()=>{
+        await saveSource(); // Deve lançar erro se o salvamento da fonte falhar.
+        try { return await evaluateAndCorrectAllItems(tripId); }
+        catch (error) {
+          throw new Error('A fonte foi salva, mas o roteiro precisa de reconciliação: '+
+            (error instanceof Error ? error.message : String(error)));
+        }
+      }),
+    evaluateAndCorrectAllItems: (tripId: string) => enqueue(()=>evaluateAndCorrectAllItems(tripId)),
+  };
+}
+
+```
+
+
+## 9. Testes e critérios de aceite
+
+Execute testes do motor e testes de integração dos modais. Não basta compilar.
+
+Casos mínimos:
+1. Entrada às 08:00, trajeto 28 min e acesso 15 min: acordar 06:17, saída 06:47, estacionamento 07:15 e catracas 07:30.
+2. Fechamento 22:00, acesso 15 min, embarque 5 min e carro 28 min: carro 22:15, início do retorno 22:20 e chegada/fim às 22:48.
+3. Se a mesma chegada for 21:48, mostrar chegada 21:48 e descanso 22:30.
+4. Dia livre: início 07:30 e descanso 22:30, sem estacionamento ou retorno de parque inventados.
+5. Primeiro dia: chegada à hospedagem antes do check-in não pode ser deslocada para o check-in. Check-in efetivo após o contratual não gera duplicata.
+6. Retirada contratual antes do pouso: marco contratual permanece; retirada planejada ocorre depois da liberação do viajante.
+7. Transferência com saída 11:30 e trajeto 287 min: chegada 16:17. Checkout usa a hospedagem anterior. Não duplicar um check-in às 16:00.
+8. Parque fecha 01:00 após visita em 31/12: fechamento e todos os retornos ficam em 01/01. Não aparecer 01:00 no começo de 31/12.
+9. Show às 23:59 sem término conhecido: preservar o show e a pendência, sem inventar retorno.
+10. Exemplo de parada no Hard Rock: Early Entry 08:30, catracas 08:00, acesso de carro 25 min, hotel → estacionamento 5 min, pré-check-in 30 min e hospedagem anterior → hotel 41 min. Resultado: acordar 05:49, primeira saída 06:19, pré-check-in 07:00, saída do hotel 07:30 e estacionamento 07:35. São valores de teste; usar os dados reais cadastrados em produção.
+11. Hard Rock com retorno de 10 min e início 21:30: chegada 21:40 e descanso 22:30. Não usar 42 min de retorno ao Airbnb para esse destino.
+12. Dia seguinte ao Hard Rock: origem da manhã Hard Rock; destino da noite resolvido separadamente. Benefício de entrada não depende exclusivamente da hospedagem da noite.
+13. Voo: chegada ao terminal 180 min antes, com procedimentos da locadora incluídos. Data/fuso de origem e destino corretos.
+14. Falta de duração de imigração ou locadora: pendência, sem horário artificial.
+15. Falha na leitura de uma fonte: não interpretar como lista vazia, não apagar eventos.
+16. Falha ao salvar a fonte: não executar a reconciliação como se ela tivesse sido salva.
+17. Fonte salva e reconciliação falhou: informar os dois estados, permitir repetir só a reconciliação sem criar reserva duplicada.
+18. Mudança de data/horário de atividade: atualizar o item no dia correto mantendo UUID e completed.
+19. Itens manuais e dados financeiros preservados.
+20. Repetir a mesma operação: não criar eventos ou IDs novos e não alterar novamente as datas.
+21. Abrir um modal, cancelar e abrir outro: as regras são conferidas com dados já salvos; o rascunho cancelado não aparece no banco.
+22. Salvar um modal enquanto outro abre: execução serializada pela mesma fila.
+23. Alterar configuração e salvar: a próxima avaliação usa os parâmetros recém-lidos, sem recriar o Provider.
+24. Mudar de viagem durante a operação: o resultado não aparece na viagem errada.
+25. JSON e linhas normalizadas devem coincidir com o plano nos campos e IDs, inclusive na madrugada. Testar também campos diferentes com a mesma contagem.
+
+O módulo fornecido foi executado isoladamente em 27 testes funcionais com Node 24. Essa evidência não é uma compilação ou teste do aplicativo integrado. Execute a checagem de tipos, compilação e os testes do aplicativo depois da integração real.
+
+Para os testes de UI, demonstrar abertura e salvamento dos modais reais de hospedagem, parque e horário, e apresentar o inventário dos demais modais conectados. Não declarar a integração pronta enquanto algum modal de viagem ainda usa um salvamento que contorna o coordenador.
+
+## 10. Validação dos registros existentes
+
+Depois de implementar e testar a lógica:
+1. Carregar a viagem 78bbd4b1-2857-43d0-9520-2318a3b157a3, preservando as fontes e a seleção de pernoite.
+2. Migrar a identificação dos itens automáticos legados.
+3. Executar evaluateAndCorrectAllItems nessa viagem.
+4. Reler todas as 16 datas e também qualquer data necessária para a madrugada.
+5. Apresentar, por data, os horários efetivamente lidos do banco: origem matinal, acordar, saída, estacionamento/acesso, catracas, entrada válida, fechamento/término, carro, início do retorno, chegada, descanso e hospedagem noturna.
+6. Em dias sem parque, mostrar apenas os eventos próprios daquele dia.
+7. Listar pendências por ID de item/fonte e explicar o dado necessário; não esconder pendência por contagens iguais.
+8. Confirmar que abrir/salvar novamente um modal não reintroduz 07:30 ou 22:30 em lugares incompatíveis com a regra. O descanso padrão 22:30 continua correto quando o grupo já chegou antes.
+9. Não alterar reservas, pagamentos, custos ou horários contratuais para forçar o roteiro a passar na validação.
+
+## 11. Entrega exigida
+
+Apresente:
+- diff real e lista dos arquivos criados/alterados;
+- conteúdo do arquivo central criado;
+- métodos do adaptador efetivamente implementados;
+- inventário de modais e seus handlers conectados;
+- caminhos antigos removidos/substituídos;
+- resultado real dos testes, compilação e tipos;
+- relatório lido após persistência, com IDs/datas;
+- pendências reais, inclusive parâmetros ainda não cadastrados.
+
+Se não tiver acesso à edição ou ao banco, diga exatamente o que não foi executado. Não afirmar que arquivos ou dados foram alterados sem evidência.
+
+Referência para o adaptador: a documentação de [upsert do Supabase](https://supabase.com/docs/reference/javascript/upsert) descreve o uso de chaves de conflito e o retorno com select. Ela não substitui a verificação das duas representações nem transforma várias requisições em uma transação.
