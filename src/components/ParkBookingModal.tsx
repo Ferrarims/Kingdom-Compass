@@ -1155,17 +1155,23 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
             compErrors.push(`expenses (${rExp.error || 'falha ao sincronizar'})`);
           }
           // Restaurar dia ativo no Supabase
-          const rDay = await updateItineraryDay(activeDay.id, snapshotActiveDay);
-          if (!rDay.success) {
+          let rDay: any;
+          if (onSave) {
+            rDay = await onSave(snapshotActiveDay, activeDay.id);
+          } else {
+            rDay = await updateItineraryDay(activeDay.id, snapshotActiveDay);
+          }
+          if (rDay && typeof rDay === 'object' && rDay.success === false) {
             compErrors.push(`itinerary_days (${rDay.error || 'falha ao sincronizar'})`);
           }
-          // Restaurar eventuais outros dias que foram alterados na propagação
+          // Restaurar eventuais outros dias que foram alterados na propagação ou no overflow
           for (const dId of modifiedDayIds) {
+            if (dId === activeDay.id) continue;
             const originalDay = snapshotAllDays.find((d) => d.id === dId);
             if (originalDay) {
               const rOther = await updateItineraryDay(dId, originalDay);
-              if (!rOther.success) {
-                compErrors.push(`dia ${originalDay.dayNumber} (${rOther.error})`);
+              if (rOther && typeof rOther === 'object' && rOther.success === false) {
+                compErrors.push(`dia ${originalDay.dayNumber} (${rOther.error || 'falha na restauração'})`);
               }
             }
           }
@@ -1466,6 +1472,9 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     // ETAPA 4: Sincronização dos horários excedentes do dia seguinte
     const nextDay = (allDays || []).find((d) => d.dayNumber === activeDay.dayNumber + 1);
     if (nextDay) {
+      if (!modifiedDayIds.includes(nextDay.id)) {
+        modifiedDayIds.push(nextDay.id);
+      }
       const cleanedNextSchedule = cleanPreviousDayOverflowItems(nextDay.hourlySchedule || [], activeDay.dayNumber);
       const combinedNextSchedule = deduplicateHourlySchedule([...cleanedNextSchedule, ...scheduleResult.nextDayOverflowItems]);
       try {
@@ -1474,12 +1483,17 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
         });
 
         if (nextDayRes && typeof nextDayRes === 'object' && nextDayRes.success === false) {
-          alert(`⚠️ O parque foi salvo com sucesso, mas a sincronização dos eventos do dia seguinte falhou: ${nextDayRes.error || 'Falha de conexão'}.`);
+          await rollbackAllSaveState(
+            'Sincronização dos horários excedentes do dia seguinte',
+            nextDayRes.error || 'Falha de conexão'
+          );
+          return;
         }
       } catch (nextDayError: any) {
         console.error('Erro ao sincronizar eventos excedentes do dia seguinte:', nextDayError);
         const errorMsg = nextDayError?.message || 'Falha de conexão ou erro inesperado';
-        alert(`⚠️ O parque foi salvo com sucesso, mas a sincronização dos eventos do dia seguinte falhou: ${errorMsg}.`);
+        await rollbackAllSaveState('Sincronização dos horários excedentes do dia seguinte', errorMsg);
+        return;
       }
     }
 

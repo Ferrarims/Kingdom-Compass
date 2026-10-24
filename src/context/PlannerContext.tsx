@@ -3794,9 +3794,15 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
     }
 
-    if (sourceType === 'photo_package' || (item.title && (item.title.toLowerCase().includes('pacote de fotos') || item.title.toLowerCase().includes('fotos')))) {
-      const targetPkgId = sourceId || id;
-      const photoDelRes = await deletePhotoPackage(targetPkgId, item.title);
+    const isPhotoPkg =
+      sourceType === 'photo_package' ||
+      item.category === 'Pacotes de Fotos' ||
+      id.startsWith('exp-photo-');
+
+    if (isPhotoPkg) {
+      const targetPkgId = sourceId || (id.startsWith('exp-photo-') ? id.replace('exp-photo-', '') : id);
+      const cleanPkgName = (item.title || '').replace(/^Pacote de Fotos:\s*/i, '').trim();
+      const photoDelRes = await deletePhotoPackage(targetPkgId, cleanPkgName || item.title);
       if (!photoDelRes.success) {
         return { success: false, error: photoDelRes.error };
       }
