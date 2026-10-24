@@ -56,7 +56,7 @@ import {
   isDayWithPark,
   getDriveAndParkingMetrics,
 } from '../utils/parkScheduleUtils';
-import { generateDeterministicUUID } from '../utils/uuid';
+import { generateDeterministicUUID, ensureValidUUID } from '../utils/uuid';
 
 interface ParkBookingModalProps {
   isOpen: boolean;
@@ -181,6 +181,8 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     addExpense,
     updateExpense,
     deleteExpense,
+    deletePhotoPackage,
+    activeTripId,
   } = usePlanner();
 
   // Determine the active day being edited
@@ -417,7 +419,10 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       setHasPhotoPackage(dayHasPkg);
 
       if (existingPkg) {
-        setPhotoPkgId(existingPkg.id || `photo-${dayToLoad.id}`);
+        const canonicalId = (existingPkg.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(existingPkg.id))
+          ? existingPkg.id
+          : ensureValidUUID(existingPkg.id, 'photo-pkg', `${activeTripId || 'trip'}-${(existingPkg.name || 'pkg').trim()}`);
+        setPhotoPkgId(canonicalId);
         setPhotoPkgName(existingPkg.name || '');
         setPhotoPkgType(existingPkg.type || 'trip_30days');
         setPhotoPkgValidityDesc(existingPkg.validityDescription || '');
@@ -435,18 +440,34 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
         setPhotoPkgCostUSD(existUsd);
         setPhotoPkgCostBRL(existBrl);
         setPhotoPkgStatus(existingPkg.status || 'Confirmado');
-        // Normalize legacy payment status
-        const rawStatus = existingPkg.paymentStatus as any;
-        let normalizedStatus: NonNullable<PhotoPackageItem['paymentStatus']> = 'Não informado';
-        if (rawStatus === 'Pago' || rawStatus === 'Pendente' || rawStatus === 'Parcial' || rawStatus === 'Não informado') {
-          normalizedStatus = rawStatus;
-        } else if (rawStatus === 'Reservado / Confirmado') {
-          normalizedStatus = 'Não informado'; // As per user instruction
-        } else if (rawStatus === 'Falta Pagar') {
-          normalizedStatus = 'Pendente';
+
+        // SSoT: Recuperar status e valor pago diretamente da tabela central de expenses
+        const linkedExpense = expenses.find(
+          (e) =>
+            (e.sourceType === 'photo_package' && (e.sourceId === canonicalId || e.sourceId === existingPkg.id)) ||
+            (e.category === 'Pacotes de Fotos' && existingPkg.name && e.title?.toLowerCase().includes(existingPkg.name.toLowerCase()))
+        );
+
+        if (linkedExpense) {
+          setPhotoPkgPaymentStatus(linkedExpense.status);
+          setPhotoPkgPaidValueBRL(linkedExpense.paidValueBRL || 0);
+          if (linkedExpense.payerId) setPhotoPkgPayerId(linkedExpense.payerId);
+        } else {
+          // Normalize legacy payment status
+          const rawStatus = existingPkg.paymentStatus as any;
+          let normalizedStatus: NonNullable<PhotoPackageItem['paymentStatus']> = 'Não informado';
+          if (rawStatus === 'Pago' || rawStatus === 'Pendente' || rawStatus === 'Parcial' || rawStatus === 'Não informado') {
+            normalizedStatus = rawStatus;
+          } else if (rawStatus === 'Reservado / Confirmado') {
+            normalizedStatus = 'Não informado';
+          } else if (rawStatus === 'Falta Pagar') {
+            normalizedStatus = 'Pendente';
+          }
+          setPhotoPkgPaymentStatus(normalizedStatus);
+          setPhotoPkgPaidValueBRL(existingPkg.paidValueBRL !== undefined ? Number(existingPkg.paidValueBRL) : 0);
+          setPhotoPkgPayerId(existingPkg.payerId || settings?.currentUserId || 'all');
         }
-        setPhotoPkgPaymentStatus(normalizedStatus);
-        setPhotoPkgPayerId(existingPkg.payerId || settings?.currentUserId || 'all');
+
         setPhotoPkgTravelerIds(existingPkg.travelerIds && existingPkg.travelerIds.length > 0 ? existingPkg.travelerIds : ['all']);
         setPhotoPkgNotes(existingPkg.notes || '');
       } else {
@@ -469,7 +490,10 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
               defaultPark.toLowerCase().includes(p.toLowerCase())
           )
         ) {
-          setPhotoPkgId(detectedPkg.id || `photo-${dayToLoad.id}`);
+          const canonicalDetId = (detectedPkg.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(detectedPkg.id))
+            ? detectedPkg.id
+            : ensureValidUUID(detectedPkg.id, 'photo-pkg', `${activeTripId || 'trip'}-${(detectedPkg.name || 'pkg').trim()}`);
+          setPhotoPkgId(canonicalDetId);
           setPhotoPkgName(detectedPkg.name);
           setPhotoPkgType(detectedPkg.type);
           setPhotoPkgValidityDesc(detectedPkg.validityDescription || '');
@@ -487,22 +511,37 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
           setPhotoPkgCostUSD(detUsd);
           setPhotoPkgCostBRL(detBrl);
           setPhotoPkgStatus(detectedPkg.status || 'Confirmado');
-          // Normalize legacy payment status
-          const detRawStatus = detectedPkg.paymentStatus as any;
-          let detNormalizedStatus: NonNullable<PhotoPackageItem['paymentStatus']> = 'Não informado';
-          if (detRawStatus === 'Pago' || detRawStatus === 'Pendente' || detRawStatus === 'Parcial' || detRawStatus === 'Não informado') {
-            detNormalizedStatus = detRawStatus;
-          } else if (detRawStatus === 'Reservado / Confirmado') {
-            detNormalizedStatus = 'Não informado';
-          } else if (detRawStatus === 'Falta Pagar') {
-            detNormalizedStatus = 'Pendente';
+
+          const linkedExpense = expenses.find(
+            (e) =>
+              (e.sourceType === 'photo_package' && (e.sourceId === canonicalDetId || e.sourceId === detectedPkg.id)) ||
+              (e.category === 'Pacotes de Fotos' && detectedPkg.name && e.title?.toLowerCase().includes(detectedPkg.name.toLowerCase()))
+          );
+
+          if (linkedExpense) {
+            setPhotoPkgPaymentStatus(linkedExpense.status);
+            setPhotoPkgPaidValueBRL(linkedExpense.paidValueBRL || 0);
+            if (linkedExpense.payerId) setPhotoPkgPayerId(linkedExpense.payerId);
+          } else {
+            const detRawStatus = detectedPkg.paymentStatus as any;
+            let detNormalizedStatus: NonNullable<PhotoPackageItem['paymentStatus']> = 'Não informado';
+            if (detRawStatus === 'Pago' || detRawStatus === 'Pendente' || detRawStatus === 'Parcial' || detRawStatus === 'Não informado') {
+              detNormalizedStatus = detRawStatus;
+            } else if (detRawStatus === 'Reservado / Confirmado') {
+              detNormalizedStatus = 'Não informado';
+            } else if (detRawStatus === 'Falta Pagar') {
+              detNormalizedStatus = 'Pendente';
+            }
+            setPhotoPkgPaymentStatus(detNormalizedStatus);
+            setPhotoPkgPaidValueBRL(detectedPkg.paidValueBRL !== undefined ? Number(detectedPkg.paidValueBRL) : 0);
+            setPhotoPkgPayerId(detectedPkg.payerId || settings?.currentUserId || 'all');
           }
-          setPhotoPkgPaymentStatus(detNormalizedStatus);
-          setPhotoPkgPayerId(detectedPkg.payerId || settings?.currentUserId || 'all');
+
           setPhotoPkgTravelerIds(detectedPkg.travelerIds && detectedPkg.travelerIds.length > 0 ? detectedPkg.travelerIds : ['all']);
           setPhotoPkgNotes(detectedPkg.notes || '');
         } else {
-          setPhotoPkgId(`photo-${dayToLoad.id}`);
+          setPhotoPkgId(ensureValidUUID(undefined, 'photo-pkg', `${activeTripId || 'trip'}-${(defaultPark || 'default')}-photo-pkg`));
+          setPhotoPkgPaidValueBRL(0);
           if (isDisney) {
             setPhotoPkgName('Disney Memory Maker (30 Dias)');
             setPhotoPkgType('trip_30days');
@@ -1087,9 +1126,19 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
 
     const effectiveEarlyEntry = hasEarlyEntry && earlyEntryTime.trim() ? earlyEntryTime.trim() : undefined;
 
+    // Identificador canônico estável para o pacote compartilhado entre múltiplos dias
+    const canonicalPackageId = (photoPkgId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(photoPkgId))
+      ? photoPkgId
+      : ensureValidUUID(photoPkgId, 'photo-pkg', `${activeTripId || 'trip'}-${(photoPkgName || 'pkg').trim()}`);
+
+    const parsedUsd = photoPkgCostUSD || 0;
+    const parsedBrl = photoPkgCostBRL || (parsedUsd * dollarRate);
+    const isZero = isZeroCost(parsedUsd, parsedBrl);
+    const photoExpenseId = generateDeterministicUUID('photo-expense', canonicalPackageId);
+
     const finalPhotoPackage: PhotoPackageItem | undefined = hasPhotoPackage
       ? {
-          id: photoPkgId || `photo-${activeDay.id}`,
+          id: canonicalPackageId,
           name: photoPkgName.trim() || 'Pacote de Fotos',
           type: photoPkgType,
           validityDescription: photoPkgValidityDesc.trim() || undefined,
@@ -1109,117 +1158,84 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
         }
       : undefined;
 
-    // Sincroniza o pacote de fotos com o módulo Financeiro / Divisão de Despesas
-    const parsedUsd = photoPkgCostUSD || 0;
-    const parsedBrl = photoPkgCostBRL || (parsedUsd * dollarRate);
-    const packageId = photoPkgId || `photo-${activeDay.id}`;
-    const photoExpenseId = generateDeterministicUUID('photo-expense', packageId);
+    // Sincronização financeira conforme as regras canônicas:
+    if (hasPhotoPackage && finalPhotoPackage) {
+      if (!isZero) {
+        // Caso 1: Custo > 0 -> Inserir ou atualizar despesa única vinculada (com source_type e source_id estável)
+        const expenseStatus = photoPkgPaymentStatus;
+        const finalPaidBRL = expenseStatus === 'Pago' ? parsedBrl : (expenseStatus === 'Parcial' ? (photoPkgPaidValueBRL || 0) : 0);
+        const finalPaidUSD = expenseStatus === 'Pago' ? parsedUsd : (expenseStatus === 'Parcial' ? ((photoPkgPaidValueBRL || 0) / dollarRate) : 0);
+        const expenseTitle = `Pacote de Fotos: ${finalPhotoPackage.name}`;
 
-    if (hasPhotoPackage && finalPhotoPackage && !isZeroCost(parsedUsd, parsedBrl)) {
-      const expenseStatus = photoPkgPaymentStatus;
-      const finalPaidBRL = expenseStatus === 'Pago' ? parsedBrl : (expenseStatus === 'Parcial' ? (photoPkgPaidValueBRL || 0) : 0);
-      const finalPaidUSD = expenseStatus === 'Pago' ? parsedUsd : (expenseStatus === 'Parcial' ? ((photoPkgPaidValueBRL || 0) / dollarRate) : 0);
+        const existingExpense = expenses.find(
+          (e) => e.id === photoExpenseId || (e.sourceType === 'photo_package' && (e.sourceId === canonicalPackageId || e.sourceId === photoPkgId))
+        );
 
-      const expenseTitle = `Pacote de Fotos: ${finalPhotoPackage.name}`;
+        let financeRes: { success: boolean; error?: string };
+        if (existingExpense) {
+          financeRes = await updateExpense(existingExpense.id, {
+            id: photoExpenseId,
+            title: expenseTitle,
+            category: 'Pacotes de Fotos',
+            estimatedValueUSD: parsedUsd,
+            estimatedValueBRL: parsedBrl,
+            paidValueUSD: finalPaidUSD,
+            paidValueBRL: finalPaidBRL,
+            status: expenseStatus,
+            payerId: photoPkgPayerId || 'all',
+            responsibleTravelerId: photoPkgPayerId || 'all',
+            travelerIds: photoPkgTravelerIds && photoPkgTravelerIds.length > 0 ? photoPkgTravelerIds : ['all'],
+            sourceType: 'photo_package',
+            sourceId: canonicalPackageId,
+            notes: finalPhotoPackage.confirmationCode ? `Voucher / Confirmação: #${finalPhotoPackage.confirmationCode}` : undefined,
+          });
+        } else {
+          financeRes = await addExpense({
+            id: photoExpenseId,
+            title: expenseTitle,
+            category: 'Pacotes de Fotos',
+            estimatedValueUSD: parsedUsd,
+            estimatedValueBRL: parsedBrl,
+            paidValueUSD: finalPaidUSD,
+            paidValueBRL: finalPaidBRL,
+            status: expenseStatus,
+            payerId: photoPkgPayerId || 'all',
+            responsibleTravelerId: photoPkgPayerId || 'all',
+            travelerIds: photoPkgTravelerIds && photoPkgTravelerIds.length > 0 ? photoPkgTravelerIds : ['all'],
+            sourceType: 'photo_package',
+            sourceId: canonicalPackageId,
+            excluded: false,
+            notes: finalPhotoPackage.confirmationCode ? `Voucher / Confirmação: #${finalPhotoPackage.confirmationCode}` : undefined,
+          });
+        }
 
-      const existingExpense = expenses.find(
-        (e) => e.id === photoExpenseId || (e.sourceType === 'photo_package' && e.sourceId === packageId)
-      );
-
-      let financeRes: { success: boolean; error?: string };
-      if (existingExpense) {
-        financeRes = await updateExpense(existingExpense.id, {
-          id: photoExpenseId, // Ensure it has the deterministic ID
-          title: expenseTitle,
-          category: 'Pacotes de Fotos',
-          estimatedValueUSD: parsedUsd,
-          estimatedValueBRL: parsedBrl,
-          paidValueUSD: finalPaidUSD,
-          paidValueBRL: finalPaidBRL,
-          status: expenseStatus,
-          payerId: photoPkgPayerId || 'all',
-          responsibleTravelerId: photoPkgPayerId || 'all',
-          travelerIds: photoPkgTravelerIds && photoPkgTravelerIds.length > 0 ? photoPkgTravelerIds : ['all'],
-          sourceType: 'photo_package',
-          sourceId: packageId,
-          notes: finalPhotoPackage.confirmationCode ? `Voucher / Confirmação: #${finalPhotoPackage.confirmationCode}` : undefined,
-        });
-      } else {
-        financeRes = await addExpense({
-          id: photoExpenseId,
-          title: expenseTitle,
-          category: 'Pacotes de Fotos',
-          estimatedValueUSD: parsedUsd,
-          estimatedValueBRL: parsedBrl,
-          paidValueUSD: finalPaidUSD,
-          paidValueBRL: finalPaidBRL,
-          status: expenseStatus,
-          payerId: photoPkgPayerId || 'all',
-          responsibleTravelerId: photoPkgPayerId || 'all',
-          travelerIds: photoPkgTravelerIds && photoPkgTravelerIds.length > 0 ? photoPkgTravelerIds : ['all'],
-          sourceType: 'photo_package',
-          sourceId: packageId,
-          excluded: false,
-          notes: finalPhotoPackage.confirmationCode ? `Voucher / Confirmação: #${finalPhotoPackage.confirmationCode}` : undefined,
-        });
-      }
-
-      if (!financeRes.success) {
-        alert(`❌ Erro ao salvar despesa do pacote de fotos: ${financeRes.error || 'Falha de conexão'}. Mantendo dados para nova tentativa.`);
-        return;
-      }
-    } else {
-      // Caso não tenha pacote ou o custo seja zero, removemos a despesa vinculada
-      const existingExpense = expenses.find(
-        (e) => e.id === photoExpenseId || (e.sourceType === 'photo_package' && e.sourceId === packageId)
-      );
-      if (existingExpense) {
-        const delRes = await deleteExpense(existingExpense.id);
-        if (!delRes.success) {
-          alert(`❌ Erro ao remover despesa do pacote de fotos: ${delRes.error || 'Falha de conexão'}. Mantendo dados para nova tentativa.`);
+        if (!financeRes.success) {
+          alert(`❌ Erro ao salvar despesa do pacote de fotos: ${financeRes.error || 'Falha de conexão'}. O agendamento foi mantido aberto para nova tentativa.`);
           return;
         }
-      }
-      
-      // Se desmarcou o pacote, limpamos de todos os dias (comportamento de pacote da viagem)
-      if (!hasPhotoPackage) {
-        for (const e of expenses) {
-          if (e.sourceType === 'photo_package' && photoPkgName && e.title.toLowerCase().includes(photoPkgName.toLowerCase())) {
-            if (e.sourceId === packageId || !e.sourceId) {
-              const res = await deleteExpense(e.id);
-              if (!res.success) {
-                alert(`❌ Erro ao limpar despesas vinculadas em outros dias: ${res.error}.`);
-                return;
-              }
-            }
+      } else {
+        // Caso 2: Custo == 0 -> Remove SOMENTE a despesa vinculada do Financeiro, PRESERVANDO o pacote e referências nos dias do roteiro
+        const existingExpense = expenses.find(
+          (e) => e.id === photoExpenseId || (e.sourceType === 'photo_package' && (e.sourceId === canonicalPackageId || e.sourceId === photoPkgId)) ||
+          (e.category === 'Pacotes de Fotos' && photoPkgName && e.title.toLowerCase().includes(photoPkgName.toLowerCase()))
+        );
+        if (existingExpense) {
+          const delRes = await deleteExpense(existingExpense.id, { removeSourceItem: false });
+          if (!delRes.success) {
+            alert(`❌ Erro ao remover despesa zerada do pacote de fotos: ${delRes.error || 'Falha de conexão'}. O agendamento foi mantido aberto para nova tentativa.`);
+            return;
           }
         }
       }
-    }
-
-    // 2. Remove photo package from ALL other days in the itinerary if package was unlinked
-    if (!hasPhotoPackage) {
-      for (const d of allDays) {
-        if (d.parkBooking && d.parkBooking.photoPackage) {
-          const pkg = d.parkBooking.photoPackage;
-          if (
-            (pkg.id === packageId) ||
-            (photoPkgName && pkg.name.toLowerCase() === photoPkgName.toLowerCase())
-          ) {
-            if (d.id !== activeDay.id) {
-              const dayDelRes = await updateItineraryDay(d.id, {
-                parkBooking: {
-                  ...d.parkBooking,
-                  hasPhotoPackage: false,
-                  photoPackage: undefined,
-                },
-              });
-              if (!dayDelRes.success) {
-                alert(`❌ Erro ao desvincular pacote do dia ${d.dayNumber}: ${dayDelRes.error}.`);
-                return;
-              }
-            }
-          }
+    } else {
+      // Caso 3: hasPhotoPackage === false -> Exclusão explícita do pacote de fotos
+      // Aguardar e validar exclusão da despesa, referências em todos os dias e registros em park_photo_packages
+      const hadExistingPkg = Boolean(activeDay.parkBooking?.hasPhotoPackage || activeDay.parkBooking?.photoPackage || photoPkgId);
+      if (hadExistingPkg) {
+        const delPkgRes = await deletePhotoPackage(canonicalPackageId, photoPkgName);
+        if (!delPkgRes.success) {
+          alert(`❌ Erro ao excluir pacote de fotos do Supabase: ${delPkgRes.error || 'Falha de conexão'}. O agendamento foi mantido aberto para nova tentativa.`);
+          return;
         }
       }
     }
@@ -1271,7 +1287,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
                 hasPhotoPackage: true,
                 photoPackage: {
                   ...finalPhotoPackage,
-                  id: packageId, // Share the same STABLE ID
+                  id: canonicalPackageId, // Share the same STABLE ID
                 },
               },
             });

@@ -311,6 +311,9 @@ export async function deleteExpensesBySourceInDb(
     }
     if (!sourceId) return { success: true };
     const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+    const cleanSourceId = ensureValidUUID(sourceId, 'source', sourceId);
+    const sourceIdsToMatch = Array.from(new Set([sourceId, cleanSourceId].filter(Boolean)));
+
     const typeMap: Record<string, string> = {
       flight: 'flight-expense',
       accommodation: 'acc-expense',
@@ -318,10 +321,11 @@ export async function deleteExpensesBySourceInDb(
       park_ticket: 'ticket-expense',
       photo_package: 'photo-expense',
     };
-    const expId = generateDeterministicUUID(typeMap[sourceType] || sourceType, sourceId);
-    const validUuids = [expId].filter((id) =>
+    const expId1 = generateDeterministicUUID(typeMap[sourceType] || sourceType, sourceId);
+    const expId2 = generateDeterministicUUID(typeMap[sourceType] || sourceType, cleanSourceId);
+    const validUuids = Array.from(new Set([expId1, expId2].filter((id) =>
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
-    );
+    )));
 
     // 1. Exclusão por ID determinístico (UUID) restrito à viagem e ao source_type
     if (validUuids.length > 0) {
@@ -332,7 +336,7 @@ export async function deleteExpensesBySourceInDb(
         .eq('source_type', sourceType)
         .in('id', validUuids);
 
-      if (err1) {
+      if (err1 && !isSupabaseMissingTableError(err1)) {
         return { success: false, error: err1.message };
       }
     }
@@ -343,9 +347,9 @@ export async function deleteExpensesBySourceInDb(
       .delete()
       .eq('trip_id', cleanTripId)
       .eq('source_type', sourceType)
-      .eq('source_id', sourceId);
+      .in('source_id', sourceIdsToMatch);
 
-    if (err2) {
+    if (err2 && !isSupabaseMissingTableError(err2)) {
       return { success: false, error: err2.message };
     }
 
@@ -688,7 +692,7 @@ export function mapParkBookingToDb(
     dining_reservations: Array.isArray(booking.diningReservations) ? booking.diningReservations.map(dr => ensureValidUUID(dr.id, 'dining', `${itineraryDayId}-${dr.restaurantName}-${dr.time}`)) : [],
     shows_and_parades: Array.isArray(booking.showsAndParades) ? booking.showsAndParades.map(s => ensureValidUUID(s.id, 'show', `${itineraryDayId}-${s.showName}-${s.time}`)) : [],
     has_photo_package: Boolean(booking.hasPhotoPackage || booking.photoPackage),
-    photo_package: booking.hasPhotoPackage && booking.photoPackage ? ensureValidUUID(booking.photoPackage.id, 'photo-pkg', `${itineraryDayId}-${booking.photoPackage.name}`) : null,
+    photo_package: booking.hasPhotoPackage && booking.photoPackage ? ensureValidUUID(booking.photoPackage.id, 'photo-pkg', `${tripId}-${booking.photoPackage.name || 'pkg'}`) : null,
     notes: booking.notes || null,
     updated_at: new Date().toISOString(),
   };
@@ -1768,7 +1772,16 @@ export const SupabaseService = {
         trip.rawDays.forEach(d => {
           if (d.parkBooking?.photoPackage) {
             const pkg = d.parkBooking.photoPackage;
-            const exp = expensesBySource.get(`photo_package:${pkg.id}`);
+            const cleanPkgId = ensureValidUUID(pkg.id, 'photo-pkg', `${tripId}-${pkg.name || 'pkg'}`);
+            const exp =
+              expensesBySource.get(`photo_package:${pkg.id}`) ||
+              expensesBySource.get(`photo_package:${cleanPkgId}`) ||
+              trip.expenses.find(
+                (e) =>
+                  (e.sourceType === 'photo_package' || e.category === 'Pacotes de Fotos') &&
+                  pkg.name &&
+                  e.title?.toLowerCase().includes(pkg.name.toLowerCase())
+              );
             if (exp) {
               pkg.paidValueBRL = exp.paidValueBRL;
               pkg.paidValueUSD = exp.paidValueUSD;
@@ -3540,25 +3553,169 @@ export const SupabaseService = {
 
 
   /**
-   * Delete Park Photo Package and its records
+   * Delete Park Photo Package and its records strictly scoped to tripId,
+   * validating deletion across expenses, park_photo_packages, and park_day_bookings
+   * with rollback on failure.
    */
-  async deleteParkPhotoPackage(id: string): Promise<boolean> {
+  async deleteParkPhotoPackage(
+    tripId: string,
+    id: string,
+    packageName?: string
+  ): Promise<{ success: boolean; error?: string }> {
     try {
-      if (!id) return false;
-      const cleanId = ensureValidUUID(id, 'photo-pkg', id);
-      await Promise.allSettled([
-        supabase.from('park_photo_packages').delete().eq('id', cleanId),
-        supabase.from('park_photo_packages').delete().eq('id', id),
-        supabase.from('park_photo_packages').delete().eq('park_day_booking_id', id),
-        supabase.from('park_photo_packages').delete().eq('itinerary_day_id', id),
-        supabase.from('park_day_bookings').update({ photo_package: null, has_photo_package: false }).eq('photo_package', cleanId),
-        supabase.from('park_day_bookings').update({ photo_package: null, has_photo_package: false }).eq('photo_package', id),
-        supabase.from('park_day_bookings').update({ photo_package: null, has_photo_package: false }).eq('park_day_booking_id', id),
-        supabase.from('park_day_bookings').update({ photo_package: null, has_photo_package: false }).eq('itinerary_day_id', id),
-      ]);
-      return true;
-    } catch {
-      return false;
+      if (!tripId || !tripId.trim()) {
+        return { success: false, error: 'tripId obrigatório para exclusão do pacote de fotos' };
+      }
+      if (!id || !id.trim()) {
+        return { success: false, error: 'Identificador do pacote de fotos obrigatório' };
+      }
+
+      const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+      const cleanId = ensureValidUUID(id, 'photo-pkg', `${tripId}-${packageName?.trim() || 'pkg'}`);
+      const validIds = Array.from(new Set([id, cleanId].filter(Boolean)));
+      const expId1 = generateDeterministicUUID('photo-expense', id);
+      const expId2 = generateDeterministicUUID('photo-expense', cleanId);
+      const validExpUuids = Array.from(new Set([expId1, expId2].filter((u) =>
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u)
+      )));
+
+      // 1. Snapshot de segurança antes de qualquer exclusão
+      let snapshotExpenses: any[] = [];
+      let snapshotPackages: any[] = [];
+      let snapshotBookings: any[] = [];
+
+      // Snapshot expenses
+      const { data: expRows1, error: expErr1 } = await supabase
+        .from('expenses')
+        .select('*')
+        .eq('trip_id', cleanTripId)
+        .eq('source_type', 'photo_package')
+        .in('source_id', validIds);
+
+      if (expErr1 && !isSupabaseMissingTableError(expErr1)) {
+        return { success: false, error: `Falha ao carregar instantâneo de despesas do pacote: ${expErr1.message}` };
+      }
+
+      const { data: expRows2, error: expErr2 } = await supabase
+        .from('expenses')
+        .select('*')
+        .eq('trip_id', cleanTripId)
+        .eq('source_type', 'photo_package')
+        .in('id', validExpUuids);
+
+      if (expErr2 && !isSupabaseMissingTableError(expErr2)) {
+        return { success: false, error: `Falha ao carregar instantâneo de despesas determinísticas: ${expErr2.message}` };
+      }
+
+      const combinedExpenses = [...(expRows1 || []), ...(expRows2 || [])];
+      const seenExpIds = new Set<string>();
+      for (const e of combinedExpenses) {
+        if (e && e.id && !seenExpIds.has(e.id)) {
+          seenExpIds.add(e.id);
+          snapshotExpenses.push(e);
+        }
+      }
+
+      // Snapshot park_photo_packages
+      let pkgQuery = supabase.from('park_photo_packages').select('*').eq('trip_id', cleanTripId);
+      if (packageName && packageName.trim()) {
+        pkgQuery = pkgQuery.or(`id.in.(${validIds.map(v => `"${v}"`).join(',')}),name.ilike."%${packageName.trim()}%"`);
+      } else {
+        pkgQuery = pkgQuery.in('id', validIds);
+      }
+      const { data: pkgRows, error: pkgFetchErr } = await pkgQuery;
+      if (pkgFetchErr && !isSupabaseMissingTableError(pkgFetchErr)) {
+        return { success: false, error: `Falha ao carregar instantâneo de park_photo_packages: ${pkgFetchErr.message}` };
+      }
+      if (pkgRows) snapshotPackages = pkgRows;
+
+      // Snapshot park_day_bookings
+      const { data: bkRows, error: bkFetchErr } = await supabase
+        .from('park_day_bookings')
+        .select('*')
+        .eq('trip_id', cleanTripId)
+        .in('photo_package', validIds);
+
+      if (bkFetchErr && !isSupabaseMissingTableError(bkFetchErr)) {
+        return { success: false, error: `Falha ao carregar instantâneo de reservas de parque: ${bkFetchErr.message}` };
+      }
+      if (bkRows) snapshotBookings = bkRows;
+
+      // Função de restauração compensatória
+      const rollbackAll = async (): Promise<{ success: boolean; error?: string }> => {
+        const errors: string[] = [];
+        if (snapshotExpenses.length > 0) {
+          const { error: rExpErr } = await supabase.from('expenses').upsert(snapshotExpenses, { onConflict: 'id' });
+          if (rExpErr && !isSupabaseMissingTableError(rExpErr)) {
+            errors.push(`Despesas: ${rExpErr.message}`);
+          }
+        }
+        if (snapshotPackages.length > 0) {
+          const { error: rPkgErr } = await supabase.from('park_photo_packages').upsert(snapshotPackages, { onConflict: 'id' });
+          if (rPkgErr && !isSupabaseMissingTableError(rPkgErr)) {
+            errors.push(`Pacotes secundários: ${rPkgErr.message}`);
+          }
+        }
+        if (snapshotBookings.length > 0) {
+          const { error: rBkErr } = await supabase.from('park_day_bookings').upsert(snapshotBookings, { onConflict: 'id' });
+          if (rBkErr && !isSupabaseMissingTableError(rBkErr)) {
+            errors.push(`Agendamentos do dia: ${rBkErr.message}`);
+          }
+        }
+        if (errors.length > 0) {
+          return { success: false, error: errors.join('; ') };
+        }
+        return { success: true };
+      };
+
+      // Etapa 1: Excluir despesas vinculadas no Supabase
+      const delExpRes = await deleteExpensesBySourceInDb(cleanTripId, 'photo_package', id);
+      if (!delExpRes.success) {
+        await rollbackAll();
+        return { success: false, error: `Falha ao excluir despesas vinculadas: ${delExpRes.error}` };
+      }
+      if (cleanId !== id) {
+        const delExpRes2 = await deleteExpensesBySourceInDb(cleanTripId, 'photo_package', cleanId);
+        if (!delExpRes2.success) {
+          await rollbackAll();
+          return { success: false, error: `Falha ao excluir despesas vinculadas (ID canônico): ${delExpRes2.error}` };
+        }
+      }
+
+      // Etapa 2: Excluir da tabela park_photo_packages
+      let delPkgQuery = supabase.from('park_photo_packages').delete().eq('trip_id', cleanTripId);
+      if (packageName && packageName.trim()) {
+        delPkgQuery = delPkgQuery.or(`id.in.(${validIds.map(v => `"${v}"`).join(',')}),name.ilike."%${packageName.trim()}%"`);
+      } else {
+        delPkgQuery = delPkgQuery.in('id', validIds);
+      }
+      const { error: delPkgErr } = await delPkgQuery;
+      if (delPkgErr && !isSupabaseMissingTableError(delPkgErr)) {
+        const rollRes = await rollbackAll();
+        return {
+          success: false,
+          error: `Falha ao excluir registros em park_photo_packages (${delPkgErr.message}). ${rollRes.success ? 'Dados restaurados.' : 'Restauração falhou: ' + rollRes.error}`,
+        };
+      }
+
+      // Etapa 3: Atualizar park_day_bookings para limpar referências de photo_package
+      const { error: updBkErr } = await supabase
+        .from('park_day_bookings')
+        .update({ photo_package: null, has_photo_package: false, updated_at: new Date().toISOString() })
+        .eq('trip_id', cleanTripId)
+        .in('photo_package', validIds);
+
+      if (updBkErr && !isSupabaseMissingTableError(updBkErr)) {
+        const rollRes = await rollbackAll();
+        return {
+          success: false,
+          error: `Falha ao desvincular pacote dos agendamentos de parque (${updBkErr.message}). ${rollRes.success ? 'Dados restaurados.' : 'Restauração falhou: ' + rollRes.error}`,
+        };
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro inesperado ao excluir pacote de fotos' };
     }
   },
 
