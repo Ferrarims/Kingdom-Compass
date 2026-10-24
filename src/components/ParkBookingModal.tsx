@@ -1163,8 +1163,9 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
           } else {
             rDay = await updateItineraryDay(activeDay.id, snapshotActiveDay);
           }
-          if (rDay && typeof rDay === 'object' && rDay.success === false) {
-            compErrors.push(`itinerary_days (${rDay.error || 'falha ao sincronizar'})`);
+          const isRDayOk = Boolean(rDay && typeof rDay === 'object' && rDay.success === true);
+          if (!isRDayOk) {
+            compErrors.push(`itinerary_days (${(rDay && typeof rDay === 'object' && rDay.error) || 'falha ao sincronizar'})`);
           }
           // Restaurar eventuais outros dias que foram alterados na propagação ou no overflow
           for (const dId of modifiedDayIds) {
@@ -1172,8 +1173,9 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
             const originalDay = snapshotAllDays.find((d) => d.id === dId);
             if (originalDay) {
               const rOther = await updateItineraryDay(dId, originalDay);
-              if (rOther && typeof rOther === 'object' && rOther.success === false) {
-                compErrors.push(`dia ${originalDay.dayNumber} (${rOther.error || 'falha na restauração'})`);
+              const isROtherOk = Boolean(rOther && typeof rOther === 'object' && rOther.success === true);
+              if (!isROtherOk) {
+                compErrors.push(`dia ${originalDay.dayNumber} (${(rOther && typeof rOther === 'object' && rOther.error) || 'falha na restauração'})`);
               }
             }
           }
@@ -1463,8 +1465,10 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
                 },
               },
             });
-            if (!dayUpRes.success) {
-              await rollbackAllSaveState(`Propagar pacote para o dia ${d.dayNumber}`, dayUpRes.error || 'Falha de conexão');
+            const isDayUpOk = Boolean(dayUpRes && typeof dayUpRes === 'object' && dayUpRes.success === true);
+            if (!isDayUpOk) {
+              const dayUpErr = (dayUpRes && typeof dayUpRes === 'object' && dayUpRes.error) || 'Falha de conexão';
+              await rollbackAllSaveState(`Propagar pacote para o dia ${d.dayNumber}`, dayUpErr);
               return;
             }
             modifiedDayIds.push(d.id);
@@ -1486,10 +1490,14 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
           hourlySchedule: combinedNextSchedule,
         });
 
-        if (nextDayRes && typeof nextDayRes === 'object' && nextDayRes.success === false) {
+        const isNextDaySuccess = Boolean(nextDayRes && typeof nextDayRes === 'object' && nextDayRes.success === true);
+        if (!isNextDaySuccess) {
+          const errorMsg =
+            (nextDayRes && typeof nextDayRes === 'object' && nextDayRes.error) ||
+            'Resposta sem confirmação explícita de sucesso ao sincronizar os horários do dia seguinte';
           await rollbackAllSaveState(
             'Sincronização dos horários excedentes do dia seguinte',
-            nextDayRes.error || 'Falha de conexão'
+            errorMsg
           );
           return;
         }
