@@ -20,7 +20,7 @@ import { generateDeterministicUUID } from '../src/utils/uuid.js';
 const TARGET_TRIP_ID = '78bbd4b1-2857-43d0-9520-2318a3b157a3';
 
 async function main() {
-  console.log('=== STARTING STRICT FINAL AUDIT & RECONCILIATION ===');
+  console.log('=== STARTING SAFE UPSERT AUDIT & RECONCILIATION ===');
 
   const { data: tripRows, error: tripErr } = await supabase
     .from('trips')
@@ -124,18 +124,17 @@ async function main() {
       }
     }
 
-    // 2. 01/01/2027 — Post-midnight return removed until NYE end time is confirmed
+    // 2. 01/01/2027 — Post-midnight return removed while NYE end time is pending
     if (day.date === '2027-01-01') {
       syncedItems = syncedItems.filter((i) => {
         const t = (i.title || '').toLowerCase();
-        return !t.includes('pós-virada');
+        return !t.includes('pós-virada') && !t.includes('02:01');
       });
-      // Add explicit note about morning start dependency
       const morningItem = syncedItems.find((i) => (i.title || '').toLowerCase().includes('início do dia'));
       if (morningItem) {
         morningItem.notes = 'Despertar, café da manhã e preparativos para Disney\'s Animal Kingdom. [O início exato da manhã e descanso dependem da confirmação do horário de retorno pós-Réveillon].';
       }
-      pendingItemsReport.push('01/01/2027: Horário do início da manhã sujeito a ajuste dependendo da confirmação do término do Réveillon de 31/12.');
+      pendingItemsReport.push('01/01/2027: Nenhum evento pós-virada ou às 02:01 presente; horário do início da manhã sujeito a ajuste dependendo da confirmação do término do Réveillon de 31/12.');
     }
 
     // 3. General Park Days Routing & Morning Precision
@@ -287,8 +286,8 @@ async function main() {
     day.hourlySchedule = deduplicateHourlySchedule(syncedItems);
   }
 
-  // Safe Upsert with protection of existing valid records and no premature clearing
-  console.log('Persisting updated schedules securely to Supabase...');
+  // Safe Upsert Strategy with Stable IDs and Cleanup of Obsolete Rows (Non-destructive to existing valid rows)
+  console.log('Persisting updated schedules securely using safe upsert strategy...');
 
   for (const day of days) {
     const dayDbRow = mapItineraryDayToDb(day, tripId);
@@ -298,7 +297,7 @@ async function main() {
       return dbRow;
     });
 
-    // Upsert itinerary day first
+    // 1. Upsert itinerary day
     const { error: dErr } = await supabase
       .from('itinerary_days')
       .upsert(dayDbRow, { onConflict: 'id' });
@@ -308,21 +307,31 @@ async function main() {
       process.exit(1);
     }
 
-    // Clear old hourly schedules for this day only after successful day upsert
-    const { error: delErr } = await supabase
-      .from('hourly_schedules')
-      .delete()
-      .eq('itinerary_day_id', dayDbRow.id);
+    // 2. Upsert new/updated hourly schedule rows using stable IDs
+    if (dayHourlyRows.length > 0) {
+      const { error: upsertErr } = await supabase
+        .from('hourly_schedules')
+        .upsert(dayHourlyRows, { onConflict: 'id' });
 
-    if (delErr) {
-      console.error(`Error clearing old hourly schedules for day ${day.dayNumber}:`, delErr.message);
-      process.exit(1);
+      if (upsertErr) {
+        console.error(`Error upserting hourly schedules for day ${day.dayNumber}:`, upsertErr.message);
+        process.exit(1);
+      }
     }
 
-    if (dayHourlyRows.length > 0) {
-      const { error: hErr } = await supabase.from('hourly_schedules').insert(dayHourlyRows);
-      if (hErr) {
-        console.error(`Error inserting hourly schedules for day ${day.dayNumber}:`, hErr.message);
+    // 3. Clean up obsolete rows whose IDs are no longer in dayHourlyRows
+    const newIds = new Set(dayHourlyRows.map((r) => r.id));
+    const existingDayRows = (hourlyRows || []).filter((r) => r.itinerary_day_id === dayDbRow.id);
+    const obsoleteIds = existingDayRows.filter((r) => !newIds.has(r.id)).map((r) => r.id);
+
+    if (obsoleteIds.length > 0) {
+      const { error: delErr } = await supabase
+        .from('hourly_schedules')
+        .delete()
+        .in('id', obsoleteIds);
+
+      if (delErr) {
+        console.error(`Error deleting obsolete hourly schedules for day ${day.dayNumber}:`, delErr.message);
         process.exit(1);
       }
     }
@@ -364,7 +373,7 @@ async function main() {
 
       if (!allMatch) {
         allChecksPassed = false;
-        console.log(`  [${i + 1}] ❌ FIELD DIFF at ${jItem.time} - ${jItem.title}:`);
+        console.log(`  [${i + 1}] ❌ FIELD DIFF at ${jItem.time} - ${jItem.title}`);
       }
     }
   }
