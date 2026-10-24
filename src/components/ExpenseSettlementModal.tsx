@@ -702,7 +702,7 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
                 </button>
               </div>
 
-              <div className="space-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {travelerSummaries.map((summary, sIdx) => {
                   const isExpanded = expandedTravelerId === summary.traveler.id;
                   const paidExpenses = relevantExpenses.filter((e) => {
@@ -724,7 +724,7 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
                       key={`${summary.traveler.id}-${sIdx}`}
                       className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs transition-all"
                     >
-                      <div className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div className="p-4 sm:p-5 flex flex-col gap-4">
                         <div className="flex items-center gap-3">
                           <div
                             className="w-11 h-11 rounded-2xl flex items-center justify-center font-bold text-white text-sm shrink-0 shadow-xs"
@@ -744,39 +744,19 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
                               )}
                             </div>
                             <p className="text-[11px] text-slate-400">
-                              {summary.traveler.email || 'Viajante'} • Pagou {paidExpenses.length} {paidExpenses.length === 1 ? 'gasto' : 'gastos'} • Participou de {beneficiaryExpenses.length}
+                              {summary.traveler.email || 'Viajante'}
                             </p>
                           </div>
                         </div>
 
                         {/* Metrics & Net Balance */}
-                        <div className="flex items-center justify-between sm:justify-end gap-6 pt-3 sm:pt-0 border-t sm:border-t-0 border-slate-100">
-                          <div className="text-left sm:text-right">
+                        <div className="flex items-center justify-between pt-3 border-t border-slate-100">
+                          <div className="text-left">
                             <span className="text-[10px] text-slate-400 block font-medium uppercase">
-                              Pagou do Bolso
-                            </span>
-                            <span className="text-xs font-bold text-slate-800">
-                              {formatMoney(summary.totalPaidBRL, summary.totalPaidUSD)}
-                            </span>
-                          </div>
-
-                          <div className="text-left sm:text-right">
-                            <span className="text-[10px] text-slate-400 block font-medium uppercase">
-                              Sua Cota (Consumo)
-                            </span>
-                            <span className="text-xs font-bold text-slate-800">
-                              {formatMoney(summary.totalOwedBRL, summary.totalOwedUSD)}
-                            </span>
-                          </div>
-
-                          <div className="text-right min-w-[110px]">
-                            <span className="text-[10px] font-bold uppercase tracking-wider block">
-                              {summary.status === 'creditor' && <span className="text-emerald-600">A Receber</span>}
-                              {summary.status === 'debtor' && <span className="text-rose-600">A Pagar</span>}
-                              {summary.status === 'settled' && <span className="text-slate-400">Saldo Quitado</span>}
+                              Saldo Líquido
                             </span>
                             <span
-                              className={`text-sm sm:text-base font-bold font-serif ${
+                              className={`text-lg font-bold font-serif ${
                                 summary.status === 'creditor'
                                   ? 'text-emerald-700'
                                   : summary.status === 'debtor'
@@ -790,7 +770,7 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
 
                           <button
                             onClick={() => setExpandedTravelerId(isExpanded ? null : summary.traveler.id)}
-                            className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+                            className="p-2 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
                           >
                             {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                           </button>
@@ -799,114 +779,15 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
 
                       {/* Expandable details */}
                       {isExpanded && (
-                        <div className="p-4 sm:p-5 bg-slate-50/80 border-t border-slate-200 text-xs space-y-4">
-                          {/* Despesas Pagas */}
-                          <div>
-                            <span className="font-bold text-slate-700 block mb-2 flex items-center gap-1.5">
-                              <span>🧾 Despesas pagas por {summary.traveler.name}:</span>
-                              <span className="text-[10px] text-slate-400 font-normal">
-                                ({formatMoney(summary.expensesPaidBRL, summary.expensesPaidUSD)})
-                              </span>
-                            </span>
-                            {paidExpenses.length === 0 ? (
-                              <p className="text-slate-400 italic">Nenhuma despesa de grupo paga individualmente.</p>
-                            ) : (
-                              <div className="space-y-1.5">
-                                {paidExpenses.map((exp, pIdx) => (
-                                  <div
-                                    key={`${exp.id}-${pIdx}`}
-                                    className="p-2 rounded-lg bg-white border border-slate-200 flex items-center justify-between"
-                                  >
-                                    <div className="flex items-center gap-2">
-                                      <span className="px-1.5 py-0.5 rounded-sm bg-slate-100 text-slate-600 text-[10px] font-bold">
-                                        {exp.category}
-                                      </span>
-                                      <span className="font-medium text-slate-800">{exp.title}</span>
-                                    </div>
-                                    <strong className="text-slate-900 font-mono">
-                                      {formatMoney(exp.estimatedValueBRL, exp.estimatedValueUSD)}
-                                    </strong>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
+                        <div className="p-4 bg-slate-50 border-t border-slate-200 text-xs space-y-3">
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Pagou do Bolso:</span>
+                            <strong className="text-slate-800">{formatMoney(summary.totalPaidBRL, summary.totalPaidUSD)}</strong>
                           </div>
-
-                          {/* Pagamentos Diretos Enviados (Transferências) */}
-                          {summary.directSentBRL > 0 && (
-                            <div className="pt-2 border-t border-slate-200/80">
-                              <span className="font-bold text-rose-700 block mb-2 flex items-center gap-1.5">
-                                <span>💳 Pagamentos / Transferências enviadas a outros viajantes:</span>
-                                <span className="text-[10px] text-rose-600 font-normal font-mono">
-                                  (+{formatMoney(summary.directSentBRL, summary.directSentUSD)})
-                                </span>
-                              </span>
-                              <div className="space-y-1.5">
-                                {adjustments
-                                  .filter((a) => a.fromTravelerId === summary.traveler.id)
-                                  .map((adj) => {
-                                    const toT = travelers.find((t) => t.id === adj.toTravelerId);
-                                    return (
-                                      <div
-                                        key={adj.id}
-                                        className="p-2 rounded-lg bg-rose-50/50 border border-rose-200/60 flex items-center justify-between"
-                                      >
-                                        <div className="flex items-center gap-2">
-                                          <span className="px-1.5 py-0.5 rounded-sm bg-rose-100 text-rose-800 text-[10px] font-bold">
-                                            {adj.paymentMethod || 'PIX'}
-                                          </span>
-                                          <span className="text-slate-700">
-                                            Transferiu para <strong>{toT?.name || 'Viajante'}</strong>
-                                            {adj.description && <span className="text-slate-500"> ({adj.description})</span>}
-                                          </span>
-                                        </div>
-                                        <strong className="text-rose-700 font-mono">
-                                          {formatMoney(adj.amount, adj.amount / dollarRate)}
-                                        </strong>
-                                      </div>
-                                    );
-                                  })}
-                              </div>
-                            </div>
-                          )}
-
-                          {/* Pagamentos Diretos Recebidos (Reembolsos) */}
-                          {summary.directReceivedBRL > 0 && (
-                            <div className="pt-2 border-t border-slate-200/80">
-                              <span className="font-bold text-emerald-700 block mb-2 flex items-center gap-1.5">
-                                <span>💰 Reembolsos / Pagamentos recebidos de outros viajantes:</span>
-                                <span className="text-[10px] text-emerald-600 font-normal font-mono">
-                                  (-{formatMoney(summary.directReceivedBRL, summary.directReceivedUSD)})
-                                </span>
-                              </span>
-                              <div className="space-y-1.5">
-                                {adjustments
-                                  .filter((a) => a.toTravelerId === summary.traveler.id)
-                                  .map((adj) => {
-                                    const fromT = travelers.find((t) => t.id === adj.fromTravelerId);
-                                    return (
-                                      <div
-                                        key={adj.id}
-                                        className="p-2 rounded-lg bg-emerald-50/50 border border-emerald-200/60 flex items-center justify-between"
-                                      >
-                                        <div className="flex items-center gap-2">
-                                          <span className="px-1.5 py-0.5 rounded-sm bg-emerald-100 text-emerald-800 text-[10px] font-bold">
-                                            {adj.paymentMethod || 'PIX'}
-                                          </span>
-                                          <span className="text-slate-700">
-                                            Recebeu de <strong>{fromT?.name || 'Viajante'}</strong>
-                                            {adj.description && <span className="text-slate-500"> ({adj.description})</span>}
-                                          </span>
-                                        </div>
-                                        <strong className="text-emerald-700 font-mono">
-                                          {formatMoney(adj.amount, adj.amount / dollarRate)}
-                                        </strong>
-                                      </div>
-                                    );
-                                  })}
-                              </div>
-                            </div>
-                          )}
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Sua Cota (Consumo):</span>
+                            <strong className="text-slate-800">{formatMoney(summary.totalOwedBRL, summary.totalOwedUSD)}</strong>
+                          </div>
                         </div>
                       )}
                     </div>
