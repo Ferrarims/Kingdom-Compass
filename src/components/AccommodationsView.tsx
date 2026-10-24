@@ -40,6 +40,7 @@ import {
   Eye,
   Plane,
   Navigation,
+  Layers,
 } from 'lucide-react';
 
 export const AccommodationsView: React.FC = () => {
@@ -108,26 +109,43 @@ export const AccommodationsView: React.FC = () => {
   }, [accommodations, selectedAccommodationsPerNight]);
 
   // Track dates where the overlap choice modal was explicitly dismissed without making a selection
-  const [dismissedNightChoiceDates, setDismissedNightChoiceDates] = useState<Set<string>>(new Set());
+  const [dismissedNightChoiceDates, setDismissedNightChoiceDates] = useState<Set<string>>(() => {
+    try {
+      const saved = sessionStorage.getItem('kc_dismissed_night_overlaps');
+      if (saved) return new Set(JSON.parse(saved));
+    } catch {}
+    return new Set();
+  });
+
+  const [isManageOverlapsOpen, setIsManageOverlapsOpen] = useState(false);
 
   // Auto-open choice modal for unselected overlapping nights once per session/dismissal
   useEffect(() => {
-    if (nightChoiceModalDate) return;
+    if (nightChoiceModalDate || isManageOverlapsOpen) return;
     const unselectedOverlap = datesWithOverlap.find(
       (item) => !item.chosen && !dismissedNightChoiceDates.has(item.dateStr)
     );
     if (unselectedOverlap) {
       setNightChoiceModalDate(unselectedOverlap.dateStr);
     }
-  }, [datesWithOverlap, dismissedNightChoiceDates, nightChoiceModalDate]);
+  }, [datesWithOverlap, dismissedNightChoiceDates, nightChoiceModalDate, isManageOverlapsOpen]);
 
   const handleCloseNightChoiceModal = () => {
     if (isSavingNightChoice) return;
-    if (nightChoiceModalDate) {
-      setDismissedNightChoiceDates((prev) => new Set(prev).add(nightChoiceModalDate));
-    }
+    setDismissedNightChoiceDates((prev) => {
+      const next = new Set(prev);
+      datesWithOverlap.forEach((item) => {
+        if (!item.chosen) next.add(item.dateStr);
+      });
+      if (nightChoiceModalDate) next.add(nightChoiceModalDate);
+      try {
+        sessionStorage.setItem('kc_dismissed_night_overlaps', JSON.stringify(Array.from(next)));
+      } catch {}
+      return next;
+    });
     setNightChoiceError(null);
     setNightChoiceModalDate(null);
+    setIsManageOverlapsOpen(false);
   };
 
   // Modal State
@@ -535,7 +553,7 @@ export const AccommodationsView: React.FC = () => {
 
 
       {/* Navigation Sub-Tabs (Accommodation Categories) */}
-      <div className="flex items-center gap-2 border-b border-slate-200 pb-2 overflow-x-auto no-scrollbar">
+      <div className="flex items-center gap-2 border-b border-slate-200 pb-2 flex-wrap">
         {[
           { id: 'all', label: 'Todas as Hospedagens', icon: Building2, count: accommodations.length },
           {
@@ -584,6 +602,24 @@ export const AccommodationsView: React.FC = () => {
             </button>
           );
         })}
+
+        {datesWithOverlap.length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              setNightChoiceError(null);
+              setIsManageOverlapsOpen(true);
+            }}
+            className="px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap cursor-pointer bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs active:scale-95"
+            title="Gerenciar escolhas de hospedagem para noites com sobreposição"
+          >
+            <Layers className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>Gerenciar sobreposições</span>
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-200 text-amber-950 border border-amber-300">
+              {datesWithOverlap.length}
+            </span>
+          </button>
+        )}
       </div>
 
       {/* DEDICATED HIGHLIGHTED LINE FOR DICAS & REGRAS */}
@@ -1524,7 +1560,7 @@ export const AccommodationsView: React.FC = () => {
         </div>
       )}
 
-      {nightChoiceModalDate && (
+      {(isManageOverlapsOpen || nightChoiceModalDate) && (
         <div
           onClick={(e) => {
             if (e.target === e.currentTarget && !isSavingNightChoice) {
@@ -1533,17 +1569,17 @@ export const AccommodationsView: React.FC = () => {
           }}
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200"
         >
-          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col animate-in zoom-in-95 duration-200">
+          <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-200">
             {/* Header */}
-            <div className="p-5 sm:p-6 bg-gradient-to-r from-[#1A2B4C] to-[#2A437E] text-white flex items-center justify-between">
+            <div className="p-5 sm:p-6 bg-gradient-to-r from-[#1A2B4C] to-[#2A437E] text-white flex items-center justify-between shrink-0">
               <div className="space-y-1">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-[#D4AF37] flex items-center gap-1.5">
-                  <Hotel className="w-3.5 h-3.5" />
-                  Seleção de Hospedagem do Roteiro
+                  <Layers className="w-3.5 h-3.5" />
+                  Gestão de Sobreposições de Hospedagem
                 </span>
-                <h3 className="text-lg font-bold font-serif">Escolher onde vamos dormir</h3>
+                <h3 className="text-lg font-bold font-serif">Gerenciar Escolhas de Hospedagem</h3>
                 <p className="text-xs text-slate-200">
-                  Noite de {formatDisplayDate(nightChoiceModalDate, true)}
+                  {datesWithOverlap.length} {datesWithOverlap.length === 1 ? 'noite com reservas simultâneas' : 'noites com reservas simultâneas'}
                 </p>
               </div>
               <button
@@ -1556,92 +1592,142 @@ export const AccommodationsView: React.FC = () => {
               </button>
             </div>
 
-            {/* Options */}
-            <div className="p-5 sm:p-6 space-y-3.5 max-h-[60vh] overflow-y-auto custom-scrollbar">
+            {/* Error Banner */}
+            {nightChoiceError && (
+              <div className="p-4 bg-rose-50 border-b border-rose-200 text-xs text-rose-800 font-medium flex items-start gap-2.5 shrink-0">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <div className="space-y-0.5">
+                  <strong className="block text-rose-950 font-bold">Falha ao salvar seleção:</strong>
+                  <p>{nightChoiceError}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Body */}
+            <div className="p-5 sm:p-6 space-y-6 overflow-y-auto custom-scrollbar flex-1">
               <p className="text-xs text-slate-600 leading-relaxed">
-                Nesta noite há reservas simultâneas ativas. Selecione qual hospedagem será considerada para os horários e itinerário desta data:
+                Abaixo estão listadas todas as noites da viagem cobertas por duas ou mais reservas. Selecione qual hospedagem deve ser usada para o itinerário e horários de cada data:
               </p>
 
-              {nightChoiceError && (
-                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 font-medium flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                  <span>{nightChoiceError}</span>
+              {datesWithOverlap.length === 0 ? (
+                <div className="p-8 text-center bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                  <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto" />
+                  <p className="text-xs font-bold text-slate-700">Nenhuma sobreposição ativa</p>
+                  <p className="text-[11px] text-slate-500">Todas as noites possuem apenas uma hospedagem vinculada.</p>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {datesWithOverlap.map((item) => {
+                    const nightAccs = item.accs;
+                    const chosenAcc = item.chosen;
+
+                    return (
+                      <div
+                        key={item.dateStr}
+                        className="p-4 sm:p-5 rounded-2xl border border-slate-200/90 bg-slate-50/50 space-y-3.5"
+                      >
+                        {/* Night Header */}
+                        <div className="flex items-center justify-between gap-3 flex-wrap pb-2 border-b border-slate-200">
+                          <div className="flex items-center gap-2">
+                            <Calendar className="w-4 h-4 text-[#D4AF37]" />
+                            <span className="font-bold font-serif text-[#1A2B4C] text-sm">
+                              Noite de {formatDisplayDate(item.dateStr, true)}
+                            </span>
+                          </div>
+
+                          {chosenAcc ? (
+                            <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
+                              <Check className="w-3 h-3 text-emerald-600 stroke-[3]" />
+                              Selecionado: {chosenAcc.name}
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3 text-amber-600" />
+                              Escolha pendente
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Accommodations Options for this night */}
+                        <div className="grid grid-cols-1 gap-2.5">
+                          {nightAccs.map((acc) => {
+                            const isSelected = chosenAcc?.id === acc.id;
+                            const badge = getTypeBadge(acc.type);
+
+                            return (
+                              <button
+                                key={acc.id}
+                                type="button"
+                                disabled={isSavingNightChoice}
+                                onClick={async () => {
+                                  if (isSavingNightChoice) return;
+                                  setIsSavingNightChoice(true);
+                                  setNightChoiceError(null);
+                                  const targetDate = item.dateStr;
+                                  const success = await setSelectedAccommodationForNight(targetDate, acc.id);
+                                  setIsSavingNightChoice(false);
+                                  if (success) {
+                                    setNightChoiceError(null);
+                                    addNotification(`Hospedagem definida para ${formatDisplayDate(targetDate, false)}: ${acc.name}`);
+                                  } else {
+                                    setNightChoiceError(`Falha ao salvar a escolha para ${formatDisplayDate(targetDate, false)} no banco de dados. A alteração não foi mantida.`);
+                                  }
+                                }}
+                                className={`w-full p-3.5 rounded-xl border-2 text-left transition-all cursor-pointer flex items-center justify-between gap-3 disabled:opacity-60 disabled:cursor-not-allowed ${
+                                  isSelected
+                                    ? 'border-[#D4AF37] bg-amber-50/80 shadow-xs ring-2 ring-[#D4AF37]/30'
+                                    : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
+                                }`}
+                              >
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${badge.bg}`}>
+                                      {badge.label}
+                                    </span>
+                                    <span className="text-[10px] text-slate-400 font-mono">
+                                      {acc.checkInDate} a {acc.checkOutDate}
+                                    </span>
+                                  </div>
+                                  <h4 className="font-bold text-[#1A2B4C] text-xs sm:text-sm">
+                                    {acc.name}
+                                  </h4>
+                                  {acc.address && (
+                                    <p className="text-[11px] text-slate-500 flex items-center gap-1">
+                                      <MapPin className="w-3 h-3 text-rose-500 shrink-0" />
+                                      <span className="truncate">{acc.address}</span>
+                                    </p>
+                                  )}
+                                </div>
+
+                                <div className="shrink-0 flex items-center justify-center">
+                                  {isSelected ? (
+                                    <div className="w-7 h-7 rounded-full bg-[#1A2B4C] text-[#D4AF37] flex items-center justify-center shadow-2xs">
+                                      <Check className="w-4 h-4 stroke-[3]" />
+                                    </div>
+                                  ) : (
+                                    <div className="w-7 h-7 rounded-full border-2 border-slate-300 flex items-center justify-center text-transparent hover:border-slate-400">
+                                      <Check className="w-3.5 h-3.5" />
+                                    </div>
+                                  )}
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
-
-              {getAccommodationsForNight(accommodations, nightChoiceModalDate).map((acc) => {
-                const isSelected = resolveAccommodationForNight(accommodations, nightChoiceModalDate, selectedAccommodationsPerNight)?.id === acc.id;
-                const badge = getTypeBadge(acc.type);
-
-                return (
-                  <button
-                    key={acc.id}
-                    type="button"
-                    disabled={isSavingNightChoice}
-                    onClick={async () => {
-                      if (isSavingNightChoice) return;
-                      setIsSavingNightChoice(true);
-                      setNightChoiceError(null);
-                      const targetDate = nightChoiceModalDate;
-                      const success = await setSelectedAccommodationForNight(targetDate, acc.id);
-                      setIsSavingNightChoice(false);
-                      if (success) {
-                        setNightChoiceError(null);
-                        setNightChoiceModalDate(null);
-                        addNotification(`Hospedagem definida para ${formatDisplayDate(targetDate, false)}: ${acc.name}`);
-                      } else {
-                        setNightChoiceError('Falha ao salvar a escolha no banco de dados. A alteração não foi mantida.');
-                      }
-                    }}
-                    className={`w-full p-4 rounded-2xl border-2 text-left transition-all cursor-pointer flex items-center justify-between gap-4 disabled:opacity-60 disabled:cursor-not-allowed ${
-                      isSelected
-                        ? 'border-[#D4AF37] bg-amber-50/70 shadow-sm ring-2 ring-[#D4AF37]/30'
-                        : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
-                    }`}
-                  >
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className={`px-2.5 py-0.5 rounded-md text-[10px] font-bold border ${badge.bg}`}>
-                          {badge.label}
-                        </span>
-                        <span className="text-[10px] text-slate-400 font-mono">
-                          {acc.checkInDate} a {acc.checkOutDate}
-                        </span>
-                      </div>
-                      <h4 className="font-bold text-[#1A2B4C] text-sm sm:text-base">
-                        {acc.name}
-                      </h4>
-                      {acc.address && (
-                        <p className="text-xs text-slate-500 flex items-center gap-1">
-                          <MapPin className="w-3 h-3 text-rose-500 shrink-0" />
-                          <span className="truncate">{acc.address}</span>
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="shrink-0 flex items-center justify-center">
-                      {isSelected ? (
-                        <div className="w-8 h-8 rounded-full bg-[#1A2B4C] text-[#D4AF37] flex items-center justify-center shadow-xs">
-                          <Check className="w-5 h-5 stroke-[3]" />
-                        </div>
-                      ) : (
-                        <div className="w-8 h-8 rounded-full border-2 border-slate-300 flex items-center justify-center text-transparent hover:border-slate-400">
-                          <Check className="w-4 h-4" />
-                        </div>
-                      )}
-                    </div>
-                  </button>
-                );
-              })}
             </div>
 
             {/* Footer */}
-            <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-200 flex justify-end">
+            <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-200 flex justify-end shrink-0">
               <button
                 type="button"
                 disabled={isSavingNightChoice}
                 onClick={handleCloseNightChoiceModal}
-                className="px-5 py-2.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs transition-all cursor-pointer disabled:opacity-50"
+                className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] hover:bg-[#2A437E] text-white font-bold text-xs transition-all cursor-pointer shadow-md disabled:opacity-50"
               >
                 Concluído
               </button>
