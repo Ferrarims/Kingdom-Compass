@@ -484,7 +484,7 @@ async function syncToExpenses(
     } else if (expStatus === 'Parcial') {
       const pBrl = data.paidValueBRL !== undefined && data.paidValueBRL !== null ? Number(data.paidValueBRL) : 0;
       const pUsd = data.paidValueUSD !== undefined && data.paidValueUSD !== null ? Number(data.paidValueUSD) : 0;
-      const rate = fallbackTrip?.dollarRate || 5.75;
+      const rate = Number(fallbackTrip?.dollarRate);
       const validation = validatePartialPayment(numBrl, numUsd, pBrl, pUsd, rate);
       if (!validation.valid) {
         return { success: false, error: validation.error || 'Valor parcial inválido.' };
@@ -2466,7 +2466,7 @@ export const SupabaseService = {
       }
 
       if (flight.paymentStatus === 'Parcial') {
-        const rate = fallbackTrip?.dollarRate || 5.75;
+        const rate = Number(fallbackTrip?.dollarRate);
         const validation = validatePartialPayment(flight.ticketCostBRL || 0, flight.ticketCostUSD || 0, flight.paidValueBRL, flight.paidValueUSD, rate);
         if (!validation.valid) {
           return { success: false, error: validation.error || 'Valor parcial inválido.' };
@@ -2866,7 +2866,7 @@ export const SupabaseService = {
       }
 
       if (accommodation.paymentStatus === 'Parcial') {
-        const rate = fallbackTrip?.dollarRate || 5.75;
+        const rate = Number(fallbackTrip?.dollarRate);
         const validation = validatePartialPayment(accommodation.costBRL || 0, accommodation.costUSD || 0, accommodation.paidValueBRL, accommodation.paidValueUSD, rate);
         if (!validation.valid) {
           return { success: false, error: validation.error || 'Valor parcial inválido.' };
@@ -3147,7 +3147,7 @@ export const SupabaseService = {
       if (!tripId || !rental) return { success: false, error: 'Parâmetros inválidos', compensationSuccess: true };
 
       if (rental.paymentStatus === 'Parcial') {
-        const rate = fallbackTrip?.dollarRate || 5.75;
+        const rate = Number(fallbackTrip?.dollarRate);
         const validation = validatePartialPayment(rental.costBRL || 0, rental.costUSD || 0, rental.paidValueBRL, rental.paidValueUSD, rate);
         if (!validation.valid) {
           return { success: false, error: validation.error || 'Valor parcial inválido.', compensationSuccess: true };
@@ -4154,7 +4154,7 @@ export const SupabaseService = {
       if (!tripId || !ticket) return { success: false, error: 'Parâmetros inválidos' };
 
       if (ticket.paymentStatus === 'Parcial') {
-        const rate = fallbackTrip?.dollarRate || 5.75;
+        const rate = Number(fallbackTrip?.dollarRate);
         const validation = validatePartialPayment(ticket.costBRL || 0, ticket.costUSD || 0, ticket.paidValueBRL, ticket.paidValueUSD, rate);
         if (!validation.valid) {
           return { success: false, error: validation.error || 'Valor parcial inválido.' };

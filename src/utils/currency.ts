@@ -137,13 +137,17 @@ export function validatePartialPayment(
 ): { valid: boolean; error?: string; paidBrl: number; paidUsd: number } {
   const r = Number(rate);
   if (isNaN(r) || !isFinite(r) || r <= 0) {
-    return { valid: false, error: 'Cotação da viagem inválida ou ausente para validar pagamento parcial.', paidBrl: 0, paidUsd: 0 };
+    return { valid: false, error: 'Cotação da viagem inválida ou ausente. Não é possível validar pagamento parcial sem cotação válida.', paidBrl: 0, paidUsd: 0 };
   }
 
   const totBrl = Number(totalBrl);
   const totUsd = Number(totalUsd);
 
-  if ((isNaN(totBrl) || totBrl <= 0) && (isNaN(totUsd) || totUsd <= 0)) {
+  if (isNaN(totBrl) || totBrl < 0 || isNaN(totUsd) || totUsd < 0) {
+    return { valid: false, error: 'Os valores totais da reserva não podem ser negativos.', paidBrl: 0, paidUsd: 0 };
+  }
+
+  if (totBrl === 0 && totUsd === 0) {
     return { valid: false, error: 'O valor total da reserva é zero ou inválido para pagamento Parcial.', paidBrl: 0, paidUsd: 0 };
   }
 
@@ -157,11 +161,11 @@ export function validatePartialPayment(
   const pBrl = paidBrl !== undefined && paidBrl !== null ? Number(paidBrl) : 0;
   const pUsd = paidUsd !== undefined && paidUsd !== null ? Number(paidUsd) : 0;
 
-  if (isNaN(pBrl) || !isFinite(pBrl) || isNaN(pUsd) || !isFinite(pUsd)) {
-    return { valid: false, error: 'Os valores pagos informados são inválidos (não finitos).', paidBrl: 0, paidUsd: 0 };
+  if (isNaN(pBrl) || !isFinite(pBrl) || pBrl < 0 || isNaN(pUsd) || !isFinite(pUsd) || pUsd < 0) {
+    return { valid: false, error: 'Os valores pagos não podem ser negativos ou inválidos.', paidBrl: 0, paidUsd: 0 };
   }
 
-  if (pBrl <= 0 && pUsd <= 0) {
+  if (pBrl === 0 && pUsd === 0) {
     return { valid: false, error: 'Para pagamento Parcial, o valor pago deve ser maior que zero e menor que o valor total.', paidBrl: 0, paidUsd: 0 };
   }
 
@@ -184,7 +188,8 @@ export function validatePartialPayment(
 
   if (pBrl > 0 && pUsd > 0) {
     const expectedUsdFromBrl = pBrl / r;
-    if (Math.abs(expectedUsdFromBrl - pUsd) / pUsd > 0.1 && Math.abs(expectedUsdFromBrl - pUsd) > 5) {
+    const diff = Math.abs(expectedUsdFromBrl - pUsd);
+    if (diff > 0.20 && (diff / pUsd) > 0.005) {
       return { valid: false, error: 'Os valores pagos em BRL e USD são incompatíveis com a cotação vigente da viagem.', paidBrl: pBrl, paidUsd: pUsd };
     }
   }
