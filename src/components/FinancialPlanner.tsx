@@ -96,6 +96,7 @@ export const FinancialPlanner: React.FC = () => {
   // Confirmation states
   const [confirmDelete, setConfirmDelete] = useState<{ id: string; title: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const expenseSubmitLockRef = useRef(false);
 
   useConfirmationKeyboard({
@@ -784,13 +785,21 @@ export const FinancialPlanner: React.FC = () => {
             </div>
 
             <form onSubmit={handleSaveExpense} className="flex flex-col flex-1 min-h-0 overflow-hidden text-slate-700">
-              <div className="p-5 sm:p-6 space-y-8 flex-1 overflow-y-auto min-h-0 custom-scrollbar">
+              <div className="p-5 sm:p-6 space-y-6 flex-1 overflow-y-auto min-h-0 custom-scrollbar">
+
+                {saveError && (
+                  <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-start gap-2 shadow-2xs mb-4">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-red-500 mt-0.5" />
+                    <span>{saveError}</span>
+                  </div>
+                )}
+
               {/* 1. Informações Básicas */}
-              <div className="space-y-4">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
+              <div>
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-2">
                   1. Informações Básicas do Gasto
                 </label>
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-4">
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4">
                   <div className="space-y-1.5">
                     <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
                       Título do Gasto
@@ -806,7 +815,7 @@ export const FinancialPlanner: React.FC = () => {
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
                       Categoria
                     </label>
                     <select
@@ -825,23 +834,25 @@ export const FinancialPlanner: React.FC = () => {
               </div>
 
               {/* 2. Viajantes do Pacote */}
-              <TravelerSelector
-                label="2. Viajantes Associados a este Gasto"
-                travelers={settings.travelers || []}
-                selectedIds={travelerIds}
-                onChange={(ids) => setTravelerIds(ids)}
-              />
+              <div className="border-t border-slate-100 pt-6">
+                <TravelerSelector
+                  label="2. Viajantes Associados a este Gasto"
+                  travelers={settings.travelers || []}
+                  selectedIds={travelerIds}
+                  onChange={(ids) => setTravelerIds(ids)}
+                />
+              </div>
 
               {/* 3. Valor do Gasto */}
-              <div className="space-y-4">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
+              <div className="border-t border-slate-100 pt-6">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-2">
                   3. Valor & Pagamento
                 </label>
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-4">
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div className="space-y-1.5">
                       <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
-                        Valor a Pagar (US$) <span className="text-[9px] font-normal text-slate-400 lowercase">(vazio = US$ 0,00)</span>
+                        Valor a Pagar (US$)
                       </label>
                       <MoneyInput
                         currency="USD"
@@ -852,7 +863,7 @@ export const FinancialPlanner: React.FC = () => {
 
                     <div className="space-y-1.5">
                       <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
-                        Valor a Pagar (R$) <span className="text-[9px] font-normal text-slate-400 lowercase">(vazio = R$ 0,00)</span>
+                        Valor a Pagar (R$)
                       </label>
                       <MoneyInput
                         currency="BRL"
@@ -868,7 +879,7 @@ export const FinancialPlanner: React.FC = () => {
                       <select
                         value={status}
                         onChange={(e) => setStatus(e.target.value as ExpenseStatus)}
-                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 bg-white shadow-2xs cursor-pointer h-[42px]"
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 bg-white shadow-2xs cursor-pointer"
                       >
                         <option value="Pago">✅ Pago</option>
                         <option value="Pendente">⏳ Pendente</option>
@@ -879,9 +890,9 @@ export const FinancialPlanner: React.FC = () => {
                   </div>
 
                   {status === 'Parcial' && (
-                    <div className="space-y-1.5 animate-in slide-in-from-top-2 duration-200 pt-2 border-t border-slate-100">
+                    <div className="space-y-1.5 pt-2 border-t border-slate-100 animate-in slide-in-from-top-2 duration-200">
                       <label className="block text-xs font-bold text-emerald-700 mb-1 uppercase tracking-wider">
-                        Quanto já foi Pago? (R$) <span className="text-[9px] font-normal text-slate-500 lowercase">(vazio = R$ 0,00)</span>
+                        Quanto já foi Pago? (R$)
                       </label>
                       <MoneyInput
                         currency="BRL"
@@ -891,7 +902,7 @@ export const FinancialPlanner: React.FC = () => {
                     </div>
                   )}
 
-                  <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="pt-2 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="flex items-center gap-2">
                       <CreditCard className="w-4 h-4 text-[#D4AF37]" />
                       <label className="text-xs font-bold text-slate-700">Responsável pelo Pagamento</label>
@@ -911,11 +922,11 @@ export const FinancialPlanner: React.FC = () => {
               </div>
 
               {/* 4. Notas Adicionais */}
-              <div className="space-y-4">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-                  4. Notas & Detalhes Adicionais
+              <div className="border-t border-slate-100 pt-6">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-2">
+                  4. Notas & Detalhes
                 </label>
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5">
                   <textarea
                     rows={3}
                     value={notes}
@@ -941,9 +952,7 @@ export const FinancialPlanner: React.FC = () => {
                   disabled={isSaving}
                   className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {isSaving ? (
-                    'Salvando...'
-                  ) : (
+                  {isSaving ? 'Salvando...' : (
                     <>
                       <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
                       <span>Salvar</span>
@@ -952,6 +961,7 @@ export const FinancialPlanner: React.FC = () => {
                 </button>
               </div>
             </form>
+
           </div>
         </div>
       )}
