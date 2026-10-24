@@ -20,7 +20,7 @@ import { generateDeterministicUUID } from '../src/utils/uuid.js';
 const TARGET_TRIP_ID = '78bbd4b1-2857-43d0-9520-2318a3b157a3';
 
 async function main() {
-  console.log('=== STARTING SAFE UPSERT AUDIT & RECONCILIATION ===');
+  console.log('=== STARTING FINAL MORNING NOTE RECONCILIATION ===');
 
   const { data: tripRows, error: tripErr } = await supabase
     .from('trips')
@@ -130,10 +130,6 @@ async function main() {
         const t = (i.title || '').toLowerCase();
         return !t.includes('pós-virada') && !t.includes('02:01');
       });
-      const morningItem = syncedItems.find((i) => (i.title || '').toLowerCase().includes('início do dia'));
-      if (morningItem) {
-        morningItem.notes = 'Despertar, café da manhã e preparativos para Disney\'s Animal Kingdom. [O início exato da manhã e descanso dependem da confirmação do horário de retorno pós-Réveillon].';
-      }
       pendingItemsReport.push('01/01/2027: Nenhum evento pós-virada ou às 02:01 presente; horário do início da manhã sujeito a ajuste dependendo da confirmação do término do Réveillon de 31/12.');
     }
 
@@ -252,8 +248,12 @@ async function main() {
           { id: 'auto-abertura-2027-01-09', time: '08:30', title: '⚡ Entrada Antecipada (Early Entry) em Universal Studios Florida', location: 'Universal Studios Florida', category: 'park', notes: 'Início do funcionamento em Universal Studios Florida.', sourceType: 'park', completed: false }
         );
       } else {
+        const morningNotes = day.date === '2027-01-01'
+          ? 'Despertar, café da manhã e preparativos para Disney\'s Animal Kingdom. [ATENÇÃO: Este horário matinal das 06:30 é provisório e depende da confirmação do horário de término do Réveillon e do descanso do grupo após a virada do ano].'
+          : 'Despertar, café da manhã e preparativos para o dia de parque.';
+
         syncedItems.push(
-          { id: `auto-morning-${day.date}`, time: finalWake, title: `☀️ Início do dia na acomodação (${accName})`, location: accName, category: 'hotel', notes: 'Despertar, café da manhã e preparativos para o dia de parque.', sourceType: 'accommodation', completed: false },
+          { id: `auto-morning-${day.date}`, time: finalWake, title: `☀️ Início do dia na acomodação (${accName})`, location: accName, category: 'hotel', notes: morningNotes, sourceType: 'accommodation', completed: false },
           { id: `auto-dep-${day.date}`, time: finalDep, title: `🚗 Saída da acomodação (${accName}) ➔ ${day.park}`, location: accName, category: 'transport', notes: `Início do deslocamento de carro (~${transitMins} min) rumo ao estacionamento de ${day.park}.`, sourceType: 'transport', completed: false },
           { id: `auto-arrival-turnstile-${day.date}`, time: finalTurnstile, title: `🎟️ Chegada na Entrada de ${day.park} (Catracas)`, location: day.park, category: 'park', notes: `Chegada às catracas 30 min antes da ${earlyTime ? 'Early Entry (' + earlyTime + ')' : 'Abertura Oficial (' + openingTime + ')'}.`, sourceType: 'park', completed: false }
         );
@@ -286,7 +286,7 @@ async function main() {
     day.hourlySchedule = deduplicateHourlySchedule(syncedItems);
   }
 
-  // Safe Upsert Strategy with Stable IDs and Cleanup of Obsolete Rows (Non-destructive to existing valid rows)
+  // Safe Upsert with Stable IDs and Cleanup of Obsolete Rows
   console.log('Persisting updated schedules securely using safe upsert strategy...');
 
   for (const day of days) {
@@ -297,7 +297,6 @@ async function main() {
       return dbRow;
     });
 
-    // 1. Upsert itinerary day
     const { error: dErr } = await supabase
       .from('itinerary_days')
       .upsert(dayDbRow, { onConflict: 'id' });
@@ -307,7 +306,6 @@ async function main() {
       process.exit(1);
     }
 
-    // 2. Upsert new/updated hourly schedule rows using stable IDs
     if (dayHourlyRows.length > 0) {
       const { error: upsertErr } = await supabase
         .from('hourly_schedules')
@@ -319,7 +317,6 @@ async function main() {
       }
     }
 
-    // 3. Clean up obsolete rows whose IDs are no longer in dayHourlyRows
     const newIds = new Set(dayHourlyRows.map((r) => r.id));
     const existingDayRows = (hourlyRows || []).filter((r) => r.itinerary_day_id === dayDbRow.id);
     const obsoleteIds = existingDayRows.filter((r) => !newIds.has(r.id)).map((r) => r.id);
@@ -378,19 +375,18 @@ async function main() {
     }
   }
 
+  // Specifically print 01/01/2027 morning event note check from Supabase
+  const day0101 = days.find((d) => d.date === '2027-01-01');
+  if (day0101) {
+    const { data: dbRows0101 } = await supabase.from('hourly_schedules').select('*').eq('itinerary_day_id', day0101.id).eq('time', '06:30').single();
+    console.log('\n=== 2027-01-01 MORNING EVENT VERIFICATION IN SUPABASE ===');
+    console.log(`Time: ${dbRows0101?.time}`);
+    console.log(`Title: ${dbRows0101?.title}`);
+    console.log(`Notes: ${dbRows0101?.notes}`);
+  }
+
   console.log(`\n=== DATA PARITY STATUS ===`);
   console.log(`Parity between itinerary_days.hourly_schedule and hourly_schedules: ${allChecksPassed ? '100% MATCH' : 'DISCREPANCIES FOUND'}`);
-
-  console.log(`\n=== CALCULATED TIMES REPORT ===`);
-  calculatedTimesReport.forEach((c) => console.log(`- ${c}`));
-
-  console.log(`\n=== ESTIMATED TIMES REPORT ===`);
-  estimatedTimesReport.push('Tempos de estacionamento/caminhada (walkTimeMins) baseados na tabela padrão de acesso aos parques.');
-  estimatedTimesReport.push('Tempos de tráfego de carro (transitMins) baseados em distância geodésica multiplicada por fator de rodovia/trânsito.');
-  estimatedTimesReport.forEach((e) => console.log(`- ${e}`));
-
-  console.log(`\n=== PENDING ITEMS REPORT ===`);
-  pendingItemsReport.forEach((p) => console.log(`- ${p}`));
 
   console.log(`\n=== FINAL AUDIT RESULT: ${allChecksPassed ? 'ALL CHECKS PASSED SUCCESSFULLY (100% FIELD PARITY)' : 'SOME DISCREPANCIES FOUND'} ===`);
 }
