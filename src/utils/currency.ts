@@ -135,16 +135,30 @@ export function validatePartialPayment(
   paidUsd: number | null | undefined,
   rate: number
 ): { valid: boolean; error?: string; paidBrl: number; paidUsd: number } {
-  const totBrl = Number(totalBrl) || 0;
-  const totUsd = Number(totalUsd) || (totBrl > 0 && rate > 0 ? totBrl / rate : 0);
-  const effectiveTotBrl = totBrl > 0 ? totBrl : (totUsd > 0 && rate > 0 ? totUsd * rate : 0);
-  const effectiveTotUsd = totUsd > 0 ? totUsd : (totBrl > 0 && rate > 0 ? totBrl / rate : 0);
+  const r = Number(rate);
+  if (isNaN(r) || !isFinite(r) || r <= 0) {
+    return { valid: false, error: 'Cotação da viagem inválida ou ausente para validar pagamento parcial.', paidBrl: 0, paidUsd: 0 };
+  }
+
+  const totBrl = Number(totalBrl);
+  const totUsd = Number(totalUsd);
+
+  if ((isNaN(totBrl) || totBrl <= 0) && (isNaN(totUsd) || totUsd <= 0)) {
+    return { valid: false, error: 'O valor total da reserva é zero ou inválido para pagamento Parcial.', paidBrl: 0, paidUsd: 0 };
+  }
+
+  const effectiveTotBrl = totBrl > 0 ? totBrl : totUsd * r;
+  const effectiveTotUsd = totUsd > 0 ? totUsd : totBrl / r;
+
+  if (effectiveTotBrl <= 0 || effectiveTotUsd <= 0 || !isFinite(effectiveTotBrl) || !isFinite(effectiveTotUsd)) {
+    return { valid: false, error: 'O valor total calculado é inválido para pagamento Parcial.', paidBrl: 0, paidUsd: 0 };
+  }
 
   const pBrl = paidBrl !== undefined && paidBrl !== null ? Number(paidBrl) : 0;
   const pUsd = paidUsd !== undefined && paidUsd !== null ? Number(paidUsd) : 0;
 
-  if (effectiveTotBrl <= 0 && effectiveTotUsd <= 0) {
-    return { valid: true, paidBrl: 0, paidUsd: 0 };
+  if (isNaN(pBrl) || !isFinite(pBrl) || isNaN(pUsd) || !isFinite(pUsd)) {
+    return { valid: false, error: 'Os valores pagos informados são inválidos (não finitos).', paidBrl: 0, paidUsd: 0 };
   }
 
   if (pBrl <= 0 && pUsd <= 0) {
@@ -155,21 +169,21 @@ export function validatePartialPayment(
   let finalPaidUsd = pUsd;
 
   if (pBrl > 0) {
-    if (pBrl >= effectiveTotBrl) {
-      return { valid: false, error: 'Para pagamento Parcial, o valor pago em R$ deve ser menor que o valor total.', paidBrl: pBrl, paidUsd: pUsd };
+    if (pBrl <= 0 || pBrl >= effectiveTotBrl) {
+      return { valid: false, error: 'Para pagamento Parcial, o valor pago em R$ deve ser maior que zero e menor que o valor total.', paidBrl: pBrl, paidUsd: pUsd };
     }
-    finalPaidUsd = rate > 0 ? Math.round((pBrl / rate) * 100) / 100 : pUsd;
+    finalPaidUsd = Math.round((pBrl / r) * 100) / 100;
   }
 
   if (pUsd > 0) {
-    if (pUsd >= effectiveTotUsd) {
-      return { valid: false, error: 'Para pagamento Parcial, o valor pago em US$ deve ser menor que o valor total.', paidBrl: pBrl, paidUsd: pUsd };
+    if (pUsd <= 0 || pUsd >= effectiveTotUsd) {
+      return { valid: false, error: 'Para pagamento Parcial, o valor pago em US$ deve ser maior que zero e menor que o valor total.', paidBrl: pBrl, paidUsd: pUsd };
     }
-    finalPaidBrl = rate > 0 ? Math.round(pUsd * rate * 100) / 100 : pBrl;
+    finalPaidBrl = Math.round(pUsd * r * 100) / 100;
   }
 
-  if (pBrl > 0 && pUsd > 0 && rate > 0) {
-    const expectedUsdFromBrl = pBrl / rate;
+  if (pBrl > 0 && pUsd > 0) {
+    const expectedUsdFromBrl = pBrl / r;
     if (Math.abs(expectedUsdFromBrl - pUsd) / pUsd > 0.1 && Math.abs(expectedUsdFromBrl - pUsd) > 5) {
       return { valid: false, error: 'Os valores pagos em BRL e USD são incompatíveis com a cotação vigente da viagem.', paidBrl: pBrl, paidUsd: pUsd };
     }

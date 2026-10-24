@@ -2465,6 +2465,14 @@ export const SupabaseService = {
         return { success: false, error: 'tripId ou dados do voo ausentes' };
       }
 
+      if (flight.paymentStatus === 'Parcial') {
+        const rate = fallbackTrip?.dollarRate || 5.75;
+        const validation = validatePartialPayment(flight.ticketCostBRL || 0, flight.ticketCostUSD || 0, flight.paidValueBRL, flight.paidValueUSD, rate);
+        if (!validation.valid) {
+          return { success: false, error: validation.error || 'Valor parcial inválido.' };
+        }
+      }
+
       // 1. Ensure the parent trip exists in trips table
       try {
         const { data: tripCheck, error: tripCheckErr } = await supabase
@@ -2857,6 +2865,14 @@ export const SupabaseService = {
         return { success: false, error: 'tripId ou dados da acomodação ausentes' };
       }
 
+      if (accommodation.paymentStatus === 'Parcial') {
+        const rate = fallbackTrip?.dollarRate || 5.75;
+        const validation = validatePartialPayment(accommodation.costBRL || 0, accommodation.costUSD || 0, accommodation.paidValueBRL, accommodation.paidValueUSD, rate);
+        if (!validation.valid) {
+          return { success: false, error: validation.error || 'Valor parcial inválido.' };
+        }
+      }
+
       // 1. Ensure the parent trip exists in trips table
       try {
         const { data: tripCheck, error: tripCheckErr } = await supabase
@@ -3129,6 +3145,14 @@ export const SupabaseService = {
 
     try {
       if (!tripId || !rental) return { success: false, error: 'Parâmetros inválidos', compensationSuccess: true };
+
+      if (rental.paymentStatus === 'Parcial') {
+        const rate = fallbackTrip?.dollarRate || 5.75;
+        const validation = validatePartialPayment(rental.costBRL || 0, rental.costUSD || 0, rental.paidValueBRL, rental.paidValueUSD, rate);
+        if (!validation.valid) {
+          return { success: false, error: validation.error || 'Valor parcial inválido.', compensationSuccess: true };
+        }
+      }
       cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
       cleanRentalId = ensureValidUUID(rental.id, 'car', tripId + '-' + rental.confirmationCode);
 
@@ -4128,6 +4152,14 @@ export const SupabaseService = {
   ): Promise<{ success: boolean; error?: string }> {
     try {
       if (!tripId || !ticket) return { success: false, error: 'Parâmetros inválidos' };
+
+      if (ticket.paymentStatus === 'Parcial') {
+        const rate = fallbackTrip?.dollarRate || 5.75;
+        const validation = validatePartialPayment(ticket.costBRL || 0, ticket.costUSD || 0, ticket.paidValueBRL, ticket.paidValueUSD, rate);
+        if (!validation.valid) {
+          return { success: false, error: validation.error || 'Valor parcial inválido.' };
+        }
+      }
 
       const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
 
