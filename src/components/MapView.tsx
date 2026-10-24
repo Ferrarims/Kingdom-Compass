@@ -698,6 +698,7 @@ export const MapView: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
   const [selectedLocation, setSelectedLocation] = useState<LocationPoint | null>(null);
 
   // Selected stop in day route
@@ -2221,15 +2222,27 @@ export const MapView: React.FC = () => {
   };
 
   // Save customized Day Route
-  const handleSaveCustomRoute = () => {
-    if (!activeDay) return;
-    updateItineraryDay(activeDay.id, {
-      customRouteStops: editingDayStops.map((stop, idx) => ({
-        ...stop,
-        order: idx + 1,
-      })),
-    });
-    setIsEditRouteModalOpen(false);
+  const handleSaveCustomRoute = async () => {
+    if (!activeDay || isSaving) return;
+    setSaveError(null);
+    setIsSaving(true);
+    try {
+      const res = await updateItineraryDay(activeDay.id, {
+        customRouteStops: editingDayStops.map((stop, idx) => ({
+          ...stop,
+          order: idx + 1,
+        })),
+      });
+      if (res && !res.success) {
+        setSaveError(res.error || 'Erro ao salvar rota.');
+        return;
+      }
+      setIsEditRouteModalOpen(false);
+    } catch (err: any) {
+      setSaveError(err?.message || 'Erro inesperado.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Reset day route to automatic smart defaults
@@ -3015,10 +3028,15 @@ export const MapView: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleSaveCustomRoute}
-                  className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md"
+                  disabled={isSaving}
+                  className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
-                  <span>Salvar</span>
+                  {isSaving ? 'Salvando...' : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
+                      <span>Salvar</span>
+                    </>
+                  )}
                 </button>
               </div>
             </div>
