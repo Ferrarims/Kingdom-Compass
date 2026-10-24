@@ -1128,8 +1128,10 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
         saveRes = await updateItineraryDay(activeDay.id, dayUpdates);
       }
 
-      if (saveRes && typeof saveRes === 'object' && saveRes.success === false) {
-        alert(`❌ Erro ao salvar dados no banco: ${saveRes.error || 'Falha de conexão'}. Mantendo dados para nova tentativa.`);
+      const isSaveSuccessful = Boolean(saveRes && typeof saveRes === 'object' && saveRes.success === true);
+      if (!isSaveSuccessful) {
+        const errorMsg = (saveRes && typeof saveRes === 'object' && saveRes.error) || 'Falha ao salvar dia sem parque no Supabase';
+        alert(`❌ Erro ao salvar dados no banco: ${errorMsg}. Mantendo dados para nova tentativa.`);
         return;
       }
       onClose();
@@ -1339,8 +1341,10 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       saveRes = await updateItineraryDay(activeDay.id, dayUpdates);
     }
 
-    if (saveRes && typeof saveRes === 'object' && saveRes.success === false) {
-      await rollbackAllSaveState('Agendamento do parque', saveRes.error || 'Falha de conexão');
+    const isSaveOk = Boolean(saveRes && typeof saveRes === 'object' && saveRes.success === true);
+    if (!isSaveOk) {
+      const errorMsg = (saveRes && typeof saveRes === 'object' && saveRes.error) || 'Falha na gravação remota do agendamento';
+      await rollbackAllSaveState('Agendamento do parque', errorMsg);
       return;
     }
 
@@ -1420,8 +1424,8 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       }
     } else {
       // Caso 3: hasPhotoPackage === false -> Exclusão explícita do pacote de fotos
-      // Aguardar e validar exclusão da despesa, referências em todos os dias e registros em park_photo_packages
-      const hadExistingPkg = Boolean(activeDay.parkBooking?.hasPhotoPackage || activeDay.parkBooking?.photoPackage || photoPkgId);
+      // Apenas se o dia ATUAL REALMENTE TINHA um pacote de fotos configurado anteriormente
+      const hadExistingPkg = Boolean(activeDay.parkBooking?.hasPhotoPackage && activeDay.parkBooking?.photoPackage);
       if (hadExistingPkg) {
         const delPkgRes = await deletePhotoPackage(canonicalPackageId, photoPkgName);
         if (!delPkgRes.success) {
@@ -1519,8 +1523,10 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       saveRes = await updateItineraryDay(activeDay.id, cleanedDay);
     }
 
-    if (saveRes && typeof saveRes === 'object' && saveRes.success === false) {
-      alert(`❌ Erro ao desvincular parque no banco: ${saveRes.error || 'Falha de conexão'}. Mantendo dados para nova tentativa.`);
+    const isUnlinkOk = Boolean(saveRes && typeof saveRes === 'object' && saveRes.success === true);
+    if (!isUnlinkOk) {
+      const errorMsg = (saveRes && typeof saveRes === 'object' && saveRes.error) || 'Falha ao desvincular parque no banco';
+      alert(`❌ Erro ao desvincular parque no banco: ${errorMsg}. Mantendo dados para nova tentativa.`);
       return;
     }
 

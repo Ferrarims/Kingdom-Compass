@@ -688,9 +688,24 @@ export function mapParkBookingToDb(
     confirmation_code: booking.confirmationCode || null,
     ticket_type: booking.ticketType || null,
     rope_drop_plan: booking.ropeDropPlan || null,
-    fast_passes: Array.isArray(booking.fastPasses) ? booking.fastPasses.map(fp => ensureValidUUID(fp.id, 'fastpass', `${itineraryDayId}-${fp.attractionName}-${fp.timeWindow}`)) : [],
-    dining_reservations: Array.isArray(booking.diningReservations) ? booking.diningReservations.map(dr => ensureValidUUID(dr.id, 'dining', `${itineraryDayId}-${dr.restaurantName}-${dr.time}`)) : [],
-    shows_and_parades: Array.isArray(booking.showsAndParades) ? booking.showsAndParades.map(s => ensureValidUUID(s.id, 'show', `${itineraryDayId}-${s.showName}-${s.time}`)) : [],
+    fast_passes: Array.isArray(booking.fastPasses)
+      ? booking.fastPasses.map(fp => ({
+          ...fp,
+          id: ensureValidUUID(fp.id, 'fastpass', `${itineraryDayId}-${fp.attractionName}-${fp.timeWindow}`)
+        }))
+      : [],
+    dining_reservations: Array.isArray(booking.diningReservations)
+      ? booking.diningReservations.map(dr => ({
+          ...dr,
+          id: ensureValidUUID(dr.id, 'dining', `${itineraryDayId}-${dr.restaurantName}-${dr.time}`)
+        }))
+      : [],
+    shows_and_parades: Array.isArray(booking.showsAndParades)
+      ? booking.showsAndParades.map(s => ({
+          ...s,
+          id: ensureValidUUID(s.id, 'show', `${itineraryDayId}-${s.showName}-${s.time}`)
+        }))
+      : [],
     has_photo_package: Boolean(booking.hasPhotoPackage || booking.photoPackage),
     photo_package: booking.hasPhotoPackage && booking.photoPackage ? ensureValidUUID(booking.photoPackage.id, 'photo-pkg', `${tripId}-${booking.photoPackage.name || 'pkg'}`) : null,
     notes: booking.notes || null,
@@ -3641,16 +3656,58 @@ export const SupabaseService = {
       if (pkgRows) snapshotPackages = pkgRows;
 
       // Snapshot park_day_bookings restrito a trip_id e photo_package associado
-      const { data: bkRows, error: bkFetchErr } = await supabase
+      const { data: allTripBookings, error: bkFetchErr } = await supabase
         .from('park_day_bookings')
         .select('*')
-        .eq('trip_id', cleanTripId)
-        .in('photo_package', allCandidateIds);
+        .eq('trip_id', cleanTripId);
 
       if (bkFetchErr) {
         return { success: false, error: `Falha ao carregar instantâneo de reservas de parque: ${bkFetchErr.message}` };
       }
-      if (bkRows) snapshotBookings = bkRows;
+      if (allTripBookings) {
+        snapshotBookings = allTripBookings.filter((b: any) => {
+          if (!b.has_photo_package && !b.photo_package) return false;
+          let pkgId = '';
+          if (typeof b.photo_package === 'string') {
+            pkgId = b.photo_package.replace(/^"/, '').replace(/"$/, '');
+          } else if (b.photo_package && typeof b.photo_package === 'object' && b.photo_package.id) {
+            pkgId = b.photo_package.id;
+          }
+          return allCandidateIds.includes(pkgId);
+        });
+      }
+
+      // Capturar registros completos antes das exclusões caso o snapshot inicial esteja vazio
+      if (snapshotExpenses.length === 0) {
+        const { data: resExpenses, error: resExpErr } = await supabase
+          .from('expenses')
+          .select('*')
+          .eq('trip_id', cleanTripId)
+          .eq('source_type', 'photo_package')
+          .in('source_id', allCandidateIds);
+
+        if (resExpErr) {
+          return { success: false, error: `Falha ao verificar despesas residuais: ${resExpErr.message}` };
+        }
+        if (resExpenses && resExpenses.length > 0) {
+          snapshotExpenses = resExpenses;
+        }
+      }
+
+      if (snapshotPackages.length === 0) {
+        const { data: resPkgs, error: resPkgErr } = await supabase
+          .from('park_photo_packages')
+          .select('*')
+          .eq('trip_id', cleanTripId)
+          .in('id', allCandidateIds);
+
+        if (resPkgErr) {
+          return { success: false, error: `Falha ao verificar pacotes residuais: ${resPkgErr.message}` };
+        }
+        if (resPkgs && resPkgs.length > 0) {
+          snapshotPackages = resPkgs;
+        }
+      }
 
       // Rastrear quais etapas alteraram dados para realizar compensação precisa
       let mutatedExpenses = false;
@@ -3667,6 +3724,17 @@ export const SupabaseService = {
         }
 
         const compensationFailures: string[] = [];
+
+        // Verificar se houve mutação sem snapshot suficiente para restaurá-la
+        if (mutatedExpenses && snapshotExpenses.length === 0) {
+          compensationFailures.push('expenses (linhas foram alteradas/removidas sem snapshot prévio disponível para restauração)');
+        }
+        if (mutatedPackages && snapshotPackages.length === 0) {
+          compensationFailures.push('park_photo_packages (registros foram alterados/removidos sem snapshot prévio disponível para restauração)');
+        }
+        if (mutatedBookings && snapshotBookings.length === 0) {
+          compensationFailures.push('park_day_bookings (agendamentos foram alterados sem snapshot prévio disponível para restauração)');
+        }
 
         // Restaurar despesas se foram mutadas
         if (mutatedExpenses && snapshotExpenses.length > 0) {
@@ -3762,22 +3830,6 @@ export const SupabaseService = {
           );
         }
         mutatedExpenses = true;
-      } else {
-        // Se o snapshot estava vazio, executar limpeza defensiva por candidateIds e validar resultado
-        const { data: cleanExpRows, error: cleanExpErr } = await supabase
-          .from('expenses')
-          .delete()
-          .eq('trip_id', cleanTripId)
-          .eq('source_type', 'photo_package')
-          .in('source_id', allCandidateIds)
-          .select('id');
-
-        if (cleanExpErr) {
-          return await rollbackAll(`Falha ao limpar despesas residuais do pacote: ${cleanExpErr.message}`);
-        }
-        if (cleanExpRows && cleanExpRows.length > 0) {
-          mutatedExpenses = true;
-        }
       }
 
       // 3. Etapa B: Excluir registros em park_photo_packages e confirmar linhas afetadas
@@ -3806,21 +3858,6 @@ export const SupabaseService = {
           );
         }
         mutatedPackages = true;
-      } else {
-        // Se o snapshot estava vazio, limpeza defensiva por candidateIds e validar resultado
-        const { data: cleanPkgRows, error: cleanPkgErr } = await supabase
-          .from('park_photo_packages')
-          .delete()
-          .eq('trip_id', cleanTripId)
-          .in('id', allCandidateIds)
-          .select('id');
-
-        if (cleanPkgErr) {
-          return await rollbackAll(`Falha ao limpar registros residuais em park_photo_packages: ${cleanPkgErr.message}`);
-        }
-        if (cleanPkgRows && cleanPkgRows.length > 0) {
-          mutatedPackages = true;
-        }
       }
 
       // 4. Etapa C: Desvincular pacote em park_day_bookings e confirmar linhas afetadas
@@ -3853,25 +3890,6 @@ export const SupabaseService = {
           );
         }
         mutatedBookings = true;
-      } else {
-        // Limpeza defensiva se existirem registros residuais e validar resultado
-        const { data: cleanBkRows, error: cleanBkErr } = await supabase
-          .from('park_day_bookings')
-          .update({
-            photo_package: null,
-            has_photo_package: false,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('trip_id', cleanTripId)
-          .in('photo_package', allCandidateIds)
-          .select('id');
-
-        if (cleanBkErr) {
-          return await rollbackAll(`Falha na limpeza residual de agendamentos em park_day_bookings: ${cleanBkErr.message}`);
-        }
-        if (cleanBkRows && cleanBkRows.length > 0) {
-          mutatedBookings = true;
-        }
       }
 
       return { success: true };
@@ -4766,10 +4784,32 @@ export const SupabaseService = {
       try {
         if (day.parkBooking && day.park && day.park !== 'Sem Parque') {
           const pbDb = mapParkBookingToDb(day.parkBooking, resolvedDayId, tripId);
-          await supabase.from('park_day_bookings').upsert(pbDb, { onConflict: 'itinerary_day_id' });
-          addLog(`Registro de reserva de parque salvo na tabela park_day_bookings.`);
 
-          const bookingId = pbDb.id || ensureValidUUID(day.parkBooking.id, 'park-booking', resolvedDayId);
+          // Localizar ID existente de park_day_bookings para esta viagem e dia do roteiro
+          const { data: existingPbRow } = await supabase
+            .from('park_day_bookings')
+            .select('id')
+            .eq('trip_id', tripId)
+            .eq('itinerary_day_id', resolvedDayId)
+            .maybeSingle();
+
+          const bookingId = existingPbRow?.id || pbDb.id || ensureValidUUID(day.parkBooking.id, 'park-booking', resolvedDayId);
+          pbDb.id = bookingId;
+
+          const { error: pbErr } = await supabase
+            .from('park_day_bookings')
+            .upsert(pbDb, { onConflict: 'id' });
+
+          if (pbErr) {
+            addLog(`Erro ao salvar park_day_bookings: ${pbErr.message}`);
+            return {
+              success: false,
+              error: `Falha ao salvar agendamento do parque: ${pbErr.message}`,
+              resolvedDayId,
+              debugLogs,
+            };
+          }
+          addLog(`Registro de reserva de parque salvo na tabela park_day_bookings (ID: ${bookingId}).`);
 
           // 5.1 Sincronização de tabelas secundárias para Fast Passes, Refeições e Shows
           try {

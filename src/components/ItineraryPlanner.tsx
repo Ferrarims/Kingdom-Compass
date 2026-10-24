@@ -3493,21 +3493,22 @@ export const ItineraryPlanner: React.FC = () => {
         day={activeDay}
         allDays={itineraryDays}
         initialTab={fullParkBookingInitialTab}
-        onSave={(updates, targetDayId) => {
+        onSave={async (updates, targetDayId) => {
           const idToUpdate = targetDayId || activeDay?.id;
           if (idToUpdate) {
-            return updateItineraryDay(idToUpdate, updates);
+            return await updateItineraryDay(idToUpdate, updates);
           }
+          return { success: false, error: 'Identificador do dia não encontrado' };
         }}
-        onRemovePark={(targetDayId, cleanedDay) => {
+        onRemovePark={async (targetDayId, cleanedDay) => {
           const idToUpdate = targetDayId || activeDay?.id;
-          if (!idToUpdate) return;
+          if (!idToUpdate) return { success: false, error: 'Identificador do dia não encontrado' };
           const targetDay = itineraryDays.find((d) => d.id === idToUpdate) || activeDay;
           const cleaned = cleanedDay || (targetDay ? clearParkReferencesFromDay(targetDay, itineraryDays.length) : {
             park: 'Sem Parque',
             parkBooking: undefined,
           });
-          return updateItineraryDay(idToUpdate, cleaned);
+          return await updateItineraryDay(idToUpdate, cleaned);
         }}
       />
 

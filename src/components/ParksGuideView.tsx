@@ -1841,21 +1841,22 @@ export const ParksGuideView: React.FC = () => {
           allDays={itineraryDays}
           initialParkName={preselectedParkName}
           initialTab={bookingModalInitialTab}
-          onSave={(updates, targetDayId) => {
+          onSave={async (updates, targetDayId) => {
             const idToUpdate = targetDayId || bookingModalDay?.id || itineraryDays[0]?.id;
             if (idToUpdate) {
-              updateItineraryDay(idToUpdate, updates);
+              return await updateItineraryDay(idToUpdate, updates);
             }
+            return { success: false, error: 'Identificador do dia não encontrado' };
           }}
-          onRemovePark={(targetDayId, cleanedDay) => {
+          onRemovePark={async (targetDayId, cleanedDay) => {
             const idToUpdate = targetDayId || bookingModalDay?.id || itineraryDays[0]?.id;
-            if (!idToUpdate) return;
+            if (!idToUpdate) return { success: false, error: 'Identificador do dia não encontrado' };
             const targetDay = itineraryDays.find((d) => d.id === idToUpdate) || bookingModalDay || itineraryDays[0];
             const cleaned = cleanedDay || (targetDay ? clearParkReferencesFromDay(targetDay, itineraryDays.length) : {
               park: 'Sem Parque',
               parkBooking: undefined,
             });
-            updateItineraryDay(idToUpdate, cleaned);
+            return await updateItineraryDay(idToUpdate, cleaned);
           }}
         />
       )}
