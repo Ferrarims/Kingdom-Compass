@@ -28,15 +28,20 @@ export function getSupabaseConfig() {
       }
     }
 
+    const envUrl = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_SUPABASE_URL : undefined;
+    const envKey = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_SUPABASE_ANON_KEY : undefined;
+
     return {
-      url: cleanSupabaseUrl(savedUrl || import.meta.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL),
-      key: savedKey || import.meta.env.VITE_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY,
+      url: cleanSupabaseUrl(savedUrl || envUrl || DEFAULT_SUPABASE_URL),
+      key: savedKey || envKey || DEFAULT_SUPABASE_ANON_KEY,
       isCustom: !!(savedUrl || savedKey),
     };
   } catch (e) {
+    const envUrl = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_SUPABASE_URL : undefined;
+    const envKey = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_SUPABASE_ANON_KEY : undefined;
     return {
-      url: cleanSupabaseUrl(import.meta.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL),
-      key: import.meta.env.VITE_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY,
+      url: cleanSupabaseUrl(envUrl || DEFAULT_SUPABASE_URL),
+      key: envKey || DEFAULT_SUPABASE_ANON_KEY,
       isCustom: false,
     };
   }

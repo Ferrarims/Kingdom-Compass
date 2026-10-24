@@ -618,6 +618,8 @@ export function deduplicateHourlySchedule(items: HourlyScheduleItem[] = []): Hou
   const seenTimeTitles = new Set<string>();
   let hasMorningAcc = false;
   let hasNightAcc = false;
+  let hasParkClosing = false;
+  let hasParkCarReturn = false;
 
   const result: HourlyScheduleItem[] = [];
 
@@ -700,6 +702,31 @@ export function deduplicateHourlySchedule(items: HourlyScheduleItem[] = []): Hou
         continue;
       }
       seenTimeTitles.add(splitKey);
+    }
+
+    // 7. Deduplicate multiple Park Closing / Return departure items on the same day
+    const isParkClosing =
+      normTitle.includes('termino das atividades em') ||
+      normTitle.includes('fechamento de') ||
+      id.includes('auto-saida-parque');
+
+    if (isParkClosing) {
+      if (hasParkClosing) {
+        continue;
+      }
+      hasParkClosing = true;
+    }
+
+    // 8. Deduplicate multiple Car Return / Parking Departure items on the same day
+    const isParkCarReturn =
+      normTitle.includes('chegada ao carro no estacionamento') ||
+      id.includes('auto-carro-retorno');
+
+    if (isParkCarReturn) {
+      if (hasParkCarReturn) {
+        continue;
+      }
+      hasParkCarReturn = true;
     }
 
     if (id) seenIds.add(id);
@@ -3388,6 +3415,12 @@ export function syncAllEventsToHourlySchedule(
         sortedAccs.forEach((acc: any) => {
           if (acc.checkInDate === day.date) {
             const isAirbnb = acc.type === 'airbnb' || acc.type === 'house' || (acc.name && acc.name.toLowerCase().includes('airbnb'));
+            // Do NOT create a new check-in for Airbnb on 09/01/2027
+            if (day.date === '2027-01-09' && (isAirbnb || (acc.name && acc.name.toLowerCase().includes('modern retreat')))) {
+              items = items.filter((i) => !(i.sourceId === acc.id || i.sourceId === `acc-checkin-${acc.id}`));
+              return;
+            }
+
             const checkInTime = acc.checkInTime || '15:00';
             const existingInterCheckInIdx = items.findIndex((i) => {
               if (i.sourceId === acc.id || i.sourceId === `acc-checkin-${acc.id}`) return true;
@@ -3715,16 +3748,27 @@ export function syncAllEventsToHourlySchedule(
     // REGRA 4: Check-out da acomodação (se for dia de check-out) e Transporte para o Aeroporto
     sortedAccs.forEach((acc: any) => {
       if (acc.checkOutDate === day.date) {
-        const checkOutTime = acc.checkOutTime || '11:00';
+        let checkOutTime = acc.checkOutTime || '11:00';
+        let checkOutTitle = `🚪 Check-out: ${acc.name || 'Acomodação'}`;
+        let checkOutNotes = `Horário contratual de check-out: ${checkOutTime}. Entrega de chaves e encerramento da estadia.`;
+
+        // Se for um dia de parque (ex: 09/01/2027 na saída do Hard Rock), o check-out do hotel ocorre antes da ida ao parque (07:15)
+        const isHardRockParkCheckout = (acc.name || '').toLowerCase().includes('hard rock') && (day.date === '2027-01-09' || isPark);
+        if (isHardRockParkCheckout) {
+          checkOutTime = '07:15';
+          checkOutTitle = `🚪 Liberação do Quarto & Check-out: ${acc.name}`;
+          checkOutNotes = 'Liberação do quarto e check-out no Hard Rock antes da ida ao parque (horário contratual limite: 11:00). Logística pendente: organizar guarda-volumes no Hard Rock antes da ida ao parque.';
+        }
+
         dayCheckOutTime = checkOutTime;
         const existingCheckoutIdx = items.findIndex((i) => (i.sourceId === acc.id || i.sourceId === `acc-checkout-${acc.id}`) || ((i.title || '').toLowerCase().includes('check-out') && (i.title || '').toLowerCase().includes(acc.name?.toLowerCase() || '')));
         const checkOutItem: HourlyScheduleItem = {
           id: `auto-acc-checkout-${acc.id}`,
           time: checkOutTime,
-          title: `🚪 Check-out: ${acc.name || 'Acomodação'}`,
+          title: checkOutTitle,
           location: acc.address || acc.name,
           category: acc.type === 'airbnb' || acc.type === 'house' ? 'airbnb' : 'hotel',
-          notes: `Horário contratual de check-out: ${checkOutTime}. Entrega de chaves e encerramento da estadia.`,
+          notes: checkOutNotes,
           sourceType: 'accommodation',
           sourceId: acc.id,
           completed: false,
