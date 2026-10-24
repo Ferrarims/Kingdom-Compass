@@ -12,6 +12,11 @@ import {
 import {
   syncAllEventsToHourlySchedule,
   deduplicateHourlySchedule,
+  resolveAccommodationForNight,
+  getParkTransitInfo,
+  getDriveAndParkingMetrics,
+  estimateAccommodationCoordinates,
+  calculateDriveTimeMinutes,
 } from '../src/utils/parkScheduleUtils.js';
 import { generateDeterministicUUID } from '../src/utils/uuid.js';
 
@@ -23,7 +28,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const TARGET_TRIP_ID = '78bbd4b1-2857-43d0-9520-2318a3b157a3';
 
 async function main() {
-  console.log('=== STARTING ULTIMATE STABLE SCHEDULE AUDIT & RECONCILIATION ===');
+  console.log('=== STARTING COMPREHENSIVE PARK SCHEDULE AUDIT & RECONCILIATION ===');
 
   const { data: tripRows, error: tripErr } = await supabase
     .from('trips')
@@ -59,39 +64,22 @@ async function main() {
   const parkBookings = (pbRows || []).map(mapDbToParkBooking);
   const days = (dayRows || []).map(mapDbToItineraryDay);
 
-  const parkMapping: Record<string, { name: string; opening: string; closing: string; early: string }> = {
+  // Reconcile Park names and discrepancies (01/01 Animal Kingdom, 03/01 Magic Kingdom, 07/01 Epic Universe)
+  const officialParkMapping: Record<string, { name: string; opening: string; closing: string; early: string }> = {
     '2026-12-30': { name: 'SeaWorld Orlando', opening: '09:00', closing: '21:00', early: '08:30' },
     '2026-12-31': { name: 'Busch Gardens Tampa Bay', opening: '10:00', closing: '22:00', early: '09:30' },
-    '2027-01-01': { name: "Universal's Islands of Adventure", opening: '09:00', closing: '21:00', early: '08:30' },
-    '2027-01-03': { name: "Universal's Islands of Adventure", opening: '09:00', closing: '21:00', early: '08:30' },
+    '2027-01-01': { name: "Disney's Animal Kingdom", opening: '09:00', closing: '19:00', early: '08:30' },
+    '2027-01-03': { name: 'Magic Kingdom', opening: '09:00', closing: '22:00', early: '08:30' },
     '2027-01-05': { name: "Disney's Hollywood Studios", opening: '09:00', closing: '21:00', early: '08:30' },
-    '2027-01-07': { name: "Universal's Islands of Adventure", opening: '09:00', closing: '21:00', early: '08:30' },
+    '2027-01-07': { name: "Universal's Epic Universe", opening: '09:00', closing: '21:00', early: '08:30' },
     '2027-01-08': { name: "Universal's Islands of Adventure", opening: '09:00', closing: '21:00', early: '08:30' },
     '2027-01-09': { name: 'Universal Studios Florida', opening: '09:00', closing: '21:00', early: '08:30' },
   };
 
   days.forEach((day) => {
-    const pb = parkBookings.find(
-      (p) => p.dayNumber === day.dayNumber || (day.date && p.date === day.date) || p.itineraryDayId === day.id
-    );
-    if (pb) {
-      day.parkBooking = pb;
-      if (!day.park || day.park === 'Sem Parque') {
-        day.park = pb.parkName;
-      }
-    } else if (day.date && parkMapping[day.date]) {
-      const info = parkMapping[day.date];
-      day.park = info.name;
-      day.parkBooking = {
-        id: `auto-pb-${day.dayNumber}`,
-        dayNumber: day.dayNumber,
-        date: day.date,
-        parkName: info.name,
-        parkHours: { openingTime: info.opening, closingTime: info.closing, earlyEntryTime: info.early },
-        fastPasses: [],
-        diningReservations: [],
-        showsAndParades: [],
-      };
+    if (day.date && officialParkMapping[day.date]) {
+      const info = officialParkMapping[day.date];
+      day.park = info.name as any;
     }
   });
 
@@ -105,12 +93,35 @@ async function main() {
     selectedAccommodationsPerNight: trip.selectedAccommodationsPerNight || {},
   };
 
+  const parkReportData: Array<{
+    date: string;
+    parkName: string;
+    closingTime: string;
+    exitTime: string;
+    walkTimeMins: number;
+    transitMins: number;
+    accommodationName: string;
+    arrivalTime: string;
+  }> = [];
+
   for (const day of days) {
     let syncedItems = syncAllEventsToHourlySchedule(day, tripContext);
 
-    // Special handling for New Year's Eve on 2026-12-31 (Busch Gardens Tampa Bay)
+    const isParkDay = day.park && day.park !== 'Sem Parque' && day.park !== 'Parque a Definir';
+    let closingTime = '21:00';
+    if (day.parkBooking?.parkHours?.closingTime) {
+      closingTime = day.parkBooking.parkHours.closingTime;
+    } else if (day.date && officialParkMapping[day.date]) {
+      closingTime = officialParkMapping[day.date].closing;
+    }
+
+    syncedItems.forEach((item) => {
+      if (item.time && item.time > closingTime && (item.category === 'park' || item.category === 'show' || item.category === 'dining')) {
+        closingTime = item.time;
+      }
+    });
+
     if (day.date === '2026-12-31') {
-      // Remove 22:30 return before NYE
       syncedItems = syncedItems.filter((i) => {
         const t = (i.title || '').toLowerCase();
         if (t.includes('fim do dia') && i.time >= '21:00') return false;
@@ -130,257 +141,79 @@ async function main() {
           completed: false,
         });
       }
+      closingTime = '00:00';
+    }
 
-      // Add post-midnight return at 00:30 on 2027-01-01
+    if (isParkDay) {
+      const nightAcc = resolveAccommodationForNight(accommodations, day.date!, trip.selectedAccommodationsPerNight) || accommodations[0];
+      const accName = nightAcc ? nightAcc.name : 'Acomodação';
+      const transitInfo = getDriveAndParkingMetrics(day.park!, nightAcc?.name, nightAcc?.address);
+      const walkTimeMins = transitInfo.maxParkingMins;
+      const transitMins = transitInfo.driveMins;
+
+      const [cH, cM] = closingTime.split(':').map((v) => parseInt(v, 10));
+      const closeTotalMins = cH * 60 + cM;
+
+      const exitMins = closeTotalMins;
+      const exitH = Math.floor(exitMins / 60) % 24;
+      const exitM = exitMins % 60;
+      const exitTimeStr = `${String(exitH).padStart(2, '0')}:${String(exitM).padStart(2, '0')}`;
+
+      const carMins = closeTotalMins + walkTimeMins;
+      const carH = Math.floor(carMins / 60) % 24;
+      const carM = carMins % 60;
+      const carTimeStr = `${String(carH).padStart(2, '0')}:${String(carM).padStart(2, '0')}`;
+
+      const arrivalMins = carMins + transitMins;
+      const arrivalH = Math.floor(arrivalMins / 60) % 24;
+      const arrivalM = arrivalMins % 60;
+      const arrivalTimeStr = `${String(arrivalH).padStart(2, '0')}:${String(arrivalM).padStart(2, '0')}`;
+
+      parkReportData.push({
+        date: day.date || '',
+        parkName: day.park!,
+        closingTime,
+        exitTime: exitTimeStr,
+        walkTimeMins,
+        transitMins,
+        accommodationName: accName,
+        arrivalTime: arrivalTimeStr,
+      });
+
+      syncedItems = syncedItems.filter((i) => {
+        const t = (i.title || '').toLowerCase();
+        return !t.includes('término das atividades') && !t.includes('chegada ao carro') && !t.includes('fim do dia na acomodação');
+      });
+
       syncedItems.push({
-        id: 'auto-nye-return-2026-12-31',
-        time: '00:30',
-        title: '🌙 Retorno ao Modern Retreat Resort (Pós-Virada)',
-        location: 'Modern Retreat Resort',
-        category: 'hotel',
-        notes: 'Retorno para a hospedagem após a virada do ano e descanso.',
-        sourceType: 'accommodation',
-        completed: false,
-      });
-    }
-
-    // Explicit overrides and fine-tuning for 2027-01-08 (Day 13)
-    if (day.date === '2027-01-08') {
-      syncedItems = syncedItems.filter((i) => {
-        const t = (i.title || '').toLowerCase();
-        if (t.includes('início do dia na acomodação') && i.time === '07:30') return false;
-        return true;
-      });
-
-      const ensureItem = (item: any) => {
-        const titleKey = item.titleKey || item.title || '';
-        const idx = syncedItems.findIndex((i) => i.time === item.time && (i.title || '').toLowerCase().includes(titleKey.toLowerCase()));
-        if (idx >= 0) {
-          syncedItems[idx] = { ...syncedItems[idx], ...item };
-        } else {
-          syncedItems.push(item);
-        }
-      };
-
-      ensureItem({
-        id: 'auto-acordar-2027-01-08',
-        time: '05:49',
-        title: '⏰ Acordar — Modern Retreat Resort',
-        titleKey: 'Acordar',
-        location: 'Modern Retreat Resort',
-        category: 'hotel',
-        notes: 'Despertar 30 min antes da saída para o Universal Hard Rock Hotel às 06:19.',
-        sourceType: 'accommodation',
-        completed: false,
-      });
-
-      ensureItem({
-        id: 'auto-acc-transit-2027-01-08',
-        time: '06:19',
-        title: '🚗 Deslocamento: Modern Retreat Resort ➔ Universal Hard Rock Hotel',
-        titleKey: 'Deslocamento',
-        location: 'Universal Hard Rock Hotel',
-        category: 'transport',
-        notes: 'Deslocamento da acomodação da manhã (Modern Retreat Resort) até Universal Hard Rock Hotel (~41 min de trajeto via Maps) para pré check-in e retirada de chave antes do parque.',
-        sourceType: 'transport',
-        completed: false,
-      });
-
-      ensureItem({
-        id: 'auto-acc-keypickup-2027-01-08',
-        time: '07:00',
-        title: '🔑 Retirada de Chaves & Pré Check-in: Universal Hard Rock Hotel',
-        titleKey: 'Retirada de Chaves',
-        location: 'Universal Hard Rock Hotel',
-        category: 'hotel',
-        notes: 'Parada de 30 min em Universal Hard Rock Hotel para pré check-in e retirada da chave/Express Pass antes da ida ao parque. Observação: O quarto estará disponível a partir do horário oficial das 16:00.',
-        sourceType: 'accommodation',
-        completed: false,
-      });
-
-      ensureItem({
-        id: 'auto-acc-park-transfer-2027-01-08',
-        time: '07:30',
-        title: "🚗 Transferência: Universal Hard Rock Hotel ➔ Universal's Islands of Adventure",
-        titleKey: 'Transferência',
-        location: "Universal's Islands of Adventure",
-        category: 'transport',
-        notes: 'Deslocamento do Hard Rock Hotel para Islands of Adventure para chegada às catracas às 08:00 e Early Entry às 08:30.',
-        sourceType: 'transport',
-        completed: false,
-      });
-
-      ensureItem({
-        id: 'auto-ida-2027-01-08',
-        time: '08:00',
-        title: '🎟️ Chegada na Entrada do Parque (30 min antes da abertura)',
-        titleKey: 'Chegada na Entrada',
-        location: "Universal's Islands of Adventure",
+        id: `auto-exit-${day.date}`,
+        time: exitTimeStr,
+        title: `🌙 Término das atividades em ${day.park} e Saída`,
+        location: day.park,
         category: 'park',
-        notes: 'Posicionamento nas catracas e revista de segurança para Entrada Antecipada (Early Entry) às 08:30.',
+        notes: `Encerramento das atividades e saída do parque às ${closingTime}.`,
         sourceType: 'park',
         completed: false,
       });
 
-      ensureItem({
-        id: 'auto-abertura-2027-01-08',
-        time: '08:30',
-        title: "Entrada Antecipada (Early Entry) em Universal's Islands of Adventure",
-        titleKey: 'Entrada Antecipada',
-        location: "Universal's Islands of Adventure",
-        category: 'park',
-        notes: "Início do funcionamento e exploração das atrações de Islands of Adventure com Universal Express.",
-        sourceType: 'park',
-        completed: false,
-      });
-
-      ensureItem({
-        id: 'auto-saida-parque-2027-01-08',
-        time: '21:00',
-        title: "🌙 Fechamento de Universal's Islands of Adventure e Saída",
-        titleKey: 'Fechamento de',
-        location: "Universal's Islands of Adventure",
-        category: 'park',
-        notes: "Encerramento das atividades no parque e percurso até o carro no estacionamento (25 min).",
-        sourceType: 'park',
-        completed: false,
-      });
-
-      ensureItem({
-        id: 'auto-carro-retorno-2027-01-08',
-        time: '21:25',
+      syncedItems.push({
+        id: `auto-car-${day.date}`,
+        time: carTimeStr,
         title: '🚗 Chegada ao Carro no Estacionamento',
-        titleKey: 'Chegada ao Carro',
-        location: "Universal's Islands of Adventure",
+        location: day.park,
         category: 'transport',
-        notes: 'Embarque no veículo e início da viagem de volta para o Universal Hard Rock Hotel (~10 min de trajeto).',
+        notes: `Caminhada até o estacionamento (~${walkTimeMins} min).`,
         sourceType: 'transport',
         completed: false,
       });
 
-      ensureItem({
-        id: 'auto-retorno-2027-01-08',
-        time: '21:35',
-        title: '🌙 Fim do dia na acomodação (Universal Hard Rock Hotel)',
-        titleKey: 'Fim do dia',
-        location: 'Universal Hard Rock Hotel',
+      syncedItems.push({
+        id: `auto-arrival-${day.date}`,
+        time: arrivalTimeStr,
+        title: `🌙 Fim do dia na acomodação (${accName})`,
+        location: accName,
         category: 'hotel',
-        notes: 'Retorno ao Universal Hard Rock Hotel (hospedagem selecionada para a noite de 08/01) e descanso.',
-        sourceType: 'accommodation',
-        completed: false,
-      });
-    }
-
-    // Explicit overrides and fine-tuning for 2027-01-09 (Day 14)
-    if (day.date === '2027-01-09') {
-      syncedItems = syncedItems.filter((i) => {
-        const t = (i.title || '').toLowerCase();
-        if (t.includes('check-in: modern retreat')) return false;
-        return true;
-      });
-
-      const ensureItem = (item: any) => {
-        const titleKey = item.titleKey || item.title || '';
-        const idx = syncedItems.findIndex((i) => i.time === item.time && (i.title || '').toLowerCase().includes(titleKey.toLowerCase()));
-        if (idx >= 0) {
-          syncedItems[idx] = { ...syncedItems[idx], ...item };
-        } else {
-          syncedItems.push(item);
-        }
-      };
-
-      ensureItem({
-        id: 'auto-acordar-2027-01-09',
-        time: '06:23',
-        title: '⏰ Acordar — Universal Hard Rock Hotel',
-        titleKey: 'Acordar',
-        location: 'Universal Hard Rock Hotel',
-        category: 'hotel',
-        notes: 'Despertar no Hard Rock Hotel, café da manhã e preparativos para Universal Studios Florida.',
-        sourceType: 'accommodation',
-        completed: false,
-      });
-
-      ensureItem({
-        id: 'auto-checkout-2027-01-09',
-        time: '07:15',
-        title: '🚪 Liberação do Quarto & Check-out: Universal Hard Rock Hotel',
-        titleKey: 'Check-out',
-        location: 'Universal Hard Rock Hotel',
-        category: 'hotel',
-        notes: 'Liberação do quarto e check-out no Hard Rock antes da ida ao parque (horário contratual limite: 11:00). Logística pendente: organizar guarda-volumes no Hard Rock antes da ida ao parque.',
-        sourceType: 'accommodation',
-        completed: false,
-      });
-
-      ensureItem({
-        id: 'auto-park-transit-2027-01-09',
-        time: '07:30',
-        title: '🚗 Deslocamento: Universal Hard Rock Hotel ➔ Universal Studios Florida',
-        titleKey: 'Deslocamento',
-        location: 'Universal Studios Florida',
-        category: 'transport',
-        notes: 'Deslocamento do Hard Rock Hotel para Universal Studios Florida para chegada às catracas às 08:00.',
-        sourceType: 'transport',
-        completed: false,
-      });
-
-      ensureItem({
-        id: 'auto-ida-2027-01-09',
-        time: '08:00',
-        title: '🎟️ Chegada na Entrada do Parque (30 min antes da abertura)',
-        titleKey: 'Chegada na Entrada',
-        location: 'Universal Studios Florida',
-        category: 'park',
-        notes: 'Posicionamento nas catracas e revista de segurança para Entrada Antecipada (Early Entry) às 08:30.',
-        sourceType: 'park',
-        completed: false,
-      });
-
-      ensureItem({
-        id: 'auto-abertura-2027-01-09',
-        time: '08:30',
-        title: 'Entrada Antecipada (Early Entry) em Universal Studios Florida',
-        titleKey: 'Entrada Antecipada',
-        location: 'Universal Studios Florida',
-        category: 'park',
-        notes: 'Início do funcionamento e exploração das atrações de Universal Studios Florida com Universal Express.',
-        sourceType: 'park',
-        completed: false,
-      });
-
-      ensureItem({
-        id: 'auto-saida-parque-2027-01-09',
-        time: '21:00',
-        title: '🌙 Fechamento de Universal Studios Florida e Saída',
-        titleKey: 'Fechamento de',
-        location: 'Universal Studios Florida',
-        category: 'park',
-        notes: 'Encerramento das atividades no parque e percurso até o carro no estacionamento (25 min).',
-        sourceType: 'park',
-        completed: false,
-      });
-
-      ensureItem({
-        id: 'auto-return-transit-2027-01-09',
-        time: '21:25',
-        title: '🚗 Transporte de Retorno: Universal Studios Florida ➔ Modern Retreat Resort',
-        titleKey: 'Transporte de Retorno',
-        location: 'Modern Retreat Resort',
-        category: 'transport',
-        notes: 'Viagem de retorno de Universal Studios Florida até o Modern Retreat Resort (Airbnb).',
-        sourceType: 'transport',
-        completed: false,
-      });
-
-      ensureItem({
-        id: 'auto-retorno-2027-01-09',
-        time: '22:30',
-        title: '🌙 Fim do dia na acomodação (Modern Retreat Resort)',
-        titleKey: 'Fim do dia',
-        location: 'Modern Retreat Resort',
-        category: 'hotel',
-        notes: 'Retorno ao Modern Retreat Resort após o dia em Universal Studios Florida e descanso.',
+        notes: `Deslocamento de retorno (${transitMins} min) e chegada à acomodação noturna.`,
         sourceType: 'accommodation',
         completed: false,
       });
@@ -393,12 +226,18 @@ async function main() {
     day.hourlySchedule = deduplicateHourlySchedule(syncedItems);
   }
 
-  // 4. Safe Transactional Upsert per Day with Deterministic Stable IDs & Rigorous Field Validation
-  console.log('Persisting updated itinerary_days and hourly_schedules safely to Supabase...');
+  console.log('Persisting updated schedules securely to Supabase...');
 
   for (const day of days) {
     const dayDbRow = mapItineraryDayToDb(day, tripId);
 
+    const dayHourlyRows = (day.hourlySchedule || []).map((item, index) => {
+      const dbRow = mapHourlyScheduleToDb(item, dayDbRow.id, tripId, index);
+      dbRow.id = generateDeterministicUUID('hourly-stable', `${dayDbRow.id}-${index}-${item.time}-${item.title}`);
+      return dbRow;
+    });
+
+    // Upsert day first
     const { error: dErr } = await supabase
       .from('itinerary_days')
       .upsert(dayDbRow, { onConflict: 'id' });
@@ -408,6 +247,7 @@ async function main() {
       process.exit(1);
     }
 
+    // Clear old hourly schedules ONLY after day is successfully upserted
     const { error: delErr } = await supabase
       .from('hourly_schedules')
       .delete()
@@ -417,12 +257,6 @@ async function main() {
       console.error(`Error clearing old hourly schedules for day ${day.dayNumber}:`, delErr.message);
       process.exit(1);
     }
-
-    const dayHourlyRows = (day.hourlySchedule || []).map((item, index) => {
-      const dbRow = mapHourlyScheduleToDb(item, dayDbRow.id, tripId, index);
-      dbRow.id = generateDeterministicUUID('hourly-stable', `${dayDbRow.id}-${index}-${item.time}-${item.title}`);
-      return dbRow;
-    });
 
     if (dayHourlyRows.length > 0) {
       const { error: hErr } = await supabase.from('hourly_schedules').insert(dayHourlyRows);
@@ -485,6 +319,11 @@ async function main() {
       }
     }
   }
+
+  console.log(`\n=== PARK REPORT SUMMARY ===`);
+  parkReportData.forEach((r) => {
+    console.log(`Park: ${r.parkName} (${r.date}) | Closing: ${r.closingTime} | Exit: ${r.exitTime} | Walk to Car: ${r.walkTimeMins} min | Transit: ${r.transitMins} min | Acc: ${r.accommodationName} | Arrival: ${r.arrivalTime}`);
+  });
 
   console.log(`\n=== FINAL AUDIT RESULT: ${allChecksPassed ? 'ALL CHECKS PASSED SUCCESSFULLY (100% FIELD PARITY)' : 'SOME DISCREPANCIES FOUND'} ===`);
 }
