@@ -172,6 +172,8 @@ export const ItineraryPlanner: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedAllDayIds, setExpandedAllDayIds] = useState<Record<string, boolean>>({});
   const [nightChoiceModalDate, setNightChoiceModalDate] = useState<string | null>(null);
+  const [isSavingNightChoice, setIsSavingNightChoice] = useState(false);
+  const [nightChoiceError, setNightChoiceError] = useState<string | null>(null);
 
   // Sync selected day with list
   const prevLengthRef = React.useRef(itineraryDays.length);
@@ -2406,9 +2408,23 @@ export const ItineraryPlanner: React.FC = () => {
                   </div>
                   <div className="truncate">
                     <span className="text-[10px] text-slate-500 font-bold uppercase block">Hospedagem</span>
-                    <span className="font-bold text-[#1A2B4C] truncate block">
-                      {getAccommodationForDay(activeDay.date, activeDay.dayNumber)?.name || 'Nenhuma cadastrada'}
-                    </span>
+                    {(() => {
+                      const covering = getAccommodationsForNight(accommodations, activeDay.date);
+                      const resolved = getAccommodationForDay(activeDay.date, activeDay.dayNumber);
+                      if (covering.length >= 2 && !resolved) {
+                        return (
+                          <span className="font-bold text-amber-800 text-xs flex items-center gap-1 truncate">
+                            <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                            Escolha pendente
+                          </span>
+                        );
+                      }
+                      return (
+                        <span className="font-bold text-[#1A2B4C] truncate block">
+                          {resolved?.name || 'Nenhuma cadastrada'}
+                        </span>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -4366,7 +4382,10 @@ export const ItineraryPlanner: React.FC = () => {
       {nightChoiceModalDate && (
         <div
           onClick={(e) => {
-            if (e.target === e.currentTarget) setNightChoiceModalDate(null);
+            if (e.target === e.currentTarget && !isSavingNightChoice) {
+              setNightChoiceError(null);
+              setNightChoiceModalDate(null);
+            }
           }}
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200"
         >
@@ -4385,8 +4404,12 @@ export const ItineraryPlanner: React.FC = () => {
               </div>
               <button
                 type="button"
-                onClick={() => setNightChoiceModalDate(null)}
-                className="p-2 rounded-full hover:bg-white/10 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                disabled={isSavingNightChoice}
+                onClick={() => {
+                  setNightChoiceError(null);
+                  setNightChoiceModalDate(null);
+                }}
+                className="p-2 rounded-full hover:bg-white/10 text-slate-300 hover:text-white transition-colors cursor-pointer disabled:opacity-50"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -4397,6 +4420,13 @@ export const ItineraryPlanner: React.FC = () => {
               <p className="text-xs text-slate-600 leading-relaxed">
                 Nesta noite há reservas simultâneas ativas. Selecione qual hospedagem será considerada para os horários e itinerário desta data:
               </p>
+
+              {nightChoiceError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 font-medium flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{nightChoiceError}</span>
+                </div>
+              )}
 
               {getAccommodationsForNight(accommodations, nightChoiceModalDate).map((acc) => {
                 const isSelected = resolveAccommodationForNight(accommodations, nightChoiceModalDate, selectedAccommodationsPerNight)?.id === acc.id;
@@ -4414,11 +4444,21 @@ export const ItineraryPlanner: React.FC = () => {
                   <button
                     key={acc.id}
                     type="button"
+                    disabled={isSavingNightChoice}
                     onClick={async () => {
-                      await setSelectedAccommodationForNight(nightChoiceModalDate, acc.id);
-                      setNightChoiceModalDate(null);
+                      if (isSavingNightChoice) return;
+                      setIsSavingNightChoice(true);
+                      setNightChoiceError(null);
+                      const success = await setSelectedAccommodationForNight(nightChoiceModalDate, acc.id);
+                      setIsSavingNightChoice(false);
+                      if (success) {
+                        setNightChoiceError(null);
+                        setNightChoiceModalDate(null);
+                      } else {
+                        setNightChoiceError('Falha ao salvar a escolha no banco de dados. A alteração não foi mantida.');
+                      }
                     }}
-                    className={`w-full p-4 rounded-2xl border-2 text-left transition-all cursor-pointer flex items-center justify-between gap-4 ${
+                    className={`w-full p-4 rounded-2xl border-2 text-left transition-all cursor-pointer flex items-center justify-between gap-4 disabled:opacity-60 disabled:cursor-not-allowed ${
                       isSelected
                         ? 'border-[#D4AF37] bg-amber-50/70 shadow-sm ring-2 ring-[#D4AF37]/30'
                         : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
@@ -4464,8 +4504,12 @@ export const ItineraryPlanner: React.FC = () => {
             <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-200 flex justify-end">
               <button
                 type="button"
-                onClick={() => setNightChoiceModalDate(null)}
-                className="px-5 py-2.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs transition-all cursor-pointer"
+                disabled={isSavingNightChoice}
+                onClick={() => {
+                  setNightChoiceError(null);
+                  setNightChoiceModalDate(null);
+                }}
+                className="px-5 py-2.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs transition-all cursor-pointer disabled:opacity-50"
               >
                 Concluído
               </button>

@@ -48,7 +48,7 @@ export function resolveAccommodationForNight(
     if (selectedAcc) return selectedAcc;
   }
 
-  return covering[0];
+  return null;
 }
 
 /**
@@ -3195,13 +3195,17 @@ export function syncAllEventsToHourlySchedule(
 
     // Acomodação da noite (onde chegam e dormem) — Regra de vigência estrita: checkInDate <= data < checkOutDate
     // A data do check-out NÃO representa uma noite de hospedagem para aquela acomodação!
+    const coveringForNight = day.date ? getAccommodationsForNight(sortedAccs, day.date) : [];
     const nightAcc = day.date
-      ? (resolveAccommodationForNight(sortedAccs, day.date, tripContext?.selectedAccommodationsPerNight) ||
-         sortedAccs.find((a: any) => a.checkInDate === day.date && a.checkInDate !== a.checkOutDate) ||
-         null)
+      ? resolveAccommodationForNight(sortedAccs, day.date, tripContext?.selectedAccommodationsPerNight)
       : null;
 
-    const activeAccForAddress = morningAcc || nightAcc || (validAccsForDate.length > 0 ? validAccsForDate[0] : null);
+    let activeAccForAddress: AccommodationBooking | null = morningAcc || nightAcc;
+    if (!activeAccForAddress && coveringForNight.length === 1) {
+      activeAccForAddress = coveringForNight[0];
+    } else if (!activeAccForAddress && coveringForNight.length === 0) {
+      activeAccForAddress = validAccsForDate.length > 0 ? validAccsForDate[0] : null;
+    }
     const regAddress = activeAccForAddress?.address && activeAccForAddress.address.trim() ? activeAccForAddress.address.trim() : undefined;
 
     // Verificar se é o último dia da viagem

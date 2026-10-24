@@ -75,6 +75,8 @@ export const AccommodationsView: React.FC = () => {
 
   const [activeSubTab, setActiveSubTab] = useState<'all' | 'resorts' | 'hotels' | 'airbnb' | 'tips'>('all');
   const [nightChoiceModalDate, setNightChoiceModalDate] = useState<string | null>(null);
+  const [isSavingNightChoice, setIsSavingNightChoice] = useState(false);
+  const [nightChoiceError, setNightChoiceError] = useState<string | null>(null);
 
   // Overlap Detection
   const datesWithOverlap = React.useMemo(() => {
@@ -551,13 +553,27 @@ export const AccommodationsView: React.FC = () => {
                         Hospedagem Escolhida para o Roteiro:
                       </span>
                       <div className="flex items-center justify-between mt-1 flex-wrap gap-2">
-                        <span className="font-bold text-[#1A2B4C] text-sm">
-                          {chosen ? chosen.name : 'Nenhuma selecionada'}
-                        </span>
-                        {badgeType && (
-                          <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${badgeType.bg}`}>
-                            {badgeType.label}
-                          </span>
+                        {chosen ? (
+                          <>
+                            <span className="font-bold text-[#1A2B4C] text-sm">
+                              {chosen.name}
+                            </span>
+                            {badgeType && (
+                              <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${badgeType.bg}`}>
+                                {badgeType.label}
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <>
+                            <span className="font-bold text-amber-800 text-sm flex items-center gap-1">
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+                              Escolha pendente
+                            </span>
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-bold border bg-amber-100 text-amber-900 border-amber-300">
+                              Pendente
+                            </span>
+                          </>
                         )}
                       </div>
                     </div>
@@ -1570,11 +1586,13 @@ export const AccommodationsView: React.FC = () => {
         </div>
       )}
 
-      {/* NIGHT CHOICE MODAL */}
       {nightChoiceModalDate && (
         <div
           onClick={(e) => {
-            if (e.target === e.currentTarget) setNightChoiceModalDate(null);
+            if (e.target === e.currentTarget && !isSavingNightChoice) {
+              setNightChoiceError(null);
+              setNightChoiceModalDate(null);
+            }
           }}
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200"
         >
@@ -1593,8 +1611,12 @@ export const AccommodationsView: React.FC = () => {
               </div>
               <button
                 type="button"
-                onClick={() => setNightChoiceModalDate(null)}
-                className="p-2 rounded-full hover:bg-white/10 text-slate-300 hover:text-white transition-colors cursor-pointer"
+                disabled={isSavingNightChoice}
+                onClick={() => {
+                  setNightChoiceError(null);
+                  setNightChoiceModalDate(null);
+                }}
+                className="p-2 rounded-full hover:bg-white/10 text-slate-300 hover:text-white transition-colors cursor-pointer disabled:opacity-50"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1606,6 +1628,13 @@ export const AccommodationsView: React.FC = () => {
                 Nesta noite há reservas simultâneas ativas. Selecione qual hospedagem será considerada para os horários e itinerário desta data:
               </p>
 
+              {nightChoiceError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 font-medium flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{nightChoiceError}</span>
+                </div>
+              )}
+
               {getAccommodationsForNight(accommodations, nightChoiceModalDate).map((acc) => {
                 const isSelected = resolveAccommodationForNight(accommodations, nightChoiceModalDate, selectedAccommodationsPerNight)?.id === acc.id;
                 const badge = getTypeBadge(acc.type);
@@ -1614,11 +1643,21 @@ export const AccommodationsView: React.FC = () => {
                   <button
                     key={acc.id}
                     type="button"
+                    disabled={isSavingNightChoice}
                     onClick={async () => {
-                      await setSelectedAccommodationForNight(nightChoiceModalDate, acc.id);
-                      setNightChoiceModalDate(null);
+                      if (isSavingNightChoice) return;
+                      setIsSavingNightChoice(true);
+                      setNightChoiceError(null);
+                      const success = await setSelectedAccommodationForNight(nightChoiceModalDate, acc.id);
+                      setIsSavingNightChoice(false);
+                      if (success) {
+                        setNightChoiceError(null);
+                        setNightChoiceModalDate(null);
+                      } else {
+                        setNightChoiceError('Falha ao salvar a escolha no banco de dados. A alteração não foi mantida.');
+                      }
                     }}
-                    className={`w-full p-4 rounded-2xl border-2 text-left transition-all cursor-pointer flex items-center justify-between gap-4 ${
+                    className={`w-full p-4 rounded-2xl border-2 text-left transition-all cursor-pointer flex items-center justify-between gap-4 disabled:opacity-60 disabled:cursor-not-allowed ${
                       isSelected
                         ? 'border-[#D4AF37] bg-amber-50/70 shadow-sm ring-2 ring-[#D4AF37]/30'
                         : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'
@@ -1664,8 +1703,12 @@ export const AccommodationsView: React.FC = () => {
             <div className="p-4 sm:p-5 bg-slate-50 border-t border-slate-200 flex justify-end">
               <button
                 type="button"
-                onClick={() => setNightChoiceModalDate(null)}
-                className="px-5 py-2.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs transition-all cursor-pointer"
+                disabled={isSavingNightChoice}
+                onClick={() => {
+                  setNightChoiceError(null);
+                  setNightChoiceModalDate(null);
+                }}
+                className="px-5 py-2.5 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-xs transition-all cursor-pointer disabled:opacity-50"
               >
                 Concluído
               </button>
