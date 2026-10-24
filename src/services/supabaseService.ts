@@ -1405,7 +1405,7 @@ export const SupabaseService = {
             costBRL: pRow.cost_brl !== null ? Number(pRow.cost_brl) : undefined,
             // paidValue fields are hydrated from expenses later
             status: pRow.status || 'Confirmado',
-            paymentStatus: (pRow.payment_status === 'Reservado / Confirmado') ? 'Não informado' : (pRow.payment_status === 'Falta Pagar' ? 'Pendente' : (pRow.payment_status || 'Não informado')),
+            paymentStatus: (pRow.payment_status === 'Pago' ? 'Pago' : (pRow.payment_status === 'Parcial' ? 'Parcial' : (['Pendente', 'Falta Pagar'].includes(pRow.payment_status) ? 'Pendente' : 'Não informado'))),
             payerId: pRow.payer_id || 'all',
             travelerIds: Array.isArray(pRow.traveler_ids) ? pRow.traveler_ids : ['all'],
             notes: pRow.notes || undefined,
@@ -2066,6 +2066,7 @@ export const SupabaseService = {
                   cost_usd: pkg.costUSD !== undefined ? Number(pkg.costUSD) : null,
                   cost_brl: pkg.costBRL !== undefined ? Number(pkg.costBRL) : null,
                   status: pkg.status || 'Confirmado',
+                  payment_status: pkg.paymentStatus || 'Não informado',
                   payer_id: pkg.payerId || 'all',
                   traveler_ids: pkg.travelerIds || ['all'],
                   notes: pkg.notes || null,

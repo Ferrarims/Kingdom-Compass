@@ -1113,11 +1113,9 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     const parsedBrl = photoPkgCostBRL || (parsedUsd * dollarRate);
 
     if (hasPhotoPackage && finalPhotoPackage) {
-      const isPaid = photoPkgPaymentStatus === 'Pago';
-      const isPartial = photoPkgPaymentStatus === 'Parcial';
-      const expenseStatus = isPaid ? 'Pago' : (isPartial ? 'Parcial' : 'Pendente');
-      const finalPaidBRL = isPaid ? parsedBrl : (isPartial ? (photoPkgPaidValueBRL || 0) : 0);
-      const finalPaidUSD = isPaid ? parsedUsd : (isPartial ? ((photoPkgPaidValueBRL || 0) / dollarRate) : 0);
+      const expenseStatus = photoPkgPaymentStatus;
+      const finalPaidBRL = expenseStatus === 'Pago' ? parsedBrl : (expenseStatus === 'Parcial' ? (photoPkgPaidValueBRL || 0) : 0);
+      const finalPaidUSD = expenseStatus === 'Pago' ? parsedUsd : (expenseStatus === 'Parcial' ? ((photoPkgPaidValueBRL || 0) / dollarRate) : 0);
 
       const expenseTitle = `Pacote de Fotos: ${finalPhotoPackage.name}`;
       const packageId = finalPhotoPackage.id || `photo-${activeDay.id}`;
