@@ -61,6 +61,7 @@ CREATE TABLE public.trips (
     inbound_flexibility TEXT,
     flexibility_notes TEXT,
     module_readiness JSONB DEFAULT '{"flights": "pending", "accommodations": "pending", "parks": "pending", "transport": "pending", "docs": "pending"}'::jsonb,
+    selected_accommodations_per_night JSONB DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

@@ -50,6 +50,7 @@ export interface GlobalSettings {
   flexibilityNotes?: string;
   transportModality?: 'rental' | 'public' | 'uber' | 'mixed';
   moduleReadiness?: ModuleReadiness;
+  selectedAccommodationsPerNight?: Record<string, string>;
 }
 
 export interface Trip {
@@ -89,6 +90,7 @@ export interface Trip {
   parkTickets?: ParkTicketPurchase[];
   attractionSelections?: Record<string, boolean>;
   moduleReadiness?: ModuleReadiness;
+  selectedAccommodationsPerNight?: Record<string, string>;
 }
 
 export interface TravelerAttractionSelection {

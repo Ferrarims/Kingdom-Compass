@@ -106,6 +106,7 @@ export function mapTripToDb(trip: Trip | Partial<Trip>): Record<string, any> {
       transport: 'pending',
       docs: 'pending',
     },
+    selected_accommodations_per_night: trip.selectedAccommodationsPerNight || trip.settings?.selectedAccommodationsPerNight || {},
     updated_at: new Date().toISOString(),
   };
   if (trip.id) {
@@ -149,6 +150,7 @@ export function mapDbToTrip(row: any): Partial<Trip> {
       transport: 'pending',
       docs: 'pending',
     },
+    selectedAccommodationsPerNight: row.selected_accommodations_per_night || {},
     createdAt: row.created_at,
   };
 }
@@ -5491,4 +5493,32 @@ export const SupabaseService = {
       return false;
     }
   },
+
+  /**
+   * Save selected accommodations per night choice for a trip
+   */
+  async saveSelectedAccommodationsPerNight(
+    tripId: string,
+    selections: Record<string, string>
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (!tripId) return { success: false, error: 'ID da viagem não informado' };
+      const cleanTripId = ensureValidUUID(tripId, 'trip', tripId);
+      const { error } = await supabase
+        .from('trips')
+        .update({
+          selected_accommodations_per_night: selections || {},
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', cleanTripId);
+
+      if (error && !isSupabaseMissingTableError(error)) {
+        return { success: false, error: error.message };
+      }
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro ao salvar seleções de hospedagem por noite' };
+    }
+  },
 };
+

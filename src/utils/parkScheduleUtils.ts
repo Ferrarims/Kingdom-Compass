@@ -12,6 +12,99 @@ import {
 import { generateDeterministicUUID } from './uuid';
 
 /**
+ * Checks if an accommodation booking covers a specific night (date YYYY-MM-DD).
+ * Note: Check-in date counts as an overnight stay; Check-out date does NOT.
+ */
+export function accommodationCoversNight(acc: AccommodationBooking, dateStr: string): boolean {
+  if (!acc || !acc.checkInDate || !acc.checkOutDate || !dateStr) return false;
+  return dateStr >= acc.checkInDate && dateStr < acc.checkOutDate;
+}
+
+/**
+ * Returns all accommodations that cover a given night (dateStr YYYY-MM-DD).
+ */
+export function getAccommodationsForNight(accommodations: AccommodationBooking[], dateStr: string): AccommodationBooking[] {
+  if (!accommodations || !Array.isArray(accommodations) || !dateStr) return [];
+  return accommodations.filter((acc) => accommodationCoversNight(acc, dateStr));
+}
+
+/**
+ * Resolves the chosen accommodation for a given night (dateStr YYYY-MM-DD).
+ * If multiple cover that night and a valid choice exists in selectedAccommodationsPerNight, returns that choice.
+ * Otherwise, falls back to the first covering accommodation.
+ */
+export function resolveAccommodationForNight(
+  accommodations: AccommodationBooking[],
+  dateStr: string,
+  selectedAccommodationsPerNight?: Record<string, string>
+): AccommodationBooking | null {
+  const covering = getAccommodationsForNight(accommodations, dateStr);
+  if (covering.length === 0) return null;
+  if (covering.length === 1) return covering[0];
+
+  const selectedId = selectedAccommodationsPerNight ? selectedAccommodationsPerNight[dateStr] : null;
+  if (selectedId) {
+    const selectedAcc = covering.find((a) => a.id === selectedId);
+    if (selectedAcc) return selectedAcc;
+  }
+
+  return covering[0];
+}
+
+/**
+ * Calculates the total number of unique nights covered by accommodations.
+ * Avoids double-counting dates where multiple accommodations overlap.
+ */
+export function calculateUniqueAccommodationNights(accommodations: AccommodationBooking[]): number {
+  if (!accommodations || !Array.isArray(accommodations) || accommodations.length === 0) return 0;
+  const uniqueNights = new Set<string>();
+
+  accommodations.forEach((acc) => {
+    if (!acc.checkInDate || !acc.checkOutDate) return;
+    try {
+      const startParts = acc.checkInDate.split('-').map(Number);
+      const endParts = acc.checkOutDate.split('-').map(Number);
+      if (startParts.length === 3 && endParts.length === 3) {
+        const cur = new Date(startParts[0], startParts[1] - 1, startParts[2]);
+        const end = new Date(endParts[0], endParts[1] - 1, endParts[2]);
+        while (cur < end) {
+          const y = cur.getFullYear();
+          const m = String(cur.getMonth() + 1).padStart(2, '0');
+          const d = String(cur.getDate()).padStart(2, '0');
+          uniqueNights.add(`${y}-${m}-${d}`);
+          cur.setDate(cur.getDate() + 1);
+        }
+      }
+    } catch (e) {}
+  });
+
+  return uniqueNights.size;
+}
+
+/**
+ * Cleans selections that refer to deleted or out-of-range accommodations or non-overlapping dates.
+ */
+export function cleanOrphanedAccommodationSelections(
+  selections: Record<string, string>,
+  accommodations: AccommodationBooking[]
+): Record<string, string> {
+  if (!selections || Object.keys(selections).length === 0) return {};
+  if (!accommodations || accommodations.length === 0) return {};
+
+  const cleaned: Record<string, string> = {};
+  for (const [dateStr, accId] of Object.entries(selections)) {
+    const acc = accommodations.find((a) => a.id === accId);
+    if (acc && accommodationCoversNight(acc, dateStr)) {
+      const covering = getAccommodationsForNight(accommodations, dateStr);
+      if (covering.length >= 2) {
+        cleaned[dateStr] = accId;
+      }
+    }
+  }
+  return cleaned;
+}
+
+/**
  * Normalizes text to lowercase without accents or punctuation for reliable comparison
  */
 export function normalizeText(text?: string): string {
@@ -3103,7 +3196,7 @@ export function syncAllEventsToHourlySchedule(
     // Acomodação da noite (onde chegam e dormem) — Regra de vigência estrita: checkInDate <= data < checkOutDate
     // A data do check-out NÃO representa uma noite de hospedagem para aquela acomodação!
     const nightAcc = day.date
-      ? (sortedAccs.find((a: any) => a.checkInDate && a.checkOutDate && day.date >= a.checkInDate && day.date < a.checkOutDate) ||
+      ? (resolveAccommodationForNight(sortedAccs, day.date, tripContext?.selectedAccommodationsPerNight) ||
          sortedAccs.find((a: any) => a.checkInDate === day.date && a.checkInDate !== a.checkOutDate) ||
          null)
       : null;

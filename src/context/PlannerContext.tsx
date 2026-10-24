@@ -27,7 +27,7 @@ import { fetchLiveExchangeRate } from '../services/exchangeRateService';
 import { supabase, checkSupabaseConnection } from '../services/supabaseClient';
 import { SupabaseService } from '../services/supabaseService';
 import { detectGenderByName, Gender } from '../utils/genderDetector';
-import { clearParkReferencesFromDay, generateParkHourlySchedule, generateParkScheduleResult, deduplicateHourlySchedule, cleanInvalidAutoItems, isDayWithPark, isNonParkEvent, syncAllEventsToHourlySchedule, adjustScheduleForCheckoutAndDeparture, compareScheduleItemOrder, calculateDay1AccommodationTimeline, Day1AirportAccommodationTimeline, addMinutesToTimeString, maxTimeString, syncFlightsWithItineraryDays, isDefaultItineraryDayTitle, syncAccommodationsWithItineraryDays, auditAndCorrectTrip, ensureHourlyScheduleItems } from '../utils/parkScheduleUtils';
+import { clearParkReferencesFromDay, generateParkHourlySchedule, generateParkScheduleResult, deduplicateHourlySchedule, cleanInvalidAutoItems, isDayWithPark, isNonParkEvent, syncAllEventsToHourlySchedule, adjustScheduleForCheckoutAndDeparture, compareScheduleItemOrder, calculateDay1AccommodationTimeline, Day1AirportAccommodationTimeline, addMinutesToTimeString, maxTimeString, syncFlightsWithItineraryDays, isDefaultItineraryDayTitle, syncAccommodationsWithItineraryDays, auditAndCorrectTrip, ensureHourlyScheduleItems, cleanOrphanedAccommodationSelections, getAccommodationsForNight, resolveAccommodationForNight, calculateUniqueAccommodationNights } from '../utils/parkScheduleUtils';
 import { generateEssentialBaggageItems, BaggageTemplateOptions, WeatherCondition, detectOrlandoWeatherFromTrip } from '../utils/baggageGenerator';
 import { normalizeAttractionName } from '../utils/attractionUtils';
 import {
@@ -599,6 +599,8 @@ interface PlannerContextType {
 
   // Accommodations & Hotels / Airbnb
   accommodations: AccommodationBooking[];
+  selectedAccommodationsPerNight: Record<string, string>;
+  setSelectedAccommodationForNight: (date: string, accommodationId: string) => Promise<boolean>;
   addAccommodation: (acc: Omit<AccommodationBooking, 'id'>) => Promise<{ success: boolean; error?: string }>;
   updateAccommodation: (id: string, updates: Partial<AccommodationBooking>) => Promise<{ success: boolean; error?: string }>;
   deleteAccommodation: (id: string) => Promise<{ success: boolean; error?: string }>;
@@ -843,6 +845,12 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   const [flights, setFlights] = useState<FlightSegment[]>(() => deduplicateById(activeTrip?.flights || []));
   const [carRentals, setCarRentals] = useState<CarRentalBooking[]>(() => deduplicateById(activeTrip?.carRentals || []));
   const [accommodations, setAccommodations] = useState<AccommodationBooking[]>(() => deduplicateById(activeTrip?.accommodations || []));
+  const [selectedAccommodationsPerNight, setSelectedAccommodationsPerNightState] = useState<Record<string, string>>(() => {
+    return cleanOrphanedAccommodationSelections(
+      activeTrip?.selectedAccommodationsPerNight || activeTrip?.settings?.selectedAccommodationsPerNight || {},
+      activeTrip?.accommodations || []
+    );
+  });
   const [parkTickets, setParkTickets] = useState<ParkTicketPurchase[]>(() => deduplicateById(activeTrip?.parkTickets || []));
 
   const [attractionSelections, setAttractionSelections] = useState<Record<string, boolean>>(() => {
@@ -1487,6 +1495,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
             flights,
             carRentals,
             accommodations,
+            selectedAccommodationsPerNight,
             parkTickets,
             attractionSelections,
           };
@@ -1494,7 +1503,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         return t;
       });
     });
-  }, [settings, expenses, rawDays, prepDocuments, bookingMilestones, baggageItems, flights, carRentals, accommodations, parkTickets, attractionSelections, activeTripId]);
+  }, [settings, expenses, rawDays, prepDocuments, bookingMilestones, baggageItems, flights, carRentals, accommodations, selectedAccommodationsPerNight, parkTickets, attractionSelections, activeTripId]);
 
   // Save trips and active trip ID to localStorage
   useEffect(() => {
@@ -2305,6 +2314,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       setFlights(found.flights || []);
       setCarRentals(found.carRentals || []);
       setAccommodations(found.accommodations || []);
+      const cleanedAccSel = cleanOrphanedAccommodationSelections(
+        found.selectedAccommodationsPerNight || found.settings?.selectedAccommodationsPerNight || {},
+        found.accommodations || []
+      );
+      setSelectedAccommodationsPerNightState(cleanedAccSel);
       setParkTickets(found.parkTickets || []);
       setAttractionSelections(found.attractionSelections || {});
     }
@@ -6174,6 +6188,50 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   // Accommodation & Hotel / Airbnb Handlers
+  const setSelectedAccommodationForNight = async (dateStr: string, accommodationId: string): Promise<boolean> => {
+    const nextSelections = {
+      ...selectedAccommodationsPerNight,
+      [dateStr]: accommodationId,
+    };
+    setSelectedAccommodationsPerNightState(nextSelections);
+
+    if (activeTripId) {
+      const res = await SupabaseService.saveSelectedAccommodationsPerNight(activeTripId, nextSelections);
+      if (!res.success) {
+        setSelectedAccommodationsPerNightState(selectedAccommodationsPerNight);
+        addNotification(`❌ Falha ao salvar escolha de hospedagem no banco: ${res.error}`);
+        return false;
+      }
+    }
+
+    // Re-sync days in rawDays
+    const updatedDays = rawDays.map((d, index) => {
+      const calculatedDate = calculateDateOffset(settings.startDate, index);
+      if (calculatedDate === dateStr) {
+        const dayWithDate = { ...d, date: calculatedDate };
+        const newSchedule = syncAllEventsToHourlySchedule(dayWithDate, {
+          flights,
+          carRentals,
+          accommodations,
+          startDate: settings.startDate,
+          totalDays: rawDays.length,
+          selectedAccommodationsPerNight: nextSelections,
+        });
+        return {
+          ...d,
+          hourlySchedule: newSchedule,
+        };
+      }
+      return d;
+    });
+
+    setRawDays(updatedDays);
+    const chosenAcc = accommodations.find((a) => a.id === accommodationId);
+    const accName = chosenAcc ? chosenAcc.name : 'Acomodação';
+    addNotification(`Definiu "${accName}" para a noite de ${formatDisplayDate(dateStr, false)}`);
+    return true;
+  };
+
   const addAccommodation = async (acc: Omit<AccommodationBooking, 'id'>): Promise<{ success: boolean; error?: string; warning?: string }> => {
     const newAcc: AccommodationBooking = {
       ...acc,
@@ -6207,6 +6265,13 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       setTrips((prevTrips) =>
         prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: nextAccs } : t))
       );
+      const cleanedSel = cleanOrphanedAccommodationSelections(selectedAccommodationsPerNight, nextAccs);
+      if (JSON.stringify(cleanedSel) !== JSON.stringify(selectedAccommodationsPerNight)) {
+        setSelectedAccommodationsPerNightState(cleanedSel);
+        if (activeTripId) {
+          SupabaseService.saveSelectedAccommodationsPerNight(activeTripId, cleanedSel);
+        }
+      }
       return nextAccs;
     });
     // Await da sincronização financeira para garantir consistência e evitar condição de corrida
@@ -6261,6 +6326,13 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       setTrips((prevTrips) =>
         prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: nextAccs } : t))
       );
+      const cleanedSel = cleanOrphanedAccommodationSelections(selectedAccommodationsPerNight, nextAccs);
+      if (JSON.stringify(cleanedSel) !== JSON.stringify(selectedAccommodationsPerNight)) {
+        setSelectedAccommodationsPerNightState(cleanedSel);
+        if (activeTripId) {
+          SupabaseService.saveSelectedAccommodationsPerNight(activeTripId, cleanedSel);
+        }
+      }
       return nextAccs;
     });
     // Await da sincronização financeira sequencialmente
@@ -6297,6 +6369,13 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       setTrips((prevTrips) =>
         prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: nextAccs } : t))
       );
+      const cleanedSel = cleanOrphanedAccommodationSelections(selectedAccommodationsPerNight, nextAccs);
+      if (JSON.stringify(cleanedSel) !== JSON.stringify(selectedAccommodationsPerNight)) {
+        setSelectedAccommodationsPerNightState(cleanedSel);
+        if (activeTripId) {
+          SupabaseService.saveSelectedAccommodationsPerNight(activeTripId, cleanedSel);
+        }
+      }
       return nextAccs;
     });
 
@@ -7200,6 +7279,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         updateCarRental,
         deleteCarRental,
         accommodations,
+        selectedAccommodationsPerNight,
+        setSelectedAccommodationForNight,
         addAccommodation,
         updateAccommodation,
         deleteAccommodation,
