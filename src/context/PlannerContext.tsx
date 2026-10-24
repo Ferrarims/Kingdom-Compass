@@ -6232,6 +6232,59 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     return true;
   };
 
+  const handleCompensationFailure = async (
+    origErr: string,
+    compErr: string,
+    _actionContext: 'add' | 'edit' | 'delete'
+  ): Promise<{ success: boolean; error: string }> => {
+    const reloaded = await reloadAccommodationsFromSupabase();
+    if (!reloaded) {
+      const errMsg = `Falha ao salvar limpeza das seleções de hospedagem (${origErr}). A ação compensatória no banco também falhou (${compErr}) e a recarga dos dados do banco para reconciliação falhou. O estado local não pôde ser atualizado com o banco.`;
+      addNotification(`❌ ${errMsg}`);
+      return { success: false, error: errMsg };
+    }
+
+    let reloadedAccs: AccommodationBooking[] = [];
+    if (activeTripId) {
+      const remoteAccs = await SupabaseService.fetchAccommodationsByTripId(activeTripId);
+      if (remoteAccs !== null) {
+        reloadedAccs = remoteAccs;
+      }
+    }
+
+    const reloadedCleanedSel = cleanOrphanedAccommodationSelections(selectedAccommodationsPerNight, reloadedAccs);
+    let reloadedCleanSuccess = true;
+    let reloadedCleanErr: string | undefined;
+
+    if (activeTripId && JSON.stringify(reloadedCleanedSel) !== JSON.stringify(selectedAccommodationsPerNight)) {
+      const cleanRes = await SupabaseService.saveSelectedAccommodationsPerNight(activeTripId, reloadedCleanedSel);
+      if (!cleanRes.success) {
+        reloadedCleanSuccess = false;
+        reloadedCleanErr = cleanRes.error || 'Erro ao persistir limpeza das seleções após recarga';
+      } else {
+        setSelectedAccommodationsPerNightState(reloadedCleanedSel);
+        setTrips((prevTrips) =>
+          prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: reloadedAccs, selectedAccommodationsPerNight: reloadedCleanedSel } : t))
+        );
+      }
+    } else {
+      setSelectedAccommodationsPerNightState(reloadedCleanedSel);
+      setTrips((prevTrips) =>
+        prevTrips.map((t) => (t.id === activeTripId ? { ...t, accommodations: reloadedAccs, selectedAccommodationsPerNight: reloadedCleanedSel } : t))
+      );
+    }
+
+    if (!reloadedCleanSuccess) {
+      const errMsg = `Falha ao salvar limpeza das seleções de hospedagem (${origErr}). A ação compensatória falhou (${compErr}). As hospedagens foram recarregadas do banco, porém a gravação da limpeza atualizada falhou (${reloadedCleanErr}).`;
+      addNotification(`❌ ${errMsg}`);
+      return { success: false, error: errMsg };
+    }
+
+    const errMsg = `Falha ao salvar limpeza das seleções de hospedagem (${origErr}). A ação compensatória no banco falhou (${compErr}). O estado local foi reconciliado com sucesso recarregando os dados reais do banco e limpando seleções inválidas.`;
+    addNotification(`❌ ${errMsg}`);
+    return { success: false, error: errMsg };
+  };
+
   const addAccommodation = async (acc: Omit<AccommodationBooking, 'id'>): Promise<{ success: boolean; error?: string; warning?: string }> => {
     const newAcc: AccommodationBooking = {
       ...acc,
@@ -6274,10 +6327,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           }
           if (!compRes.success) {
             const compErr = compRes.error || 'Erro ao desfazer a nova hospedagem no banco de dados';
-            await reloadAccommodationsFromSupabase();
-            const errMsg = `Falha ao salvar limpeza das seleções de hospedagem (${origErr}). Além disso, a ação compensatória para desfazer a hospedagem recém-criada falhou (${compErr}). O estado da viagem foi recarregado do banco.`;
-            addNotification(`❌ ${errMsg}`);
-            return { success: false, error: errMsg };
+            return await handleCompensationFailure(origErr, compErr, 'add');
           }
           const errMsg = `Falha ao salvar limpeza de hospedagens: ${origErr}`;
           addNotification(`❌ ${errMsg}`);
@@ -6353,10 +6403,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           }
           if (!compRes.success) {
             const compErr = compRes.error || 'Erro ao restaurar a hospedagem anterior no banco de dados';
-            await reloadAccommodationsFromSupabase();
-            const errMsg = `Falha ao salvar limpeza das seleções de hospedagem (${origErr}). Além disso, a ação compensatória para restaurar a hospedagem anterior falhou (${compErr}). O estado da viagem foi recarregado do banco.`;
-            addNotification(`❌ ${errMsg}`);
-            return { success: false, error: errMsg };
+            return await handleCompensationFailure(origErr, compErr, 'edit');
           }
           const errMsg = `Falha ao salvar limpeza de hospedagens: ${origErr}`;
           addNotification(`❌ ${errMsg}`);
@@ -6412,10 +6459,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           }
           if (!compRes.success) {
             const compErr = compRes.error || 'Erro ao restaurar a hospedagem excluída no banco de dados';
-            await reloadAccommodationsFromSupabase();
-            const errMsg = `Falha ao salvar limpeza das seleções de hospedagem (${origErr}). Além disso, a ação compensatória para restaurar a hospedagem excluída falhou (${compErr}). O estado da viagem foi recarregado do banco.`;
-            addNotification(`❌ ${errMsg}`);
-            return { success: false, error: errMsg };
+            return await handleCompensationFailure(origErr, compErr, 'delete');
           }
           const errMsg = `Falha ao salvar limpeza de hospedagens: ${origErr}`;
           addNotification(`❌ ${errMsg}`);
