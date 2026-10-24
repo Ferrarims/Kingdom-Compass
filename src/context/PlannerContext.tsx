@@ -3848,217 +3848,222 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   };
 
   const updateItineraryDay = async (id: string, updates: Partial<ItineraryDay>): Promise<{ success: boolean; error?: string }> => {
-    // 1. Locate existing day in current rawDays synchronously
-    let currentDay = rawDays.find((d) => d.id === id);
-    if (!currentDay && updates.dayNumber) {
-      currentDay = rawDays.find((d) => d.dayNumber === updates.dayNumber);
-    }
-    if (!currentDay) {
-      console.warn(`[DIAGNÓSTICO] updateItineraryDay: Nenhuma correspondência válida com itinerary_days ID=${id}`);
-      return { success: false, error: 'Dia do roteiro não encontrado' };
-    }
-
-    // Check if park is being removed, set to 'Sem Parque', or unlinked
-    const isRemovingPark =
-      updates.park === 'Sem Parque' ||
-      updates.park === '' ||
-      (updates.parkBooking === undefined && 'parkBooking' in updates);
-
-    const isParkChanged = Boolean(
-      currentDay &&
-      updates.park &&
-      updates.park !== 'Sem Parque' &&
-      updates.park.trim().toLowerCase() !== (currentDay.park || '').trim().toLowerCase()
-    );
-
-    let finalUpdates = { ...updates };
-
-    if (isRemovingPark && currentDay) {
-      const dayDate = calculateDateOffset(settings.startDate, currentDay.dayNumber - 1);
-      const activeAcc = accommodations.find((acc) => {
-        if (!acc.checkInDate || !acc.checkOutDate) return false;
-        return dayDate >= acc.checkInDate && dayDate <= acc.checkOutDate;
-      });
-      const accName = activeAcc ? activeAcc.name : '';
-      const cleaned = clearParkReferencesFromDay(
-        currentDay,
-        rawDays.length,
-        accName
-      );
-
-      // If a title was explicitly provided in updates (including 'Sem Parque'), ALWAYS respect it.
-      // Only if no title was provided at all (updates.title === undefined or ''), fall back to cleaned.title
-      const finalTitle = (updates.title !== undefined && updates.title.trim() !== '')
-        ? updates.title.trim()
-        : (cleaned.title || 'Sem Parque');
-
-      finalUpdates = {
-        ...cleaned,
-        ...updates,
-        park: updates.park !== undefined ? updates.park : 'Sem Parque',
-        parkBooking: undefined,
-        title: finalTitle,
-        morning: updates.morning ? updates.morning : cleaned.morning,
-        afternoon: updates.afternoon ? updates.afternoon : cleaned.afternoon,
-        night: updates.night ? updates.night : cleaned.night,
-        generalNotes: updates.generalNotes !== undefined ? updates.generalNotes : cleaned.generalNotes,
-        hourlySchedule: updates.hourlySchedule !== undefined ? updates.hourlySchedule : cleaned.hourlySchedule,
-      };
-    } else if (updates.park && updates.park !== 'Sem Parque' && currentDay) {
-      const isNonPark = isNonParkEvent(updates.park);
-
-      if (isNonPark) {
-        finalUpdates.parkBooking = undefined;
-      } else if (!updates.parkBooking) {
-        if (currentDay.parkBooking && currentDay.parkBooking.parkName === updates.park) {
-          finalUpdates.parkBooking = currentDay.parkBooking;
-        } else {
-          finalUpdates.parkBooking = {
-            id: currentDay.parkBooking?.id || `pb-${id}`,
-            dayNumber: currentDay.dayNumber,
-            date: currentDay.date,
-            parkName: updates.park,
-            parkHours: {
-              openingTime: '09:00',
-              closingTime: '21:00',
-            },
-            parkPassStatus: 'Previsão (Planejamento)',
-            fastPasses: currentDay.parkBooking?.fastPasses || [],
-            diningReservations: currentDay.parkBooking?.diningReservations || [],
-            showsAndParades: currentDay.parkBooking?.showsAndParades || [],
-          };
-        }
+    try {
+      // 1. Locate existing day in current rawDays synchronously
+      let currentDay = rawDays.find((d) => d.id === id);
+      if (!currentDay && updates.dayNumber) {
+        currentDay = rawDays.find((d) => d.dayNumber === updates.dayNumber);
+      }
+      if (!currentDay) {
+        console.warn(`[DIAGNÓSTICO] updateItineraryDay: Nenhuma correspondência válida com itinerary_days ID=${id}`);
+        return { success: false, error: 'Dia do roteiro não encontrado' };
       }
 
-      // Only re-generate hourly schedule if the park actually changed and it's a theme park
-      if (isParkChanged && !updates.hourlySchedule && !isNonPark) {
+      // Check if park is being removed, set to 'Sem Parque', or unlinked
+      const isRemovingPark =
+        updates.park === 'Sem Parque' ||
+        updates.park === '' ||
+        (updates.parkBooking === undefined && 'parkBooking' in updates);
+
+      const isParkChanged = Boolean(
+        currentDay &&
+        updates.park &&
+        updates.park !== 'Sem Parque' &&
+        updates.park.trim().toLowerCase() !== (currentDay.park || '').trim().toLowerCase()
+      );
+
+      let finalUpdates = { ...updates };
+
+      if (isRemovingPark && currentDay) {
         const dayDate = calculateDateOffset(settings.startDate, currentDay.dayNumber - 1);
         const activeAcc = accommodations.find((acc) => {
           if (!acc.checkInDate || !acc.checkOutDate) return false;
           return dayDate >= acc.checkInDate && dayDate <= acc.checkOutDate;
         });
         const accName = activeAcc ? activeAcc.name : '';
-        const pb = finalUpdates.parkBooking;
-        finalUpdates.hourlySchedule = generateParkHourlySchedule(
-          updates.park,
-          pb?.parkHours?.openingTime || '09:00',
-          pb?.parkHours?.closingTime || '21:00',
-          pb?.parkHours?.earlyEntryTime,
-          accName,
-          currentDay.hourlySchedule || [],
-          pb?.id,
-          currentDay.dayNumber,
-          activeAcc?.address || accName,
+        const cleaned = clearParkReferencesFromDay(
           currentDay,
-          rawDays,
-          settings?.destination,
-          pb
+          rawDays.length,
+          accName
         );
+
+        // If a title was explicitly provided in updates (including 'Sem Parque'), ALWAYS respect it.
+        // Only if no title was provided at all (updates.title === undefined or ''), fall back to cleaned.title
+        const finalTitle = (updates.title !== undefined && updates.title.trim() !== '')
+          ? updates.title.trim()
+          : (cleaned.title || 'Sem Parque');
+
+        finalUpdates = {
+          ...cleaned,
+          ...updates,
+          park: updates.park !== undefined ? updates.park : 'Sem Parque',
+          parkBooking: undefined,
+          title: finalTitle,
+          morning: updates.morning ? updates.morning : cleaned.morning,
+          afternoon: updates.afternoon ? updates.afternoon : cleaned.afternoon,
+          night: updates.night ? updates.night : cleaned.night,
+          generalNotes: updates.generalNotes !== undefined ? updates.generalNotes : cleaned.generalNotes,
+          hourlySchedule: updates.hourlySchedule !== undefined ? updates.hourlySchedule : cleaned.hourlySchedule,
+        };
+      } else if (updates.park && updates.park !== 'Sem Parque' && currentDay) {
+        const isNonPark = isNonParkEvent(updates.park);
+
+        if (isNonPark) {
+          finalUpdates.parkBooking = undefined;
+        } else if (!updates.parkBooking) {
+          if (currentDay.parkBooking && currentDay.parkBooking.parkName === updates.park) {
+            finalUpdates.parkBooking = currentDay.parkBooking;
+          } else {
+            finalUpdates.parkBooking = {
+              id: currentDay.parkBooking?.id || `pb-${id}`,
+              dayNumber: currentDay.dayNumber,
+              date: currentDay.date,
+              parkName: updates.park,
+              parkHours: {
+                openingTime: '09:00',
+                closingTime: '21:00',
+              },
+              parkPassStatus: 'Previsão (Planejamento)',
+              fastPasses: currentDay.parkBooking?.fastPasses || [],
+              diningReservations: currentDay.parkBooking?.diningReservations || [],
+              showsAndParades: currentDay.parkBooking?.showsAndParades || [],
+            };
+          }
+        }
+
+        // Only re-generate hourly schedule if the park actually changed and it's a theme park
+        if (isParkChanged && !updates.hourlySchedule && !isNonPark) {
+          const dayDate = calculateDateOffset(settings.startDate, currentDay.dayNumber - 1);
+          const activeAcc = accommodations.find((acc) => {
+            if (!acc.checkInDate || !acc.checkOutDate) return false;
+            return dayDate >= acc.checkInDate && dayDate <= acc.checkOutDate;
+          });
+          const accName = activeAcc ? activeAcc.name : '';
+          const pb = finalUpdates.parkBooking;
+          finalUpdates.hourlySchedule = generateParkHourlySchedule(
+            updates.park,
+            pb?.parkHours?.openingTime || '09:00',
+            pb?.parkHours?.closingTime || '21:00',
+            pb?.parkHours?.earlyEntryTime,
+            accName,
+            currentDay.hourlySchedule || [],
+            pb?.id,
+            currentDay.dayNumber,
+            activeAcc?.address || accName,
+            currentDay,
+            rawDays,
+            settings?.destination,
+            pb
+          );
+        }
       }
-    }
 
-    // Always clean invalid accommodation/park items if no accommodation is booked or not a theme park
-    const checkDate = currentDay ? calculateDateOffset(settings.startDate, currentDay.dayNumber - 1) : '';
-    const dayAcc = accommodations.find((acc) => {
-      if (!acc.checkInDate || !acc.checkOutDate) return false;
-      return checkDate >= acc.checkInDate && checkDate <= acc.checkOutDate;
-    });
-    const hasAcc = Boolean(
-      dayAcc &&
-      dayAcc.name &&
-      dayAcc.name.trim() &&
-      dayAcc.name.trim().toLowerCase() !== 'hospedagem' &&
-      dayAcc.name.trim().toLowerCase() !== 'nenhuma cadastrada'
-    );
-    const effectivePark = finalUpdates.park !== undefined ? finalUpdates.park : currentDay?.park || '';
-    const isThemePark = isDayWithPark({ park: effectivePark, title: finalUpdates.title || currentDay?.title });
-    if (!isThemePark) {
-      finalUpdates.parkBooking = undefined;
-    }
-
-    const currentScheduleToClean = finalUpdates.hourlySchedule || currentDay?.hourlySchedule || [];
-    finalUpdates.hourlySchedule = deduplicateHourlySchedule(
-      cleanInvalidAutoItems(currentScheduleToClean, hasAcc, isThemePark, effectivePark)
-    );
-
-    const dayToSave: Omit<ItineraryDay, 'date'> = { ...currentDay, ...finalUpdates };
-
-    // Se hourlySchedule foi fornecido explicitamente, respeitar exatamente os itens fornecidos
-    if (updates.hourlySchedule !== undefined) {
-      dayToSave.hourlySchedule = finalUpdates.hourlySchedule || [];
-    } else if (isParkChanged) {
-      const tripContext = { flights, accommodations, carRentals };
-      const fullySyncedHourly = syncAllEventsToHourlySchedule(dayToSave, tripContext);
-      dayToSave.hourlySchedule = fullySyncedHourly;
-      finalUpdates.hourlySchedule = fullySyncedHourly;
-    }
-
-    // Snapshot prévio para reversão em caso de erro na gravação
-    const prevRawDays = rawDays;
-    const prevTrips = trips;
-
-    // 2. Update rawDays state immediately
-    setRawDays((prev) => {
-      const exactIndex = prev.findIndex((d) => d.id === id);
-      if (exactIndex !== -1) {
-        const newArr = [...prev];
-        newArr[exactIndex] = { ...prev[exactIndex], ...finalUpdates };
-        return newArr;
+      // Always clean invalid accommodation/park items if no accommodation is booked or not a theme park
+      const checkDate = currentDay ? calculateDateOffset(settings.startDate, currentDay.dayNumber - 1) : '';
+      const dayAcc = accommodations.find((acc) => {
+        if (!acc.checkInDate || !acc.checkOutDate) return false;
+        return checkDate >= acc.checkInDate && checkDate <= acc.checkOutDate;
+      });
+      const hasAcc = Boolean(
+        dayAcc &&
+        dayAcc.name &&
+        dayAcc.name.trim() &&
+        dayAcc.name.trim().toLowerCase() !== 'hospedagem' &&
+        dayAcc.name.trim().toLowerCase() !== 'nenhuma cadastrada'
+      );
+      const effectivePark = finalUpdates.park !== undefined ? finalUpdates.park : currentDay?.park || '';
+      const isThemePark = isDayWithPark({ park: effectivePark, title: finalUpdates.title || currentDay?.title });
+      if (!isThemePark) {
+        finalUpdates.parkBooking = undefined;
       }
-      if (finalUpdates.dayNumber) {
-        const numIndex = prev.findIndex((d) => d.dayNumber === finalUpdates.dayNumber);
-        if (numIndex !== -1) {
+
+      const currentScheduleToClean = finalUpdates.hourlySchedule || currentDay?.hourlySchedule || [];
+      finalUpdates.hourlySchedule = deduplicateHourlySchedule(
+        cleanInvalidAutoItems(currentScheduleToClean, hasAcc, isThemePark, effectivePark)
+      );
+
+      const dayToSave: Omit<ItineraryDay, 'date'> = { ...currentDay, ...finalUpdates };
+
+      // Se hourlySchedule foi fornecido explicitamente, respeitar exatamente os itens fornecidos
+      if (updates.hourlySchedule !== undefined) {
+        dayToSave.hourlySchedule = finalUpdates.hourlySchedule || [];
+      } else if (isParkChanged) {
+        const tripContext = { flights, accommodations, carRentals };
+        const fullySyncedHourly = syncAllEventsToHourlySchedule(dayToSave, tripContext);
+        dayToSave.hourlySchedule = fullySyncedHourly;
+        finalUpdates.hourlySchedule = fullySyncedHourly;
+      }
+
+      // Snapshot prévio para reversão em caso de erro na gravação
+      const prevRawDays = rawDays;
+      const prevTrips = trips;
+
+      // 2. Update rawDays state immediately
+      setRawDays((prev) => {
+        const exactIndex = prev.findIndex((d) => d.id === id);
+        if (exactIndex !== -1) {
           const newArr = [...prev];
-          newArr[numIndex] = { ...prev[numIndex], ...finalUpdates };
+          newArr[exactIndex] = { ...prev[exactIndex], ...finalUpdates };
           return newArr;
         }
-      }
-      return prev.map((d) => (d.id === id ? { ...d, ...finalUpdates } : d));
-    });
-
-    // 3. Update trips list immediately
-    setTrips((prevTrips) =>
-      prevTrips.map((t) => {
-        if (t.id === activeTripId) {
-          const currentDays = t.rawDays || [];
-          const updatedDays = currentDays.map((d) => {
-            if (d.id === id || (updates.dayNumber && d.dayNumber === updates.dayNumber)) {
-              return { ...d, ...finalUpdates };
-            }
-            return d;
-          });
-          return {
-            ...t,
-            rawDays: updatedDays,
-          };
+        if (finalUpdates.dayNumber) {
+          const numIndex = prev.findIndex((d) => d.dayNumber === finalUpdates.dayNumber);
+          if (numIndex !== -1) {
+            const newArr = [...prev];
+            newArr[numIndex] = { ...prev[numIndex], ...finalUpdates };
+            return newArr;
+          }
         }
-        return t;
-      })
-    );
+        return prev.map((d) => (d.id === id ? { ...d, ...finalUpdates } : d));
+      });
 
-    // 4. Sincronização Supabase
-    if (activeTripId) {
-      const fallbackTrip = activeTrip || {
-        id: activeTripId,
-        tripName: settings.tripName,
-        destination: settings.destination,
-        startDate: settings.startDate,
-        durationDays: settings.durationDays,
-        travelers: settings.travelers,
-      };
-      const saveRes = await SupabaseService.saveItineraryDay(activeTripId, dayToSave, fallbackTrip);
-      if (!saveRes.success) {
-        // Reverter alterações locais em caso de falha de gravação
-        setRawDays(prevRawDays);
-        setTrips(prevTrips);
-        const errMsg = saveRes.error || 'Erro ao persistir no Supabase';
-        addNotification(`❌ Falha ao salvar no banco: ${errMsg}. Alterações revertidas.`);
-        return { success: false, error: errMsg };
+      // 3. Update trips list immediately
+      setTrips((prevTrips) =>
+        prevTrips.map((t) => {
+          if (t.id === activeTripId) {
+            const currentDays = t.rawDays || [];
+            const updatedDays = currentDays.map((d) => {
+              if (d.id === id || (updates.dayNumber && d.dayNumber === updates.dayNumber)) {
+                return { ...d, ...finalUpdates };
+              }
+              return d;
+            });
+            return {
+              ...t,
+              rawDays: updatedDays,
+            };
+          }
+          return t;
+        })
+      );
+
+      // 4. Sincronização Supabase
+      if (activeTripId) {
+        const fallbackTrip = activeTrip || {
+          id: activeTripId,
+          tripName: settings.tripName,
+          destination: settings.destination,
+          startDate: settings.startDate,
+          durationDays: settings.durationDays,
+          travelers: settings.travelers,
+        };
+        const saveRes = await SupabaseService.saveItineraryDay(activeTripId, dayToSave, fallbackTrip);
+        if (!saveRes.success) {
+          // Reverter alterações locais em caso de falha de gravação
+          setRawDays(prevRawDays);
+          setTrips(prevTrips);
+          const errMsg = saveRes.error || 'Erro ao persistir no Supabase';
+          addNotification(`❌ Falha ao salvar no banco: ${errMsg}. Alterações revertidas.`);
+          return { success: false, error: errMsg };
+        }
       }
-    }
 
-    addNotification(`Atualizou o roteiro`);
-    return { success: true };
+      addNotification(`Atualizou o roteiro`);
+      return { success: true };
+    } catch (err: any) {
+      console.error('Erro inesperado em updateItineraryDay:', err);
+      return { success: false, error: err?.message || 'Erro inesperado ao atualizar dia do roteiro' };
+    }
   };
 
   const saveHourlyScheduleItem = useCallback(

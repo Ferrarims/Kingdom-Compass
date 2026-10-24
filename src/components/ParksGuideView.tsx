@@ -1842,21 +1842,31 @@ export const ParksGuideView: React.FC = () => {
           initialParkName={preselectedParkName}
           initialTab={bookingModalInitialTab}
           onSave={async (updates, targetDayId) => {
-            const idToUpdate = targetDayId || bookingModalDay?.id || itineraryDays[0]?.id;
-            if (idToUpdate) {
-              return await updateItineraryDay(idToUpdate, updates);
+            try {
+              const idToUpdate = targetDayId || bookingModalDay?.id || itineraryDays[0]?.id;
+              if (idToUpdate) {
+                const res = await updateItineraryDay(idToUpdate, updates);
+                return res || { success: false, error: 'Resposta vazia do servidor' };
+              }
+              return { success: false, error: 'Identificador do dia não encontrado' };
+            } catch (err: any) {
+              return { success: false, error: err?.message || 'Erro inesperado ao salvar dia' };
             }
-            return { success: false, error: 'Identificador do dia não encontrado' };
           }}
           onRemovePark={async (targetDayId, cleanedDay) => {
-            const idToUpdate = targetDayId || bookingModalDay?.id || itineraryDays[0]?.id;
-            if (!idToUpdate) return { success: false, error: 'Identificador do dia não encontrado' };
-            const targetDay = itineraryDays.find((d) => d.id === idToUpdate) || bookingModalDay || itineraryDays[0];
-            const cleaned = cleanedDay || (targetDay ? clearParkReferencesFromDay(targetDay, itineraryDays.length) : {
-              park: 'Sem Parque',
-              parkBooking: undefined,
-            });
-            return await updateItineraryDay(idToUpdate, cleaned);
+            try {
+              const idToUpdate = targetDayId || bookingModalDay?.id || itineraryDays[0]?.id;
+              if (!idToUpdate) return { success: false, error: 'Identificador do dia não encontrado' };
+              const targetDay = itineraryDays.find((d) => d.id === idToUpdate) || bookingModalDay || itineraryDays[0];
+              const cleaned = cleanedDay || (targetDay ? clearParkReferencesFromDay(targetDay, itineraryDays.length) : {
+                park: 'Sem Parque',
+                parkBooking: undefined,
+              });
+              const res = await updateItineraryDay(idToUpdate, cleaned);
+              return res || { success: false, error: 'Resposta vazia do servidor' };
+            } catch (err: any) {
+              return { success: false, error: err?.message || 'Erro inesperado ao desvincular parque' };
+            }
           }}
         />
       )}

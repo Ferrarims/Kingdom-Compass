@@ -72,8 +72,8 @@ interface ParkBookingModalProps {
   allDays?: ItineraryDay[];
   initialParkName?: string;
   initialTab?: 'general' | 'fastpass' | 'dining' | 'shows' | 'photos';
-  onSave: (updatedDay: Partial<ItineraryDay>, targetDayId?: string) => Promise<{ success: boolean; error?: string }> | void;
-  onRemovePark?: (targetDayId: string, cleanedDay?: Partial<ItineraryDay>) => Promise<{ success: boolean; error?: string }> | void;
+  onSave?: (updatedDay: Partial<ItineraryDay>, targetDayId?: string) => Promise<{ success: boolean; error?: string }>;
+  onRemovePark?: (targetDayId: string, cleanedDay?: Partial<ItineraryDay>) => Promise<{ success: boolean; error?: string }>;
 }
 
 export const isDayViable = (d: ItineraryDay, flights: any[]): boolean => {
@@ -1520,35 +1520,117 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
   };
 
   const handleUnlinkPark = async () => {
-    if (!activeDay) return;
-    const cleanedDay = clearParkReferencesFromDay(activeDay, allDays?.length || 1, activeAccommodation?.name);
-    let saveRes: any;
-    if (onRemovePark) {
-      saveRes = await onRemovePark(activeDay.id, cleanedDay);
-    } else if (onSave) {
-      saveRes = await onSave(cleanedDay, activeDay.id);
-    } else {
-      saveRes = await updateItineraryDay(activeDay.id, cleanedDay);
-    }
+    if (isSavingRef.current || !activeDay) return;
 
-    const isUnlinkOk = Boolean(saveRes && typeof saveRes === 'object' && saveRes.success === true);
-    if (!isUnlinkOk) {
-      const errorMsg = (saveRes && typeof saveRes === 'object' && saveRes.error) || 'Falha ao desvincular parque no banco';
-      alert(`❌ Erro ao desvincular parque no banco: ${errorMsg}. Mantendo dados para nova tentativa.`);
-      return;
-    }
+    isSavingRef.current = true;
+    setIsSaving(true);
 
-    // Clean any overflow items in the next day
+    // Snapshots prévios para reversão compensatória caso a limpeza do dia seguinte falhe
+    const snapshotActiveDay: ItineraryDay = JSON.parse(JSON.stringify(activeDay));
     const nextDay = (allDays || []).find((d) => d.dayNumber === activeDay.dayNumber + 1);
-    if (nextDay) {
-      const cleanedNextSchedule = cleanPreviousDayOverflowItems(nextDay.hourlySchedule || [], activeDay.dayNumber);
-      await updateItineraryDay(nextDay.id, {
-        hourlySchedule: cleanedNextSchedule,
-      });
-    }
+    const snapshotNextDay: ItineraryDay | undefined = nextDay ? JSON.parse(JSON.stringify(nextDay)) : undefined;
 
-    setConfirmUnlink(false);
-    onClose();
+    // Helper de reversão compensatória com validação estrita
+    const rollbackUnlinkState = async (stepFailed: string, errorDetail: string) => {
+      const compErrors: string[] = [];
+      try {
+        // 1. Restaurar dia ativo com seus dados originais
+        let rActive: any;
+        if (onSave) {
+          rActive = await onSave(snapshotActiveDay, activeDay.id);
+        } else {
+          rActive = await updateItineraryDay(activeDay.id, snapshotActiveDay);
+        }
+        const isActiveRestored = Boolean(rActive && typeof rActive === 'object' && rActive.success === true);
+        if (!isActiveRestored) {
+          compErrors.push(
+            `dia ativo ${activeDay.dayNumber} (${(rActive && typeof rActive === 'object' && rActive.error) || 'falha na restauração'})`
+          );
+        }
+
+        // 2. Restaurar dia seguinte se tiver sido afetado
+        if (snapshotNextDay) {
+          const rNext = await updateItineraryDay(snapshotNextDay.id, snapshotNextDay);
+          const isNextRestored = Boolean(rNext && typeof rNext === 'object' && rNext.success === true);
+          if (!isNextRestored) {
+            compErrors.push(
+              `dia seguinte ${snapshotNextDay.dayNumber} (${(rNext && typeof rNext === 'object' && rNext.error) || 'falha na restauração'})`
+            );
+          }
+        }
+      } catch (rErr: any) {
+        compErrors.push(`exceção no rollback (${rErr?.message || 'erro inesperado'})`);
+      }
+
+      if (compErrors.length > 0) {
+        alert(
+          `❌ Falha ao desvincular parque: erro na "${stepFailed}": ${errorDetail}.\n\nAtenção: a reversão automática falhou em: ${compErrors.join(
+            '; '
+          )}. O banco de dados pode estar em estado inconsistente.\n\nO modal foi mantido aberto para que você possa tentar novamente.`
+        );
+      } else {
+        alert(
+          `❌ Falha na "${stepFailed}": ${errorDetail}.\n\nO parque havia sido desvinculado inicialmente, mas a limpeza complementar do dia seguinte falhou. Por segurança, todas as alterações foram revertidas com sucesso e os dados originais foram restaurados no banco de dados.\n\nO modal foi mantido aberto para nova tentativa.`
+        );
+      }
+    };
+
+    try {
+      const cleanedDay = clearParkReferencesFromDay(activeDay, allDays?.length || 1, activeAccommodation?.name);
+
+      // ETAPA 1: Desvincular parque no dia ativo
+      let saveRes: any;
+      if (onRemovePark) {
+        saveRes = await onRemovePark(activeDay.id, cleanedDay);
+      } else if (onSave) {
+        saveRes = await onSave(cleanedDay, activeDay.id);
+      } else {
+        saveRes = await updateItineraryDay(activeDay.id, cleanedDay);
+      }
+
+      const isUnlinkOk = Boolean(saveRes && typeof saveRes === 'object' && saveRes.success === true);
+      if (!isUnlinkOk) {
+        const errorMsg = (saveRes && typeof saveRes === 'object' && saveRes.error) || 'Falha ao desvincular parque no banco de dados';
+        alert(`❌ Erro ao desvincular parque no banco: ${errorMsg}. Mantendo dados para nova tentativa.`);
+        return;
+      }
+
+      // ETAPA 2: Limpar horários excedentes do dia seguinte (se existir)
+      if (nextDay && snapshotNextDay) {
+        const cleanedNextSchedule = cleanPreviousDayOverflowItems(nextDay.hourlySchedule || [], activeDay.dayNumber);
+
+        let nextDayRes: any;
+        try {
+          nextDayRes = await updateItineraryDay(nextDay.id, {
+            hourlySchedule: cleanedNextSchedule,
+          });
+        } catch (nextDayErr: any) {
+          console.error('Erro de rede ao limpar horários excedentes do dia seguinte:', nextDayErr);
+          const errorMsg = nextDayErr?.message || 'Falha de conexão ao limpar dia seguinte';
+          await rollbackUnlinkState('Limpeza dos horários excedentes do dia seguinte', errorMsg);
+          return;
+        }
+
+        const isNextDayOk = Boolean(nextDayRes && typeof nextDayRes === 'object' && nextDayRes.success === true);
+        if (!isNextDayOk) {
+          const errorMsg =
+            (nextDayRes && typeof nextDayRes === 'object' && nextDayRes.error) ||
+            'Resposta sem confirmação explícita de sucesso ao sincronizar o dia seguinte';
+          await rollbackUnlinkState('Limpeza dos horários excedentes do dia seguinte', errorMsg);
+          return;
+        }
+      }
+
+      // Sucesso completo confirmado
+      setConfirmUnlink(false);
+      onClose();
+    } catch (error: any) {
+      console.error('Erro inesperado ao desvincular parque:', error);
+      alert(`❌ Ocorreu um erro ao desvincular o parque: ${error?.message || 'Erro desconhecido'}. O modal foi mantido aberto para nova tentativa.`);
+    } finally {
+      isSavingRef.current = false;
+      setIsSaving(false);
+    }
   };
 
   useConfirmationKeyboard({
