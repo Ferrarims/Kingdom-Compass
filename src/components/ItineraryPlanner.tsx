@@ -209,6 +209,7 @@ export const ItineraryPlanner: React.FC = () => {
   const [isHourlyModalOpen, setIsHourlyModalOpen] = useState(false);
   const [hourlyTargetDayId, setHourlyTargetDayId] = useState<string>('');
   const [editingHourlyItemId, setEditingHourlyItemId] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [hourlyForm, setHourlyForm] = useState({
     time: '08:00',
     title: '',
@@ -586,6 +587,7 @@ export const ItineraryPlanner: React.FC = () => {
   const handleOpenHourlyModal = (dayId?: string, itemToEdit?: HourlyScheduleItem) => {
     const targetId = dayId || activeDay?.id || (itineraryDays[0] && itineraryDays[0].id) || '';
     setHourlyTargetDayId(targetId);
+    setSaveError(null);
     if (itemToEdit) {
       setEditingHourlyItemId(itemToEdit.id);
       setHourlyForm({
@@ -620,6 +622,8 @@ export const ItineraryPlanner: React.FC = () => {
     if (!hourlyForm.title.trim() || hourlyItemSubmitLockRef.current || isSaving) {
       return;
     }
+    
+    setSaveError(null);
     hourlyItemSubmitLockRef.current = true;
     setIsSaving(true);
     try {
@@ -631,7 +635,7 @@ export const ItineraryPlanner: React.FC = () => {
         itineraryDays[0];
 
       if (!targetDay) {
-        return;
+        throw new Error('Dia não encontrado.');
       }
       const targetDayId = targetDay.id;
 
@@ -667,9 +671,11 @@ export const ItineraryPlanner: React.FC = () => {
       if (success) {
         setIsHourlyModalOpen(false);
         setEditingHourlyItemId(null);
+      } else {
+        throw new Error('Falha ao salvar atividade.');
       }
-    } catch (error) {
-      console.error(error);
+    } catch (error: any) {
+      setSaveError(error?.message || 'Erro inesperado ao salvar atividade.');
     } finally {
       hourlyItemSubmitLockRef.current = false;
       setIsSaving(false);
@@ -2993,12 +2999,17 @@ export const ItineraryPlanner: React.FC = () => {
 
             <form onSubmit={handleSaveHourlyItem} className="flex flex-col flex-1 min-h-0 overflow-hidden text-slate-700">
               <div className="p-5 sm:p-6 space-y-6 flex-1 overflow-y-auto min-h-0 custom-scrollbar">
+                {saveError && (
+                  <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-start gap-2 shadow-2xs">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-red-500 mt-0.5" />
+                    <span>{saveError}</span>
+                  </div>
+                )}
+
                 {/* 1. Detalhes do Horário */}
-                <div className="space-y-4">
-                  <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-                    1. Detalhes da Atividade & Horário
-                  </label>
-                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-4">
+                <div>
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-2">1. Detalhes da Atividade & Horário</label>
+                  <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4 shadow-2xs">
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-1.5">
                         <label className="text-xs font-bold text-slate-700 block">Horário (HH:MM) *</label>
@@ -3007,7 +3018,7 @@ export const ItineraryPlanner: React.FC = () => {
                           required
                           value={hourlyForm.time}
                           onChange={(e) => setHourlyForm({ ...hourlyForm, time: e.target.value })}
-                          className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 cursor-pointer shadow-2xs"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 cursor-pointer shadow-2xs"
                         />
                       </div>
                       <div className="space-y-1.5">
@@ -3015,7 +3026,7 @@ export const ItineraryPlanner: React.FC = () => {
                         <select
                           value={hourlyForm.category}
                           onChange={(e) => setHourlyForm({ ...hourlyForm, category: e.target.value as any })}
-                          className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 cursor-pointer shadow-2xs"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 cursor-pointer shadow-2xs"
                         >
                           <option value="park">Parque & Atração</option>
                           <option value="dining">Refeição / Reserva</option>
@@ -3037,20 +3048,18 @@ export const ItineraryPlanner: React.FC = () => {
                         value={hourlyForm.title}
                         onChange={(e) => setHourlyForm({ ...hourlyForm, title: e.target.value })}
                         placeholder="Ex: Abertura oficial Rope Drop, Almoço Be Our Guest..."
-                        className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 shadow-2xs"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 shadow-2xs"
                       />
                     </div>
                   </div>
                 </div>
 
                 {/* 2. Localização e Notas */}
-                <div className="space-y-4">
-                  <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-                    2. Localização & Observações
-                  </label>
-                  <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-4">
+                <div>
+                  <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-2">2. Localização & Observações</label>
+                  <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4 shadow-2xs">
                     <div className="space-y-1.5">
-                      <label className="text-xs font-bold text-slate-700 block text-slate-700">Local / Destino</label>
+                      <label className="text-xs font-bold text-slate-700 block">Local / Destino</label>
                       <div className="relative">
                         <MapPin className="absolute left-3.5 top-3 w-4 h-4 text-slate-400" />
                         <input
@@ -3058,7 +3067,7 @@ export const ItineraryPlanner: React.FC = () => {
                           value={hourlyForm.location}
                           onChange={(e) => setHourlyForm({ ...hourlyForm, location: e.target.value })}
                           placeholder="Ex: Magic Kingdom, CityWalk, Walmart Vineland..."
-                          className="w-full bg-white border border-slate-200 rounded-xl pl-10 pr-3.5 py-2.5 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 shadow-2xs"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-3.5 py-2.5 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 shadow-2xs"
                         />
                       </div>
                     </div>
@@ -3070,7 +3079,7 @@ export const ItineraryPlanner: React.FC = () => {
                         value={hourlyForm.notes}
                         onChange={(e) => setHourlyForm({ ...hourlyForm, notes: e.target.value })}
                         placeholder="Ex: Chegar com 30min de antecedência, levar voucher no celular..."
-                        className="w-full bg-white border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 shadow-2xs"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-xs font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 shadow-2xs"
                       />
                     </div>
                   </div>
