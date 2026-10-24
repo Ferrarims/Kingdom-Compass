@@ -1,5 +1,5 @@
 import { supabase } from './supabaseClient';
-import { Snapshot, Plan, Issue, RulesStore, Job, ExistingItem, Policy, clockAt, toInstant, shiftDate } from '../utils/itineraryRules';
+import { Snapshot, Plan, Issue, RulesStore, Job, ExistingItem, Policy, clockAt, toInstant, shiftDate, Role } from '../utils/itineraryRules';
 import { mapHourlyScheduleToDb } from './supabaseService';
 
 export class SupabaseItineraryRulesStore implements RulesStore {
@@ -54,7 +54,7 @@ export class SupabaseItineraryRulesStore implements RulesStore {
       }
 
       for (const day of days) {
-        const date = day.date;
+        const date = day.date ? String(day.date).slice(0, 10) : '';
         if (!date) continue;
         dayTitles[date] = day.title || '';
 
@@ -126,16 +126,17 @@ export class SupabaseItineraryRulesStore implements RulesStore {
       for (const pb of parkBookings) {
         const day = days.find(d => d.id === pb.itinerary_day_id);
         if (!day || !day.date) continue;
+        const dayDate = String(day.date).slice(0, 10);
         const hours = pb.park_hours || { openingTime: '09:00', closingTime: '21:00' };
 
-        const nightAcc = accommodations.find(a => a.checkInDate <= day.date && day.date < a.checkOutDate) || accommodations[0];
-        const morningAcc = accommodations.find(a => a.checkInDate <= shiftDate(day.date, -1) && shiftDate(day.date, -1) < a.checkOutDate) || nightAcc;
+        const nightAcc = accommodations.find(a => a.checkInDate <= dayDate && dayDate < a.checkOutDate) || accommodations[0];
+        const morningAcc = accommodations.find(a => a.checkInDate <= shiftDate(dayDate, -1) && shiftDate(dayDate, -1) < a.checkOutDate) || nightAcc;
 
         jobs.push({
           id: `park-${pb.id}`,
           sourceId: pb.id,
           kind: 'park',
-          date: day.date,
+          date: dayDate,
           timeZone,
           name: pb.park_name,
           opening: hours.openingTime || '09:00',
@@ -148,7 +149,6 @@ export class SupabaseItineraryRulesStore implements RulesStore {
           early: hours.earlyEntryTime ? { time: hours.earlyEntryTime, eligible: true, available: true } : undefined,
         });
 
-        // Shows & Dining
         const shows = Array.isArray(pb.shows_and_parades) ? pb.shows_and_parades : [];
         for (const s of shows) {
           if (!s.time) continue;
@@ -156,7 +156,7 @@ export class SupabaseItineraryRulesStore implements RulesStore {
             id: `show-${s.id}`,
             sourceId: s.id,
             kind: 'activity',
-            at: { date: day.date, time: s.time, timeZone },
+            at: { date: dayDate, time: s.time, timeZone },
             title: s.showName,
             place: { id: pb.park_name, name: pb.park_name },
             sourceType: 'show',
@@ -171,7 +171,7 @@ export class SupabaseItineraryRulesStore implements RulesStore {
             id: `dining-${d.id}`,
             sourceId: d.id,
             kind: 'activity',
-            at: { date: day.date, time: d.reservationTime, timeZone },
+            at: { date: dayDate, time: d.reservationTime, timeZone },
             title: d.restaurantName,
             place: { id: pb.park_name, name: pb.park_name },
             sourceType: 'dining',
@@ -182,7 +182,7 @@ export class SupabaseItineraryRulesStore implements RulesStore {
 
       // 4. Accommodations / Arrivals
       for (const acc of accommodations) {
-        const arrivalDay = days.find(d => d.date === acc.checkInDate);
+        const arrivalDay = days.find(d => d.date && String(d.date).slice(0, 10) === acc.checkInDate);
         if (arrivalDay && flights.length > 0) {
           const matchingFlight = flights[flights.length - 1];
           jobs.push({
@@ -196,6 +196,38 @@ export class SupabaseItineraryRulesStore implements RulesStore {
             airportProcessingMinutes: 45,
             routeToStay: { minutes: 30, description: 'Aeroporto → Acomodação', estimated: true },
           });
+        }
+      }
+
+      // Smart migration / binding for legacy existing items without ruleBinding
+      const inferRoleFromTitle = (title: string, sourceType?: string): Role => {
+        const t = (title || '').toLowerCase();
+        if (t.includes('acordar') || t.includes('início do dia') || t.includes('inicio do dia')) return 'wake';
+        if (t.includes('saída') || t.includes('saida') || t.includes('deslocamento')) return 'leave';
+        if (t.includes('catraca')) return 'gate';
+        if (t.includes('early entry')) return 'early';
+        if (t.includes('abertura')) return 'open';
+        if (t.includes('fechamento') || t.includes('término') || t.includes('termino')) return 'close';
+        if (t.includes('estacionamento') || t.includes('carro')) return 'parking';
+        if (t.includes('retorno')) return 'return';
+        if (t.includes('check-in') || t.includes('check in') || t.includes('quarto disponível')) return 'roomReady';
+        if (t.includes('check-out') || t.includes('check out')) return 'checkout';
+        if (t.includes('decolagem')) return 'takeoff';
+        if (t.includes('pouso')) return 'land';
+        if (t.includes('aeroporto')) return 'airport';
+        if (sourceType === 'show' || sourceType === 'dining' || sourceType === 'fastpass') return 'activity';
+        return 'end';
+      };
+
+      for (const e of existing) {
+        if (!e.binding && e.item.sourceType && e.item.sourceType !== 'manual') {
+          const matchingJob = jobs.find(j => j.sourceId === e.item.sourceId || j.id.includes(e.item.sourceId || ''));
+          const fallbackJob = matchingJob || jobs[0];
+          if (fallbackJob) {
+            e.binding = { jobId: fallbackJob.id, role: inferRoleFromTitle(e.item.title, e.item.sourceType) };
+          } else {
+            e.item.sourceType = 'manual';
+          }
         }
       }
 
@@ -226,7 +258,7 @@ export class SupabaseItineraryRulesStore implements RulesStore {
 
     const daysMap = new Map<string, any>();
     for (const d of days || []) {
-      if (d.date) daysMap.set(d.date, d);
+      if (d.date) daysMap.set(String(d.date).slice(0, 10), d);
     }
 
     for (const date of changedDates) {
@@ -253,7 +285,7 @@ export class SupabaseItineraryRulesStore implements RulesStore {
         daysMap.set(date, day);
       }
 
-      const dayEvents = events.filter(e => e.date === date).map(e => ({
+      const dayEvents = events.filter(e => String(e.date).slice(0, 10) === date).map(e => ({
         ...e.item,
         timeZone: e.timeZone,
         ruleBinding: e.binding,
@@ -295,11 +327,31 @@ export class SupabaseItineraryRulesStore implements RulesStore {
 
     const daysMap = new Map<string, any>();
     for (const d of days || []) {
-      if (d.date) daysMap.set(d.date, d);
+      if (d.date) daysMap.set(String(d.date).slice(0, 10), d);
     }
 
     for (const e of events) {
-      const day = daysMap.get(e.date);
+      const dateStr = String(e.date).slice(0, 10);
+      let day = daysMap.get(dateStr);
+      if (!day) {
+        // Auto-ensure itinerary day exists if missing during verify
+        const { data: newDay } = await supabase
+          .from('itinerary_days')
+          .insert({
+            trip_id: tripId,
+            day_number: (days?.length || 0) + 1,
+            date: dateStr,
+            title: plan.titles[dateStr] || 'Roteiro do Dia',
+            park: 'Sem Parque',
+            hourly_schedule: [],
+          })
+          .select()
+          .single();
+        if (newDay) {
+          day = newDay;
+          daysMap.set(dateStr, day);
+        }
+      }
       if (!day) throw new Error(`Verificação falhou: dia ausente para data ${e.date}`);
       const jsonList = Array.isArray(day.hourly_schedule) ? day.hourly_schedule : [];
       const found = jsonList.find((item: any) => item.id === e.item.id);
