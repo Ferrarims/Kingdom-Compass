@@ -1,0 +1,780 @@
+Implemente as alterações nos arquivos do aplicativo. Este pedido exige mudanças reais de código e teste do fluxo, não apenas uma auditoria ou uma mensagem dizendo que está corrigido.
+
+Objetivo: corrigir o salvamento do modal **“Editar Parâmetros da Viagem”**, que está em **src/components/HomeTripsView.tsx**. O botão deve aguardar o salvamento da fonte, a execução do motor de regras, a leitura de confirmação e a atualização do React. Em caso de erro, deve sair de “Salvando…”, manter o formulário aberto e mostrar o erro real.
+
+Viagem de teste: 78bbd4b1-2857-43d0-9520-2318a3b157a3.
+
+## Evidências que explicam o problema
+
+- Erro capturado na prévia: “Metadados não persistidos: 49ea010b-cae5-4050-9d64-ac377368d075”.
+- Esse item pertence a 07/01/2027 e tem o título “Chegada às catracas — Universal's Epic Universe”.
+- A leitura do JSON no Supabase encontrou id, time, notes, title, category, location, sourceId, completed e sourceType; faltavam timeZone e ruleBinding.
+- Na consulta de 24/10/2026 às 21:41 de Brasília, os 16 dias tinham 92 itens no JSON e 92 linhas normalizadas, mas os 92 itens automáticos estavam sem esses metadados. Igualdade de contagem não prova que o motor foi aplicado corretamente.
+- A prévia já alterou a comparação de ruleBinding para comparar jobId/role, o que é correto. Preserve essa correção.
+- Porém, o construtor passou a aceitar callbacks omitidos e substituí-los por funções vazias. Isso mascara uma integração incompleta: salvar no banco não atualiza o React.
+- HomeTripsView ainda chamava updateTrip diretamente; esse método usa syncTripToSupabase para regravar a viagem inteira.
+- fetchAllTrips substitui o array JSON por dedicatedHourly sem recuperar os metadados. A sincronização seguinte pode apagar os vínculos novamente.
+- O Git na revisão estava no commit ed8ddae285d28955f8336c770b8500aa1b560237. A prévia tinha alterações mais recentes. Trabalhe no código atual da prévia; os números de linha abaixo são referências dessa versão, não uma ordem para editar cegamente posições.
+
+Não preencher todos os itens com um vínculo inventado. Não converter automáticos em manuais para fazê-los passar. Não retirar a validação. Não resolver o problema com callbacks vazios, catch silencioso, return true incondicional ou recarregamento repetido da página.
+
+## 1. Criar src/utils/itineraryMetadata.ts
+
+Use o arquivo completo a seguir. Ele preserva metadados por ID, compara vínculos por conteúdo e continua reprovando metadados ausentes.
+```ts
+export type RulesBinding = { jobId: string; role: string };
+export type ScheduleRecord = Record<string, unknown> & { id: string };
+
+function binding(value: unknown): RulesBinding | undefined {
+  if (value == null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Vínculo de regra inválido.');
+  }
+  const row = value as Record<string, unknown>;
+  if (typeof row.jobId !== 'string' || !row.jobId ||
+      typeof row.role !== 'string' || !row.role) {
+    throw new Error('Vínculo sem jobId/role válidos.');
+  }
+  return { jobId: row.jobId, role: row.role };
+}
+export function sameRulesBinding(a: unknown, b: unknown): boolean {
+  const left = binding(a), right = binding(b);
+  if (!left || !right) return left === right;
+  return left.jobId === right.jobId && left.role === right.role;
+}
+export function readRulesMetadata(item: Record<string, unknown>) {
+  const camel = binding(item.ruleBinding);
+  const snake = binding(item.rule_binding);
+  if (camel && snake && !sameRulesBinding(camel, snake)) {
+    throw new Error('Vínculos camelCase/snake_case divergentes: ' + item.id);
+  }
+  const zone = item.timeZone ?? item.time_zone;
+  if (zone != null && (typeof zone !== 'string' || !zone)) {
+    throw new Error('Fuso inválido no item ' + item.id);
+  }
+  if (item.timeZone != null && item.time_zone != null &&
+      item.timeZone !== item.time_zone) {
+    throw new Error('Fusos divergentes no item ' + item.id);
+  }
+  return {
+    timeZone: zone == null ? undefined : String(zone),
+    ruleBinding: camel ?? snake,
+  };
+}
+/** Mantém os campos editados; recupera somente metadados omitidos pelo mapper. */
+export function preserveHourlyMetadata<T extends { id: string }>(
+  incoming: T, persisted?: { id: string },
+): T {
+  const a = incoming as T & Record<string, unknown>;
+  const b = (persisted ?? {}) as Record<string, unknown>;
+  const next = readRulesMetadata(a), old = readRulesMetadata(b);
+  const zone = next.timeZone ?? old.timeZone;
+  const link = next.ruleBinding ?? old.ruleBinding;
+  const result: Record<string, unknown> = { ...a };
+  delete result.time_zone;
+  delete result.rule_binding;
+  if (zone !== undefined) result.timeZone = zone;
+  if (link !== undefined) result.ruleBinding = link;
+  return result as T;
+}
+/** A tabela normalizada não possui as colunas de metadados do JSONB. */
+export function hydrateHourlySchedule<T extends { id: string }>(
+  jsonItems: readonly T[], relationalItems: readonly T[],
+): T[] {
+  const json = new Map(jsonItems.map(item => [item.id, item]));
+  const output = relationalItems.map(item =>
+    preserveHourlyMetadata(item, json.get(item.id)));
+  const ids = new Set(output.map(item => item.id));
+  // Uma representação incompleta não pode apagar itens exclusivos da outra.
+  for (const item of jsonItems) {
+    if (!ids.has(item.id)) {
+      output.push(preserveHourlyMetadata(item));
+      ids.add(item.id);
+    }
+  }
+  return output;
+}
+export function assertHourlyMetadata(
+  stored: Record<string, unknown>,
+  expected: { timeZone: string; binding?: RulesBinding },
+): void {
+  const actual = readRulesMetadata(stored);
+  const missing: string[] = [];
+  if (actual.timeZone !== expected.timeZone) {
+    missing.push('timeZone: esperado=' + expected.timeZone +
+      ', gravado=' + String(actual.timeZone));
+  }
+  if (!sameRulesBinding(actual.ruleBinding, expected.binding)) {
+    missing.push('ruleBinding: esperado=' + JSON.stringify(expected.binding ?? null) +
+      ', gravado=' + JSON.stringify(actual.ruleBinding ?? null));
+  }
+  if (missing.length) {
+    throw new Error('Metadados não persistidos no item ' + stored.id +
+      ': ' + missing.join('; '));
+  }
+}
+/** Compara JSON sem depender da ordem de propriedades; preserva null e arrays. */
+export function stableJson(value: unknown): string {
+  const canonical = (entry: unknown): unknown => {
+    if (Array.isArray(entry)) return entry.map(canonical);
+    if (entry && typeof entry === 'object') {
+      return Object.fromEntries(Object.entries(entry as Record<string, unknown>)
+        .filter(([, item]) => item !== undefined)
+        .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+        .map(([key, item]) => [key, canonical(item)]));
+    }
+    return entry;
+  };
+  const output = JSON.stringify(canonical(value));
+  if (output === undefined) throw new Error('Snapshot JSON inválido.');
+  return output;
+}
+```
+
+## 2. Corrigir src/services/supabaseService.ts
+
+Adicionar aos imports:
+```ts
+import { hydrateHourlySchedule, preserveHourlyMetadata, stableJson } from '../utils/itineraryMetadata';
+```
+
+### 2.1 Hidratação em fetchAllTrips — referência: linhas 1675–1679
+
+Onde hoje o código faz:
+
+    if (dedicatedHourly.length > 0) baseDay.hourlySchedule = dedicatedHourly;
+
+substituir o bloco if/else inteiro por:
+```ts
+baseDay.hourlySchedule = hydrateHourlySchedule<HourlyScheduleItem>(
+  baseDay.hourlySchedule || [],
+  dedicatedHourly,
+);
+```
+
+A lista normalizada não tem colunas timeZone/ruleBinding. Não adicionar essas colunas ao objeto do upsert relacional: os metadados continuam no JSONB já existente. Preservar também itens exclusivos de uma representação para que a reconciliação possa analisá-los; não apagá-los apenas porque a outra representação não os retornou.
+
+### 2.2 Proteger a sincronização antiga contra perda de metadados
+
+Adicionar esta função fora do objeto SupabaseService:
+```ts
+// src/services/supabaseService.ts, fora do objeto SupabaseService.
+async function preserveTripHourlyMetadata(trip: Trip): Promise<Trip> {
+  const stored = new Map<string, HourlyScheduleItem>();
+  for (let offset = 0; ; offset += 500) {
+    const { data, error } = await supabase.from('itinerary_days')
+      .select('id,hourly_schedule').eq('trip_id', trip.id)
+      .order('id', { ascending: true }).range(offset, offset + 499);
+    if (error) throw new Error('Não foi possível ler metadados existentes: ' + error.message);
+    if (!Array.isArray(data)) throw new Error('Leitura de dias inválida.');
+    for (const day of data) {
+      const items = typeof day.hourly_schedule === 'string'
+        ? JSON.parse(day.hourly_schedule) : day.hourly_schedule;
+      if (items != null && !Array.isArray(items)) throw new Error('Cronograma JSON inválido.');
+      for (const item of items ?? []) {
+        if (stored.has(item.id)) throw new Error('ID repetido entre dias: ' + item.id);
+        stored.set(item.id, item);
+      }
+    }
+    if (data.length < 500) break;
+  }
+  return {
+    ...trip,
+    rawDays: (trip.rawDays ?? []).map(day => ({
+      ...day,
+      hourlySchedule: (day.hourlySchedule ?? []).map(item =>
+        preserveHourlyMetadata(item, stored.get(item.id))),
+    })),
+  };
+}
+```
+
+No início do try de syncTripToSupabase, ANTES de mapTripToDb e de qualquer gravação (referência: linha 1833), inserir:
+```ts
+trip = await preserveTripHourlyMetadata(trip);
+```
+
+O helper não infere vínculos. Se o banco ainda não os possui, o motor deverá migrar/recalcular os itens a partir das fontes reais. Se a leitura falhar, interromper; não prosseguir como se o banco estivesse vazio.
+
+### 2.3 Criar salvamento específico dos parâmetros do modal
+
+Adicionar o método completo abaixo ao objeto SupabaseService. Este método atualiza somente os campos do formulário e os viajantes. Não sincroniza horários, reservas nem custos. A reconciliação dos horários ocorrerá depois, pelo controlador.
+
+A lista de colunas é deliberada: não enviar mapTripToDb inteiro, pois isso poderia sobrescrever trip_code, selected_accommodations_per_night, configurações ou outros campos não editados.
+
+As chamadas são requisições separadas, portanto não prometer atomicidade. Em falha parcial, informar a falha e permitir nova tentativa idempotente; não fazer rollback da viagem inteira com um cache antigo.
+```ts
+// Inserir como método do objeto SupabaseService.
+async saveTripParameters(
+  trip: Trip, updates: Partial<Trip>,
+): Promise<{ success: boolean; error?: string }> {
+  let tripWritten = false;
+  try {
+    // mapTripToDb recebe a viagem completa. Só os campos explicitamente
+    // editados abaixo entram no UPDATE. Nunca gravar o mapper inteiro aqui.
+    const mapped = mapTripToDb(trip);
+    const columns: Record<string, string> = {
+      tripName:'trip_name', destination:'destination', startDate:'start_date',
+      returnDate:'return_date', durationDays:'duration_days',
+      isFlexibleDates:'is_flexible_dates',
+      flexibleOutboundStart:'flexible_outbound_start',
+      flexibleOutboundEnd:'flexible_outbound_end',
+      flexibleInboundStart:'flexible_inbound_start',
+      flexibleInboundEnd:'flexible_inbound_end',
+      outboundFlexibility:'outbound_flexibility', inboundFlexibility:'inbound_flexibility',
+      flexibilityNotes:'flexibility_notes', dollarRate:'dollar_rate',
+      totalBudgetGoalBRL:'total_budget_goal_brl', travelersCount:'travelers_count',
+    };
+    const payload: Record<string, unknown> = { updated_at:new Date().toISOString() };
+    for (const [field, column] of Object.entries(columns)) {
+      if (Object.prototype.hasOwnProperty.call(updates, field)) payload[column] = mapped[column];
+    }
+    if ((updates.startDate !== undefined || updates.durationDays !== undefined) &&
+        updates.returnDate === undefined) {
+      payload.return_date = calculateDateOffset(mapped.start_date, Number(mapped.duration_days) - 1);
+    }
+    const people = updates.travelers;
+    const peopleRows = people?.map(person => mapTravelerToDb(person, trip.id));
+    if (peopleRows) {
+      if (!peopleRows.length) throw new Error('A viagem precisa de pelo menos um viajante.');
+      if (new Set(peopleRows.map(row=>row.id)).size !== peopleRows.length) {
+        throw new Error('Existem viajantes com o mesmo ID.');
+      }
+      payload.travelers_count = peopleRows.length;
+    }
+    const result = await supabase.from('trips').update(payload)
+      .eq('id', trip.id).select('id');
+    if (result.error || result.data?.length !== 1) {
+      throw new Error(result.error?.message || 'A viagem não foi atualizada.');
+    }
+    tripWritten = true;
+    if (peopleRows) {
+      const upserted = await supabase.from('travelers').upsert(peopleRows, {onConflict:'id'}).select('id');
+      if (upserted.error || upserted.data?.length !== peopleRows.length) {
+        throw new Error(upserted.error?.message || 'Não foi possível gravar todos os viajantes.');
+      }
+      const current = await supabase.from('travelers').select('id').eq('trip_id', trip.id);
+      if (current.error || !current.data) throw new Error(current.error?.message || 'Falha ao conferir viajantes.');
+      const expected = new Set(peopleRows.map(row=>row.id));
+      const removed = current.data.map(row=>row.id).filter(id=>!expected.has(id));
+      if (removed.length) {
+        const deletion = await supabase.from('travelers').delete()
+          .eq('trip_id', trip.id).in('id', removed).select('id');
+        if (deletion.error || deletion.data?.length !== removed.length) {
+          throw new Error(deletion.error?.message || 'Não foi possível remover os viajantes retirados do formulário.');
+        }
+      }
+      const check = await supabase.from('travelers').select('*').eq('trip_id', trip.id);
+      const checkedPeople = check.data;
+      if (check.error || !checkedPeople || checkedPeople.length !== peopleRows.length ||
+          peopleRows.some(wanted=>!checkedPeople.some(actual=>
+            actual.id === wanted.id && Object.entries(wanted).every(([key,value])=>
+              key === 'updated_at' || stableJson(actual[key] ?? null) === stableJson(value ?? null))))) {
+        throw new Error(check.error?.message || 'Viajantes gravados diferem do formulário.');
+      }
+    }
+    const check = await supabase.from('trips').select('*').eq('id', trip.id).single();
+    const checkedTrip = check.data;
+    if (check.error || !checkedTrip || Object.entries(payload).some(([key,value])=>
+      key !== 'updated_at' && stableJson(checkedTrip[key] ?? null) !== stableJson(value ?? null))) {
+      throw new Error(check.error?.message || 'Parâmetros gravados diferem do formulário.');
+    }
+    // Não toca em itinerary_days, hourly_schedules, reservas, despesas ou pagamentos.
+    return { success:true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      success:false,
+      error:(tripWritten ? 'Os parâmetros podem ter sido gravados parcialmente. ' : '') + message,
+    };
+  }
+},
+```
+
+### 2.4 Implementar a função de recarga que o contexto já chama
+
+O contexto usa SupabaseService.fetchTripById, mas essa função NÃO foi encontrada em supabaseService.ts na inspeção da prévia. Adicionar ao objeto SupabaseService:
+```ts
+async fetchTripById(tripId:string):Promise<Trip | null> {
+  const result = await this.fetchAllTrips();
+  if (!result) throw new Error('A recarga da viagem falhou.');
+  if (result.errors.length) {
+    throw new Error('Falha ao recarregar fontes: ' +
+      result.errors.map(error=>error.table + ': ' + error.message).join('; '));
+  }
+  return result.trips.find(trip=>trip.id === tripId) ?? null;
+},
+```
+
+Ela não chama o controlador; apenas lê. Isso evita recursão da fila. Se houver erro em qualquer fonte, não devolver uma viagem parcial como se a leitura tivesse sucesso.
+
+### 2.5 Não rededuplicar nem deslocar datas verificadas no caminho antigo
+
+Em mapDbToItineraryDay (referência: linha 607), trocar:
+
+    hourlySchedule: deduplicateHourlySchedule(parsedHourly)
+
+por:
+
+    hourlySchedule: parsedHourly
+
+Conservar a validação do parser: parsedHourly deve ser um array; não converter JSON inválido em lista vazia.
+
+Em fetchAllTrips (referências 1710–1712), retirar ensureHourlyScheduleItems da leitura. Após a hidratação por ID, apenas ordenar:
+```ts
+rawDays.forEach(day => {
+  day.hourlySchedule = [...(day.hourlySchedule || [])].sort(compareScheduleItemOrder);
+});
+```
+
+Em syncTripToSupabase (referências 1893–1907), substituir o bloco normalizedRawDays que deduplica títulos e calcula a data por dayNumber pelo bloco abaixo:
+```ts
+const normalizedRawDays = (trip.rawDays || []).map((day,index) => {
+  const realDate = sanitizeDate(day.date);
+  if (!realDate) throw new Error('Dia sem data explícita: ' + day.id);
+  return {
+    ...day,
+    dayNumber:day.dayNumber || index + 1,
+    date:realDate,
+    // A deduplicação por função pertence ao motor central.
+    hourlySchedule:[...(day.hourlySchedule || [])],
+  };
+});
+trip.rawDays = normalizedRawDays;
+```
+
+A data explícita do dia é necessária para os eventos após meia-noite. O sincronizador não deve recolocá-los no dia anterior nem reexecutar a deduplicação antiga.
+
+## 3. Corrigir src/services/itineraryRulesAdapter.ts
+
+### 3.1 Imports
+
+Adicionar:
+```ts
+import { assertHourlyMetadata, stableJson } from '../utils/itineraryMetadata';
+```
+
+### 3.2 Construtor — referência: linha 449
+
+Trocar o construtor com callbacks opcionais/no-op por este:
+```ts
+constructor(callbacks: Callbacks) {
+  if (!callbacks || typeof callbacks.apply !== 'function' ||
+      typeof callbacks.report !== 'function') {
+    throw new Error('O adaptador precisa de callbacks reais de aplicação e relatório.');
+  }
+  this.callbacks = callbacks;
+}
+```
+
+Ajustar TODAS as instanciações conforme a seção 4. Não restaurar um valor padrão vazio para fazer a compilação passar.
+
+### 3.3 Concorrência em persist — referência: linhas 474–480
+
+Remover a comparação JSON.stringify e o replacer que transforma null em undefined. Manter a leitura atual e usar:
+```ts
+const current = await this.read(plan.tripId);
+if (stableJson(current) !== stableJson(saved.raw)) {
+  throw new Error('A viagem mudou durante a reconciliação. Tente salvar novamente.');
+}
+```
+
+Usar o nome local do snapshot já carregado, saved, que existe nessa função. Não declarar current duas vezes. Isso deve detectar alterações reais; não “normalizar” apagando campos para forçar igualdade.
+
+### 3.4 Metadados na gravação e detecção de reparo
+
+Conservar a serialização completa em persist:
+
+    { ...event.item, timeZone:event.timeZone, ruleBinding:event.binding }
+
+Conservar em buildRulesSnapshot a inclusão em storageMismatchDates quando um item automático está sem metadados ou as duas representações divergem. Isso força o reparo dos registros antigos mesmo quando título e horário não mudaram.
+
+A validação deve continuar somente lendo. Criar dias que faltam é responsabilidade de persist, antes de gravar seus eventos; verify nunca insere dias vazios para disfarçar erro.
+
+### 3.5 Substituir o método verify completo
+
+Manter sameItems/comparable com a normalização legítima de categoria airbnb→hotel e dos nomes de campos; eles continuam comparando os campos reais e IDs. Substituir apenas o método verify pelo código abaixo.
+```ts
+async verify(plan: Plan): Promise<void> {
+  this.verified = undefined;
+  const raw = await this.read(plan.tripId);
+  const dates = new Set([...raw.days.map(day=>date(day.date)), ...plan.events.map(event=>event.date)]);
+  for (const dayDate of dates) {
+    const matches = raw.days.filter(day=>date(day.date) === dayDate);
+    if (matches.length !== 1) throw new Error('Esperado um único dia persistido: ' + dayDate);
+    const day = matches[0];
+    const events = plan.events.filter(event=>event.date === dayDate);
+    const expected = events.map(event=>event.item);
+    const json = list(day.hourly_schedule || []);
+    const relational = raw.hourly.filter(item=>item.itinerary_day_id === day.id);
+    for (const [label,items] of [['plano',expected],['JSON',json],['tabela',relational]] as const) {
+      if (new Set(items.map(item=>item.id)).size !== items.length) {
+        throw new Error('IDs duplicados em ' + label + ' na data ' + dayDate);
+      }
+    }
+    if (!sameItems(expected,json) || !sameItems(expected,relational,true)) {
+      throw new Error('Verificação campo a campo falhou em ' + dayDate);
+    }
+    for (const event of events) {
+      const stored = json.find(item=>item.id === event.item.id);
+      if (!stored) throw new Error('Item não persistido: ' + event.item.id);
+      assertHourlyMetadata(stored, {timeZone:event.timeZone,binding:event.binding});
+    }
+    if (plan.titles[dayDate] !== undefined && day.title !== plan.titles[dayDate]) {
+      throw new Error('Título não persistido: ' + dayDate);
+    }
+  }
+  this.verified = raw;
+}
+```
+
+## 4. Corrigir a integração em src/context/PlannerContext.tsx
+
+### 4.1 Um único controlador com callbacks reais
+
+Imports necessários:
+
+- Issue como type de ../utils/itineraryRules;
+- mapDbToItineraryDay e mapDbToParkBooking de ../services/supabaseService;
+- useRef e useCallback de React, se ainda não estiverem importados.
+
+Substituir o bloco antigo das referências 7324–7337. Mover o novo bloco para depois dos estados do Provider e antes de reloadFromSupabase/initSupabase. Não manter duas declarações do controlador.
+```ts
+// Mover este bloco para depois dos useState do Provider e ANTES de
+// reloadFromSupabase/initSupabase e dos efeitos que usam o controlador.
+const [rulesIssues, setRulesIssues] = useState<Issue[]>([]);
+const activeRulesTrip = useRef(activeTripId);
+activeRulesTrip.current = activeTripId;
+const rulesControllerRef = useRef<ReturnType<typeof createRulesController> | null>(null);
+if (!rulesControllerRef.current) {
+  rulesControllerRef.current = createRulesController(new SupabaseItineraryRulesStore({
+    apply: (plan, dbDays, _dbTrip, dbParks) => {
+      const mapped = dbDays.slice()
+        .sort((a,b)=>String(a.date).localeCompare(String(b.date)))
+        .map(row => {
+          if (!Array.isArray(row.hourly_schedule)) {
+            throw new Error('Cronograma verificado inválido no dia ' + row.id);
+          }
+          const park = dbParks.find(item=>item.itinerary_day_id === row.id);
+          return {
+            ...mapDbToItineraryDay(row),
+            // Não executar geradores/deduplicadores antigos sobre o resultado verificado.
+            hourlySchedule:row.hourly_schedule,
+            parkBooking:park
+              ? {...mapDbToParkBooking(park),date:String(row.date).slice(0,10),itineraryDayId:row.id}
+              : undefined,
+          };
+        });
+      setTrips(previous=>previous.map(trip=>
+        trip.id === plan.tripId ? {...trip,rawDays:mapped} : trip));
+      if (activeRulesTrip.current === plan.tripId) setRawDays(mapped);
+    },
+    report: (issues, tripId) => {
+      if (activeRulesTrip.current !== tripId) return;
+      setRulesIssues(issues);
+    },
+  }));
+}
+const rulesController = rulesControllerRef.current;
+const onModalOpen = useCallback(
+  (tripId:string)=>rulesController.onModalOpen(tripId), [rulesController]);
+const onModalSave = useCallback(
+  (tripId:string, saveSource:()=>Promise<void>)=>rulesController.onModalSave(tripId,saveSource),
+  [rulesController]);
+const evaluateAndCorrectAllItems = useCallback(
+  (tripId:string)=>rulesController.evaluateAndCorrectAllItems(tripId), [rulesController]);
+```
+
+Remover globalRulesStore e globalRulesController no final do arquivo. Eles criam uma segunda fila fora do Provider. Se reconcileItineraryDay ainda tiver consumidores, trocar os consumidores pela API evaluateAndCorrectAllItems do mesmo Provider e remover o wrapper global. Conferir as referências do projeto antes de remover o export.
+
+O apply precisa atualizar os estados com as linhas efetivamente verificadas. Não executar syncAllEventsToHourlySchedule, applyAccommodationMorningRule, deduplicação por título ou um gerador legado depois de apply.
+
+Acrescentar rulesIssues: Issue[] à interface do contexto e ao value do Provider. Exibir essas pendências no roteiro com o padrão de avisos já existente no aplicativo. Pendência não pode virar mensagem de “100% aprovado”.
+
+### 4.2 Não sobrescrever o resultado verificado na inicialização
+
+Em initSupabase, hoje o código:
+1. obtém remoteTrips;
+2. reconcilia uma viagem;
+3. volta a aplicar o remoteTrips obtido ANTES da reconciliação.
+
+Isso recoloca o cache antigo. Substituir a declaração e o bloco inicial de reconciliação (referências 1179–1188) por:
+```ts
+let remoteTrips = result.trips;
+if (remoteTrips && remoteTrips.length > 0) {
+  const target = remoteTrips.find(trip=>trip.id === activeTripId) || remoteTrips[0];
+  await evaluateAndCorrectAllItems(target.id);
+  const refreshed = await SupabaseService.fetchTripById(target.id);
+  if (!refreshed) throw new Error('Não foi possível recarregar a viagem após a reconciliação.');
+  remoteTrips = remoteTrips.map(trip=>trip.id === target.id ? refreshed : trip);
+
+  // Continuar aqui com o setTrips/selectTrip já existentes,
+  // mas utilizando este remoteTrips atualizado.
+```
+
+O último “{” corresponde ao if já existente: não duplicar esse if nem suas chaves. Remover a restrição ao trip_id fixo. Essa rotina atende a viagem selecionada.
+
+Conferir selectTrip: não recalcular por regras antigas nem descartar ruleBinding/timeZone ao receber o objeto atualizado.
+
+Na chamada de inicialização, capturar rejeições. Substituir initSupabase(); isolado por:
+```ts
+void initSupabase().catch(error => {
+  setSupabaseStatus(previous => ({
+    ...previous,
+    error:error instanceof Error ? error.message : String(error),
+  }));
+});
+```
+
+Não iniciar uma segunda reconciliação dentro do loader ou dos callbacks apply/report, pois isso pode criar ciclos e prender a fila.
+
+### 4.3 Adicionar método específico ao contexto
+
+Inserir a função abaixo dentro do Provider, junto de updateTrip. Manter updateTrip para os consumidores existentes; o modal “Editar Parâmetros da Viagem” usará a função nova. Não colocar efeitos de rede dentro de setTrips(previous=>...).
+```ts
+// Novo método do PlannerProvider. Não chamar o controlador dentro dele:
+// o modal já o chama por fora, uma única vez, para evitar fila recursiva.
+const updateTripParameters = async (
+  id:string, changes:Partial<Trip>,
+):Promise<{success:boolean;error?:string}> => {
+  const existing = trips.find(trip=>trip.id === id);
+  if (!existing) return {success:false,error:'Viagem não encontrada.'};
+  const updates = {...changes};
+  const dateFields = [
+    'startDate','returnDate','flexibleOutboundStart','flexibleOutboundEnd',
+    'flexibleInboundStart','flexibleInboundEnd',
+  ] as const;
+  for (const field of dateFields) {
+    if (updates[field]) updates[field] = normalizeDateToYMD(updates[field]);
+  }
+  const candidate:Trip = {
+    ...existing,...updates,
+    settings:{...existing.settings,...updates.settings},
+  };
+  if ((updates.startDate !== undefined || updates.durationDays !== undefined) &&
+      updates.returnDate === undefined && candidate.startDate) {
+    candidate.returnDate = calculateDateOffset(candidate.startDate,candidate.durationDays - 1);
+  }
+  const result = await SupabaseService.saveTripParameters(candidate,updates);
+  if (!result.success) return result;
+  // Somente após confirmar a fonte. Não usar syncTripToSupabase neste fluxo.
+  setTrips(previous=>previous.map(trip=>trip.id === id
+    ? {...trip,...updates,returnDate:candidate.returnDate,settings:candidate.settings}
+    : trip));
+  if (activeTripId === id) {
+    const headerSettings:Partial<GlobalSettings> = {};
+    for (const key of [
+      'tripName','destination','startDate','returnDate','durationDays','isFlexibleDates',
+      'flexibleOutboundStart','flexibleOutboundEnd','flexibleInboundStart','flexibleInboundEnd',
+      'outboundFlexibility','inboundFlexibility','flexibilityNotes','dollarRate',
+      'totalBudgetGoalBRL','travelersCount','travelers',
+    ] as const) {
+      if (Object.prototype.hasOwnProperty.call(updates,key)) {
+        Object.assign(headerSettings,{[key]:updates[key]});
+      }
+    }
+    if (candidate.returnDate) headerSettings.returnDate = candidate.returnDate;
+    setSettings(previous=>({...previous,...headerSettings}));
+  }
+  return {success:true};
+};
+```
+
+Adicionar à interface do contexto:
+```ts
+updateTripParameters: (
+  id:string, changes:Partial<Trip>
+)=>Promise<{success:boolean;error?:string}>;
+```
+
+Adicionar updateTripParameters ao value do Provider.
+
+## 5. Corrigir o modal verdadeiro: src/components/HomeTripsView.tsx
+
+Não aplicar esta correção apenas em GlobalSettingsModal: a tela da imagem pertence a HomeTripsView.
+
+No usePlanner(), adicionar onModalSave, onModalOpen, updateTripParameters e rulesIssues. Manter updateTrip se houver outro uso no arquivo; caso contrário, retirar o import/destructuring não utilizado.
+
+### 5.1 Substituir handleSaveTrip inteiro — referência: linhas 345–445
+
+Usar a função completa abaixo. Ela mantém os campos do formulário e libera o botão em finally, inclusive quando a reconciliação falha.
+```ts
+const handleSaveTrip = async (e?: React.FormEvent) => {
+  e?.preventDefault();
+  if (saveTripModalLockRef.current || isSavingTrip) return;
+  saveTripModalLockRef.current = true;
+  setIsSavingTrip(true);
+  setSaveError(null);
+  try {
+    const finalTripName = tripName.trim() || editingTrip?.tripName ||
+      (destination ? 'Viagem a ' + destination : 'Viagem Orlando 2026/2027');
+    const currentTravelers = [...travelers];
+    if (newTravelerName.trim()) {
+      const colors = ['#E5A93C','#3B82F6','#EC4899','#10B981','#8B5CF6','#F59E0B','#EF4444','#06B6D4'];
+      currentTravelers.push({
+        id:generateUUID(),name:newTravelerName.trim(),
+        email:newTravelerEmail.trim() ||
+          newTravelerName.toLowerCase().replace(/\s+/g,'') + '@exemplo.com',
+        avatarColor:colors[Math.floor(Math.random()*colors.length)],role:'traveler',
+      });
+      setTravelers(currentTravelers);
+      setNewTravelerName('');
+      setNewTravelerEmail('');
+    }
+    const finalStartDate = normalizeDateToYMD(startDate || flexibleOutboundStart || '2026-12-30');
+    const finalOutboundStart = normalizeDateToYMD(isFlexibleDates
+      ? flexibleOutboundStart || finalStartDate : finalStartDate);
+    const finalOutboundEnd = normalizeDateToYMD(isFlexibleDates
+      ? flexibleOutboundEnd || calculateDateOffset(finalOutboundStart,7)
+      : calculateDateOffset(finalStartDate,7));
+    const finalInboundStart = normalizeDateToYMD(isFlexibleDates
+      ? flexibleInboundStart || calculateDateOffset(finalOutboundStart,durationDays)
+      : calculateDateOffset(finalStartDate,durationDays));
+    const finalInboundEnd = normalizeDateToYMD(isFlexibleDates
+      ? flexibleInboundEnd || calculateDateOffset(finalOutboundEnd,durationDays)
+      : calculateDateOffset(finalStartDate,durationDays+7));
+    const flexibility = isFlexibleDates ? 'Data Não Definida' : 'Datas Fixas';
+    const changes:Partial<Trip> = {
+      tripName:finalTripName,
+      destination:destination || editingTrip?.destination || 'Orlando, Flórida',
+      startDate:finalStartDate,durationDays,isFlexibleDates,
+      flexibleOutboundStart:finalOutboundStart,flexibleOutboundEnd:finalOutboundEnd,
+      flexibleInboundStart:finalInboundStart,flexibleInboundEnd:finalInboundEnd,
+      outboundFlexibility:flexibility,inboundFlexibility:flexibility,flexibilityNotes,
+      totalBudgetGoalBRL,dollarRate,travelers:currentTravelers,
+      travelersCount:currentTravelers.length,
+    };
+    if (editingTrip) {
+      // Uma única entrada na fila: fonte primeiro, motor e verificação depois.
+      // updateTripParameters não chama onModalSave por dentro.
+      await onModalSave(editingTrip.id, async () => {
+        const result = await updateTripParameters(editingTrip.id,changes);
+        if (!result.success) throw new Error(result.error || 'Falha ao salvar os parâmetros.');
+      });
+    } else {
+      // Mantém o fluxo existente de criação. Não usar o ID de outra viagem.
+      const result = await addTrip(changes);
+      if (result && !result.success) throw new Error(result.error || 'Erro ao criar viagem.');
+    }
+    setIsModalOpen(false);
+  } catch (error) {
+    setSaveError(error instanceof Error ? error.message : 'Erro inesperado ao salvar viagem.');
+  } finally {
+    setIsSavingTrip(false);
+    saveTripModalLockRef.current = false;
+  }
+};
+```
+
+Não envolver esta função por outro save() do useTripRulesModal: isso enfileiraria onModalSave dentro dele mesmo e causaria espera circular. Cada submissão entra na fila exatamente uma vez.
+
+A criação de nova viagem tem outro ID: manter o fluxo existente e integrar a reconciliação após a obtenção desse novo ID, se ele já for retornado por addTrip. Nunca usar activeTripId de uma viagem anterior para reconciliar uma viagem recém-criada.
+
+### 5.2 Avaliar ao abrir sem rejeição não tratada
+
+Importar useEffect de React. Depois dos estados, inclusive saveError, adicionar:
+```ts
+useEffect(() => {
+  if (!isModalOpen || !editingTrip?.id) return;
+  let cancelled = false;
+  void onModalOpen(editingTrip.id).catch(error => {
+    if (!cancelled) setSaveError(error instanceof Error ? error.message : String(error));
+  });
+  return () => { cancelled = true; };
+}, [isModalOpen, editingTrip?.id, onModalOpen]);
+```
+
+Manter o alerta de saveError já existente no modal (referência 1165). Exibir também as pendências do motor abaixo dele:
+```tsx
+{rulesIssues.length > 0 && (
+  <div role="status" className="text-sm text-amber-800">
+    <p>O roteiro ainda tem pendências:</p>
+    <ul>{rulesIssues.map((issue,index) => (
+      <li key={issue.jobId + '-' + issue.code + '-' + index}>{issue.message}</li>
+    ))}</ul>
+  </div>
+)}
+```
+ O botão Salvar continua disabled={isSavingTrip} e mostrando “Salvando…” durante a operação.
+
+O fechamento deve ocorrer após onModalSave resolver. Se a fonte foi salva e a reconciliação falhou, mostrar a mensagem específica que o controlador já produz. Não dizer que a fonte foi revertida.
+
+## 6. Mesma proteção no outro modal existente
+
+Em src/components/GlobalSettingsModal.tsx, handleSave já chama o save do useTripRulesModal. Não adicionar outro onModalSave por dentro de updateSettings/updateTrip.
+
+O estado errorMsg existente precisa ser renderizado dentro do modal:
+```tsx
+<div role="alert" aria-live="assertive" className="text-sm text-red-700">
+  {errorMsg}
+</div>
+```
+
+Renderizar condicionalmente apenas quando errorMsg estiver preenchido. Usar o padrão visual de alerta do projeto.
+
+O botão Salvar deve usar disabled={isSaving}, exibir “Salvando…” enquanto necessário, e handleSave deve limpar isSaving em finally. A verificação pode falhar; o formulário deve continuar utilizável.
+
+## 7. Reparar os dados existentes somente depois do código corrigido
+
+- Não executar um SQL que invente timeZone/jobId/role para todos os itens.
+- Abrir/carregar a viagem pelo controlador corrigido e executar evaluateAndCorrectAllItems para a viagem de teste.
+- A migração deve usar fonte, ID e função reconhecidos. Em ambiguidade, reportar o item e a pendência; não escolher jobs[0], não converter em manual e não fabricar horários.
+- Reconsultar JSON e tabela normalizada após persist.
+- Conferir preservação de reservas, pagamentos, custos, seleção do Hard Rock em 08/01, IDs de eventos e atividades manuais.
+- Não alterar RLS nem usar service_role no navegador para resolver o erro.
+
+Consulta SOMENTE DE LEITURA para verificar a recuperação dos metadados:
+```sql
+select
+  d.date,
+  jsonb_array_length(coalesce(d.hourly_schedule,'[]'::jsonb)) as itens_json,
+  (select count(*) from public.hourly_schedules h
+   where h.trip_id=d.trip_id and h.itinerary_day_id=d.id) as linhas_normalizadas,
+  (select count(*)
+   from jsonb_array_elements(coalesce(d.hourly_schedule,'[]'::jsonb)) item
+   where item->>'sourceType' is not null
+     and item->>'sourceType' <> 'manual'
+     and (
+       nullif(item->>'timeZone','') is null
+       or nullif(item->'ruleBinding'->>'jobId','') is null
+       or nullif(item->'ruleBinding'->>'role','') is null
+     )
+  ) as automaticos_sem_metadados
+from public.itinerary_days d
+where d.trip_id='78bbd4b1-2857-43d0-9520-2318a3b157a3'
+order by d.date;
+```
+
+A coluna automaticos_sem_metadados deve cair a zero nos itens cujo vínculo foi comprovado pelo motor. Se houver item sem correspondência segura, mostrar a lista concreta e não declarar aprovação total.
+
+Após abrir e salvar o modal, repetir a consulta; depois recarregar a página e repetir novamente. Esse segundo ciclo detecta o problema original, em que a leitura/sincronização antiga apagava o que o motor havia gravado.
+
+## 8. Testes exigidos antes de declarar concluído
+
+1. Comparar vínculos {jobId,role} e {role,jobId}: deve passar.
+2. Ausência real de timeZone/ruleBinding: deve falhar com item e campo identificados.
+3. Ler pela tabela normalizada: conservar os metadados correspondentes do JSON, por ID.
+4. Salvar uma edição real de horário: a recuperação de metadados não pode desfazer o horário editado.
+5. Preservar atividades manuais e itens exclusivos de uma das representações.
+6. Editar e salvar o nome da viagem: conferir que o salvamento da fonte tocou somente trips/travelers; a atualização de horários deve vir do motor, não do sincronizador antigo.
+7. Conferir a fila: falha de uma operação não pode impedir a próxima; nenhuma operação pode aguardar outra operação enfileirada dentro de si mesma.
+8. Simular falha de leitura/gravação/verificação: liberar o botão, manter modal e mostrar mensagem, sem Unhandled Rejection.
+9. Confirmar que apply foi chamado e que a tela recebeu o cronograma verificado. Callback vazio deve reprovar o teste.
+10. Dois ciclos abrir→salvar e um recarregamento: metadados continuam presentes.
+11. Executar tsc --noEmit e build, além dos testes. Build sozinho não comprova o comportamento ao salvar.
+
+Entregar:
+- lista dos arquivos realmente alterados e os respectivos diffs;
+- resultado de tsc/build/testes;
+- resultado lido do banco antes/depois e após recarregamento;
+- falhas ou pendências ainda abertas.
+
+Não declarar “resolvido” se apenas a compilação passou ou se o erro foi escondido. Se não houver acesso ao banco, informar isso e entregar o código sem alegar uma execução inexistente.
+
+
+## Referência técnica
+
+JSONB não preserva a ordem das propriedades de objetos. Isso explica a falha da antiga comparação por JSON.stringify, mas não elimina a necessidade de verificar metadados ausentes.
+Documentação: https://www.postgresql.org/docs/current/datatype-json.html
+
+As funções puras de preservação fornecidas neste prompt foram executadas em 10 testes locais. Isso não substitui a compilação do aplicativo nem o teste do modal conectado ao Supabase, que devem ser executados no Studio após a integração.

@@ -17,6 +17,7 @@ import { ItineraryDay } from '../types';
 import { isDayWithPark } from '../utils/parkScheduleUtils';
 import { formatDisplayDate } from '../context/PlannerContext';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
+import { useTripRulesModal } from '../hooks/useTripRulesModal';
 
 interface SwapParkDayModalProps {
   isOpen: boolean;
@@ -33,6 +34,7 @@ export const SwapParkDayModal: React.FC<SwapParkDayModalProps> = ({
   allDays,
   onConfirmSwap,
 }) => {
+  const { save } = useTripRulesModal(isOpen);
   const [selectedTargetDayNumber, setSelectedTargetDayNumber] = useState<number | null>(null);
 
   // Set default target day when opened (first day without park, or next day)

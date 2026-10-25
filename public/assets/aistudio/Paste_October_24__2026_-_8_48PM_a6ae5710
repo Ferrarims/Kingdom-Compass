@@ -1,0 +1,2334 @@
+Implemente estas correções nos arquivos do aplicativo. Este documento contém o código completo dos módulos substitutos e a localização dos pontos de integração. Não responda apenas com auditoria, compilação ou relato de sucesso.
+
+## Evidência da revisão
+
+Repositório: Ferrarims/Kingdom-Compass.
+Commit revisado: ed8ddae285d28955f8336c770b8500aa1b560237.
+Viagem de validação: 78bbd4b1-2857-43d0-9520-2318a3b157a3.
+Captura do Supabase: 24/10/2026 às 20:20, horário de Brasília.
+
+O banco passou de 16 para 17 dias: 26/12 virou day_number=17 com dois despertares idênticos.
+02/01, 04/01 e 06/01 ficaram sem horários.
+A captura tem 111 itens JSON e 113 linhas relacionais, com 18 IDs do JSON sem linha correspondente pelo mesmo ID/dia.
+SeaWorld tem duas saídas, duas catracas, três aberturas, dois fechamentos e dois retornos.
+09/01 começou no Airbnb, apesar de selected_accommodations_per_night["2027-01-08"] selecionar o Hard Rock.
+
+Reprodução local do adaptador atual, sem escrever no banco:
+- 4 reservas de passageiros viraram 4 voos de roteiro, embora existam somente 2 deslocamentos físicos cadastrados.
+- Não criou jobs de chegada, troca de hotel, dias livres ou retorno ao aeroporto.
+- Associou check-in e fim de hospedagem ao primeiro voo.
+- Retornou complete=true e issues=[] com esses erros.
+- verify aceitou plano vazio com linhas no banco e aceitou time="99:99"/título diferente, porque verifica apenas a presença de IDs.
+
+Corrija a implementação, não remova as validações para silenciar os erros.
+
+## Ordem de trabalho obrigatória
+
+1. Antes de qualquer nova reconciliação, retirar os disparos antigos de gravação em initSupabase/reloadFromSupabase e o controlador global. Durante a edição, manter a carga como leitura. A aplicação não deve rodar a versão antiga enquanto arquivos estão sendo substituídos.
+2. Fazer uma cópia local das tabelas-fonte e das duas representações do roteiro antes da primeira gravação. Guardar fora de public e fora do Git; não publicar dados pessoais.
+3. Criar a migration indicada adiante e atualizar os tipos.
+4. Substituir o motor e o adaptador pelos códigos completos deste documento.
+5. Substituir o mapper e o salvamento de item; atualizar saveItineraryDay para salvar fontes, deixando a regeneração ao adaptador.
+6. Integrar o único controlador do Provider e os modais reais.
+7. Remover as chamadas aos geradores antigos. Executar o verificador estático fornecido.
+8. Cadastrar somente durações conhecidas ou estimadas com origem identificada. Campo ausente permanece pendente, sem padrão de 25, 30, 45 ou 60 minutos.
+9. Rodar testes, tipos e build antes de reativar a reconciliação automática.
+10. Executar a reconciliação pelo novo controlador, reler o banco e apresentar o resultado real. Pendência não significa aprovação.
+
+Não excluir reservas, passageiros, despesas, custos, pagamentos ou seleções de pernoite para corrigir o roteiro. A deduplicação de passageiros ocorre somente na geração do roteiro.
+
+## O que foi corrigido no código fornecido
+
+- snake_case real do Supabase, incluindo check_in_date/check_out_date.
+- Seleção estrita de pernoite com checkout exclusivo.
+- Origem matinal e destino noturno independentes.
+- Um voo de roteiro por deslocamento físico, mantendo todas as reservas de passageiros.
+- Fuso correto por aeroporto, sem Nova York para GRU.
+- Fluxos de chegada, traslado, quatro dias livres e aeroporto de retorno.
+- Refeições usando o campo real time; Fast Passes com janela explícita.
+- Migração sem jobs[0], includes('') ou conversão automática para manual.
+- Durações ausentes geram pendência.
+- Pré-check-in e checkout antecipado com vínculo à reserva correta.
+- Upsert antes da limpeza, remoção apenas de automáticos comprovados, verificação completa das duas representações.
+- verify é somente leitura.
+- UI recebe os dados verificados e as pendências.
+- O despertar de 30 minutos antes permanece obrigatório para parques. Foi retirado o despertar extra de voo que criava 26/12 exclusivamente por uma regra que não foi solicitada.
+- O checkout de parque pode assumir a própria saída quando não houver um horário antecipado informado, sempre até o prazo contratual e depois de acordar.
+- Retorno antigo sem término conhecido da atividade é retirado como automático não confirmado; não vira manual.
+- O dia externo ao período só é retirado se não tiver evento no plano e se todos os seus eventos anteriores forem automáticos comprovados, sem dependências de reservas/atividades. Não remover dias legítimos.
+
+## 1. Migration
+
+Gere o nome da migration com a CLI do projeto; depois salve o conteúdo abaixo no arquivo gerado. A coluna ainda não existia na captura consultada. Não alterar RLS ou permissões para contornar falhas de acesso.
+
+```sql
+-- Gerar o arquivo de migration com a CLI do projeto antes de salvar este conteúdo.
+alter table public.trips
+  add column if not exists itinerary_rules_config jsonb not null default '{}'::jsonb;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conrelid = 'public.trips'::regclass
+      and conname = 'trips_itinerary_rules_config_object'
+  ) then
+    alter table public.trips
+      add constraint trips_itinerary_rules_config_object
+      check (jsonb_typeof(itinerary_rules_config) = 'object');
+  end if;
+end;
+$$;
+
+-- Confirmar a coluna após aplicar a migration, sem modificar reservas ou horários:
+select column_name, data_type, is_nullable, column_default
+from information_schema.columns
+where table_schema='public' and table_name='trips'
+  and column_name='itinerary_rules_config';
+
+
+-- Salvamento atômico de UM item e suas duas representações.
+-- SECURITY INVOKER: conserva a autorização/RLS do usuário que chamou a função.
+create or replace function public.save_itinerary_hourly_item(
+  p_trip_id uuid, p_day_id uuid, p_item jsonb
+) returns jsonb
+language plpgsql
+security invoker
+set search_path = pg_catalog, public
+as $$
+declare
+  v_day public.itinerary_days%rowtype;
+  v_id uuid;
+  v_old jsonb;
+  v_item jsonb;
+  v_items jsonb;
+  v_category text;
+begin
+  if jsonb_typeof(p_item) <> 'object' then
+    raise exception 'O item deve ser um objeto JSON';
+  end if;
+  v_id := (p_item->>'id')::uuid;
+  if v_id is null then raise exception 'ID ausente'; end if;
+  if coalesce(p_item->>'time','') !~ '^([01][0-9]|2[0-3]):[0-5][0-9]$' then
+    raise exception 'Horário inválido';
+  end if;
+  if nullif(btrim(p_item->>'title'),'') is null then
+    raise exception 'Título ausente';
+  end if;
+  select * into v_day
+  from public.itinerary_days
+  where id=p_day_id and trip_id=p_trip_id
+  for update;
+  if not found then raise exception 'Dia não encontrado ou sem permissão'; end if;
+  select e into v_old
+  from jsonb_array_elements(coalesce(v_day.hourly_schedule,'[]'::jsonb)) e
+  where e->>'id'=v_id::text
+  limit 1;
+  v_item := coalesce(v_old,'{}'::jsonb) || p_item;
+  v_category := coalesce(nullif(v_item->>'category',''),'other');
+  if v_category='airbnb' then v_category:='hotel'; end if;
+  if v_category not in ('transport','park','dining','hotel','shopping','flight','other') then
+    raise exception 'Categoria inválida';
+  end if;
+  v_item := v_item || jsonb_build_object(
+    'id',v_id::text,'category',v_category,
+    'completed',coalesce((v_item->>'completed')::boolean,false)
+  );
+  insert into public.hourly_schedules (
+    id,trip_id,itinerary_day_id,time,title,location,category,completed,notes,source_type,source_id
+  ) values (
+    v_id,p_trip_id,p_day_id,v_item->>'time',v_item->>'title',
+    nullif(v_item->>'location',''),v_category,coalesce((v_item->>'completed')::boolean,false),
+    nullif(v_item->>'notes',''),nullif(v_item->>'sourceType',''),nullif(v_item->>'sourceId','')
+  )
+  on conflict (id) do update set
+    trip_id=excluded.trip_id,itinerary_day_id=excluded.itinerary_day_id,
+    time=excluded.time,title=excluded.title,location=excluded.location,
+    category=excluded.category,completed=excluded.completed,notes=excluded.notes,
+    source_type=excluded.source_type,source_id=excluded.source_id;
+  select coalesce(jsonb_agg(item order by item->>'time',item->>'id'),'[]'::jsonb)
+  into v_items
+  from (
+    select e as item
+    from jsonb_array_elements(coalesce(v_day.hourly_schedule,'[]'::jsonb)) e
+    where e->>'id' is distinct from v_id::text
+    union all select v_item
+  ) items;
+  update public.itinerary_days
+  set hourly_schedule=v_items
+  where id=p_day_id and trip_id=p_trip_id;
+  if not found then raise exception 'Dia não atualizado'; end if;
+  return jsonb_build_object('success',true,'rowId',v_id::text);
+end;
+$$;
+
+revoke all on function public.save_itinerary_hourly_item(uuid,uuid,jsonb) from public;
+grant execute on function public.save_itinerary_hourly_item(uuid,uuid,jsonb) to anon, authenticated;
+
+```
+
+
+## 2. Substituir integralmente src/utils/itineraryRules.ts
+
+Este arquivo é o único lugar das fórmulas. O utilitário uuid.ts já existe.
+
+```typescript
+import { generateDeterministicUUID } from './uuid';
+
+export type Clock = { date: string; time: string; timeZone: string; offsetMinutes?: number };
+export type Place = { id: string; name: string; address?: string };
+export type Route = { minutes?: number; description: string; estimated: boolean };
+export type Issue = {
+  jobId: string;
+  code: string;
+  message: string;
+  level: 'pending' | 'error';
+};
+export type Role =
+  | 'morning' | 'wake' | 'leave' | 'parking' | 'gate' | 'early' | 'open'
+  | 'close' | 'car' | 'return' | 'arrival' | 'end' | 'precheck'
+  | 'hotelLeave' | 'roomReady' | 'checkout' | 'airport'
+  | 'pickupAllowed' | 'pickup' | 'dropoff' | 'dropoffDeadline'
+  | 'takeoff' | 'land' | 'activity';
+export type ScheduleItem = {
+  id: string;
+  time: string;
+  title: string;
+  location?: string;
+  category: 'transport' | 'park' | 'hotel' | 'flight' | 'other' | 'dining' | 'shopping';
+  completed?: boolean;
+  notes?: string;
+  sourceType?: string;
+  sourceId?: string;
+};
+export type ExistingItem = {
+  date: string;
+  timeZone: string;
+  item: ScheduleItem;
+  binding?: { jobId: string; role: Role };
+};
+export type RuleEvent = ExistingItem & {
+  binding: { jobId: string; role: Role };
+  at: number;
+};
+export type Policy = {
+  airportLeadMinutes: number;
+  gateLeadMinutes: number;
+  wakeLeadMinutes: number;
+  boardingMinutes: number;
+  precheckMinutes: number;
+  normalStart: string;
+  normalEnd: string;
+  nearCheckoutMinutes?: number;
+};
+export const DEFAULT_POLICY: Policy = {
+  airportLeadMinutes: 180,
+  gateLeadMinutes: 30,
+  wakeLeadMinutes: 30,
+  boardingMinutes: 5,
+  precheckMinutes: 30,
+  normalStart: '07:30',
+  normalEnd: '22:30',
+  // Imigração, locadora e intervalo curto NÃO recebem valores inventados.
+};
+type BaseJob = { id: string; sourceId: string };
+export type Job =
+  | (BaseJob & {
+      kind: 'activity'; at: Clock; title: string; place: Place;
+      sourceType: 'show' | 'dining' | 'fastpass'; notes?: string;
+    })
+  | (BaseJob & {
+      kind: 'flight'; direction: 'outbound' | 'inbound' | 'internal';
+      departure: Clock; arrival: Clock; origin: Place; destination: Place;
+      journeyArrival?: Clock;
+      home?: Place; homeToAirport?: Route;
+    })
+  | (BaseJob & {
+      kind: 'rental'; earliestPickup: Clock; returnDeadline: Clock;
+      pickupPlace: Place; returnPlace: Place;
+    })
+  | (BaseJob & {
+      kind: 'arrival'; landing: Clock; airport: Place; stay: Place;
+      checkIn: Clock; airportProcessingMinutes?: number; routeToStay: Route;
+      rental?: {
+        id: string; place: Place; earliest: Clock;
+        airportToRental: Route; serviceMinutes?: number;
+      };
+    })
+  | (BaseJob & {
+      kind: 'airport-return'; stay: Place; airport: Place;
+      checkOut: Clock; takeoff: Clock; directRoute?: Route;
+      luggagePlanConfirmed?: boolean;
+      rental?: {
+        id: string; place: Place; deadline: Clock;
+        toRental: Route; serviceMinutes?: number; toTerminal: Route;
+      };
+    })
+  | (BaseJob & {
+      kind: 'transfer'; from: Place; to: Place;
+      departure: Clock; checkOut: Clock; checkIn: Clock; route: Route;
+    })
+  | (BaseJob & {
+      kind: 'free'; date: string; timeZone: string; stay: Place;
+      sleptPreviousNight: boolean;
+    })
+  | (BaseJob & {
+      kind: 'park'; date: string; timeZone: string; name: string;
+      opening: string; closing: string; origin: Place; night: Place;
+      mode: 'car' | 'walk' | 'boat' | 'bus';
+      outbound: Route; inbound: Route;
+      parkingToGateMinutes?: number; gateToParkingMinutes?: number;
+      early?: { time: string; eligible: boolean; available: boolean };
+      latestActivityEnd?: Clock; returnEndUnknown?: boolean;
+      morningProvisional?: boolean;
+      detour?: { stay: Place; fromOrigin: Route; roomAvailable?: Clock };
+      earlyCheckout?: { at?: Clock; contractualLimit: Clock; luggageConfirmed: boolean };
+    });
+
+export type Snapshot = {
+  tripId: string;
+  sourcesComplete: boolean;
+  jobs: Job[];
+  existing: ExistingItem[];
+  storageMismatchDates: string[];
+  dayTitles: Record<string, string>;
+  policy?: Partial<Policy>;
+};
+export type Plan = {
+  tripId: string;
+  events: ExistingItem[];
+  titles: Record<string, string>;
+  issues: Issue[];
+  changedDates: string[];
+  complete: boolean;
+};
+export type StayNight = {
+  id: string; name: string; checkInDate: string; checkOutDate: string;
+};
+
+const MIN = 60_000;
+const ROLES: Role[] = [
+  'morning','wake','leave','parking','gate','early','open','close','car',
+  'return','arrival','end','precheck','hotelLeave','roomReady','checkout',
+  'airport','pickupAllowed','pickup','dropoff','dropoffDeadline','takeoff','land','activity',
+];
+const AUTO_SOURCES = new Set(['park','flight','transport','accommodation','car_rental','show','dining','fastpass']);
+const ACCESS: Record<string, number> = {
+  'seaworld orlando': 15, 'seaworld': 15,
+  'busch gardens tampa bay': 20, 'busch gardens': 20,
+  'disneys animal kingdom': 20, 'animal kingdom': 20,
+  'disneys hollywood studios': 20, 'hollywood studios': 20,
+  'magic kingdom': 45,
+  'universals epic universe': 15, 'epic universe': 15,
+  'universals islands of adventure': 25, 'islands of adventure': 25,
+  'universal studios florida': 25,
+};
+const normalize = (s: string) => s.toLowerCase().normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '').replace(/[^\w\s]/g, '')
+  .replace(/\s+/g, ' ').trim();
+const location = (p: Place) => p.address || p.name;
+
+function minuteValue(value: number | undefined, label: string): number {
+  if (value === undefined || !Number.isFinite(value) || value < 0 || !Number.isInteger(value)) {
+    throw new Error('Defina ' + label + ' em minutos inteiros, inclusive zero se aplicável.');
+  }
+  return value;
+}
+function routeMinutes(r: Route | undefined, label: string): number {
+  return minuteValue(r?.minutes, label);
+}
+function routeNote(r: Route): string {
+  return (r.estimated ? 'Estimativa: ' : 'Duração informada: ') +
+    r.minutes + ' min. Fonte: ' + r.description + '.';
+}
+const formatters = new Map<string, Intl.DateTimeFormat>();
+function formatter(zone: string): Intl.DateTimeFormat {
+  if (!zone) throw new Error('Fuso IANA ausente.');
+  let f = formatters.get(zone);
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-CA', {
+      timeZone: zone, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+    });
+    formatters.set(zone, f);
+  }
+  return f;
+}
+export function clockAt(at: number, timeZone: string): Clock {
+  const parts: Record<string, string> = {};
+  for (const p of formatter(timeZone).formatToParts(new Date(at))) parts[p.type] = p.value;
+  return {
+    date: parts.year + '-' + parts.month + '-' + parts.day,
+    time: parts.hour + ':' + parts.minute,
+    timeZone,
+  };
+}
+export function toInstant(c: Clock): number {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(c.date) || !/^\d{2}:\d{2}$/.test(c.time)) {
+    throw new Error('Data/horário inválido: ' + c.date + ' ' + c.time);
+  }
+  const [y,m,d] = c.date.split('-').map(Number);
+  const [h,n] = c.time.split(':').map(Number);
+  const local = Date.UTC(y,m-1,d,h,n);
+  if (h > 23 || n > 59 || new Date(Date.UTC(y,m-1,d)).toISOString().slice(0,10) !== c.date) {
+    throw new Error('Data/horário inválido.');
+  }
+  if (c.offsetMinutes !== undefined) {
+    if (!Number.isInteger(c.offsetMinutes) || Math.abs(c.offsetMinutes) > 840) {
+      throw new Error('Deslocamento UTC inválido.');
+    }
+    const instant = local - c.offsetMinutes * MIN;
+    const back = clockAt(instant,c.timeZone);
+    if (back.date !== c.date || back.time !== c.time) throw new Error('Offset não corresponde ao fuso/data.');
+    return instant;
+  }
+  let guess = local;
+  for (let i = 0; i < 6; i++) {
+    const p = clockAt(guess, c.timeZone);
+    const [py,pm,pd] = p.date.split('-').map(Number);
+    const [ph,pn] = p.time.split(':').map(Number);
+    const delta = local - Date.UTC(py,pm-1,pd,ph,pn);
+    if (delta === 0) {
+      for (const offset of [-120,-60,-30,30,60,120]) {
+        const other = clockAt(guess + offset * MIN, c.timeZone);
+        if (other.date === c.date && other.time === c.time) {
+          throw new Error('Horário ambíguo por mudança de fuso; fornecer offsetMinutes no adaptador.');
+        }
+      }
+      return guess;
+    }
+    guess += delta;
+  }
+  throw new Error('Horário inexistente na mudança de fuso.');
+}
+export function shiftDate(date: string, days: number): string {
+  const [y,m,d] = date.split('-').map(Number);
+  return new Date(Date.UTC(y,m-1,d+days)).toISOString().slice(0,10);
+}
+export function resolveNight<T extends StayNight>(
+  stays: T[], date: string, selections: Record<string,string>,
+): T | undefined {
+  const covering = stays.filter(s => s.checkInDate <= date && date < s.checkOutDate);
+  if (covering.length === 0) return undefined;
+  const selected = covering.find(s => s.id === selections[date]);
+  if (selected) return selected;
+  if (covering.length === 1) return covering[0];
+  throw new Error('Escolha de pernoite pendente em ' + date + '.');
+}
+export function ruleId(tripId: string, jobId: string, role: Role): string {
+  return generateDeterministicUUID('itinerary-rules-v1', tripId + '|' + jobId + '|' + role);
+}
+function signature(e: ExistingItem): string {
+  const i = e.item;
+  return JSON.stringify([
+    e.date,e.timeZone,i.id,i.time,i.title,i.location || '',
+    i.category === ('airbnb' as string) ? 'hotel' : i.category,
+    !!i.completed,i.notes || '',i.sourceType || '',i.sourceId || '',
+  ]);
+}
+const ROLE_ORDER: Partial<Record<Role,number>> = {
+  wake:0,morning:0,checkout:10,pickupAllowed:15,pickup:20,precheck:20,
+  leave:30,hotelLeave:30,parking:40,gate:50,early:60,open:70,activity:80,
+  close:90,car:100,return:110,dropoff:120,dropoffDeadline:125,
+  airport:130,takeoff:140,land:150,arrival:160,roomReady:170,end:180,
+};
+function byDate(a: ExistingItem, b: ExistingItem): number {
+  return a.date.localeCompare(b.date) || a.item.time.localeCompare(b.item.time) ||
+    (ROLE_ORDER[a.binding?.role as Role] ?? 85) - (ROLE_ORDER[b.binding?.role as Role] ?? 85) ||
+    a.item.id.localeCompare(b.item.id);
+}
+
+/**
+ * Jobs são adaptados de fontes completas. As durações nunca são extraídas
+ * automaticamente de texto livre. Um binding vincula item legado a fonte/função.
+ */
+export function evaluateItineraryRules(
+  snapshot: Snapshot, customPolicy: Partial<Policy> = {},
+): Plan {
+  if (!snapshot.sourcesComplete) throw new Error('Leitura incompleta: reconciliação bloqueada.');
+  const policy = { ...DEFAULT_POLICY, ...customPolicy, ...snapshot.policy };
+  for (const [key,value] of Object.entries({
+    airportLeadMinutes: policy.airportLeadMinutes, gateLeadMinutes: policy.gateLeadMinutes,
+    wakeLeadMinutes: policy.wakeLeadMinutes, boardingMinutes: policy.boardingMinutes,
+    precheckMinutes: policy.precheckMinutes,
+  })) minuteValue(value, key);
+  const issues: Issue[] = [];
+  const output: ExistingItem[] = [];
+  const titles: Record<string,string> = {};
+  const generated = new Set<string>();
+  const blocked = new Set<string>();
+  const jobIds = new Set(snapshot.jobs.map(j => j.id));
+  if (jobIds.size !== snapshot.jobs.length) throw new Error('Jobs com IDs duplicados.');
+  const owned = new Map<string, ExistingItem[]>();
+  const canonical = new Map<string,{jobId:string;role:Role}>();
+  for (const j of snapshot.jobs) for (const role of ROLES) {
+    canonical.set(ruleId(snapshot.tripId,j.id,role), {jobId:j.id,role});
+  }
+  const identify = (e: ExistingItem) => e.binding || canonical.get(e.item.id);
+  for (const e of snapshot.existing) {
+    if (e.item.sourceType === 'manual') continue;
+    const b = identify(e);
+    if (b) {
+      const key = b.jobId + '|' + b.role;
+      owned.set(key, [...(owned.get(key) || []), e]);
+    }
+  }
+  const issue = (jobId: string, code: string, message: string, level: Issue['level'] = 'pending') =>
+    issues.push({jobId,code,message,level});
+  const at = (date: string, time: string, timeZone: string) => toInstant({date,time,timeZone});
+  const normalEnd = (date: string, zone: string) => at(date,policy.normalEnd,zone);
+  const stage = (j: Job, roles: Role[], fn: () => void) => {
+    const lengthBefore = output.length;
+    const keysBefore = new Set(generated);
+    try { fn(); }
+    catch (error) {
+      output.splice(lengthBefore);
+      generated.clear();
+      for (const k of keysBefore) generated.add(k);
+      for (const r of roles) blocked.add(j.id + '|' + r);
+      issue(j.id,'MISSING_OR_INVALID_INPUT',error instanceof Error ? error.message : String(error));
+    }
+  };
+  const emit = (
+    j: Job, role: Role, instant: number, zone: string, title: string,
+    place: string, sourceType: string, notes = '', sourceId = j.sourceId,
+  ) => {
+    if (!Number.isFinite(instant)) throw new Error('Instante inválido em ' + role);
+    const key = j.id + '|' + role;
+    if (generated.has(key)) throw new Error('Função duplicada: ' + key);
+    generated.add(key);
+    const previous = (owned.get(key) || []).slice().sort((a,b)=>a.item.id.localeCompare(b.item.id));
+    const c = clockAt(instant,zone);
+    const previousUuid = previous.find(e=>/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(e.item.id));
+    const id = previousUuid?.item.id || ruleId(snapshot.tripId,j.id,role);
+    if (snapshot.existing.some(e=>e.item.id === id && e.item.sourceType === 'manual')) {
+      throw new Error('ID de evento automático colide com atividade manual.');
+    }
+    const category: ScheduleItem['category'] =
+      sourceType === 'flight' ? 'flight' :
+      ['park','show','fastpass'].includes(sourceType) ? 'park' :
+      sourceType === 'dining' ? 'dining' :
+      sourceType === 'accommodation' ? 'hotel' : 'transport';
+    output.push({
+      date:c.date,timeZone:zone,at:instant,binding:{jobId:j.id,role},
+      item:{id,time:c.time,title,location:place,category,
+        completed:previous.some(e=>!!e.item.completed),notes,sourceType,sourceId},
+    } as RuleEvent);
+  };
+  const lodgingEnd = (j: Job, date: string, zone: string, stay: Place, arrival: number, requiredEnd = arrival) => {
+    const end = Math.max(normalEnd(date,zone),arrival,requiredEnd);
+    const c = clockAt(arrival,zone);
+    const suffix = c.date !== date ? ' — jornada de ' + date : '';
+    emit(j,'arrival',arrival,zone,
+      (end === arrival ? 'Chegada e fim do dia — ' : 'Chegada à acomodação — ') + stay.name + suffix,
+      location(stay),'accommodation','Chegada calculada pelos trechos desta jornada.',stay.id);
+    if (end !== arrival) emit(j,'end',end,zone,'Fim do dia / descanso — ' + stay.name,
+      location(stay),'accommodation','Marcador de descanso posterior à chegada.',stay.id);
+  };
+  const parkDates = new Set(snapshot.jobs.filter(j=>j.kind === 'park').map(j=>(j as Extract<Job,{kind:'park'}>).date));
+
+  for (const j of snapshot.jobs) {
+    if (j.kind === 'activity') stage(j,['activity'],()=>{
+      emit(j,'activity',toInstant(j.at),j.at.timeZone,j.title,
+        location(j.place),j.sourceType,j.notes || 'Horário da atividade cadastrada.');
+    });
+    if (j.kind === 'flight') {
+      stage(j,['takeoff','land'],()=>{
+        const departure = toInstant(j.departure), arrival = toInstant(j.arrival);
+        if (arrival <= departure) throw new Error('Chegada do voo não é posterior à decolagem.');
+        emit(j,'takeoff',departure,j.departure.timeZone,'Decolagem — ' + j.origin.name,
+          location(j.origin),'flight','Horário da reserva; fuso do aeroporto de origem.');
+        emit(j,'land',arrival,j.arrival.timeZone,'Pouso — ' + j.destination.name,
+          location(j.destination),'flight','Horário da reserva; fuso do destino.');
+        const finalArrival = j.journeyArrival || j.arrival;
+        if (toInstant(finalArrival) < arrival) throw new Error('Chegada final da viagem antecede o segmento.');
+        if (j.direction === 'outbound') {
+          titles[j.departure.date] = j.departure.date === finalArrival.date ? 'Chegada' : 'Saída de casa';
+          titles[finalArrival.date] = 'Chegada';
+        } else if (j.direction === 'inbound') {
+          titles[j.departure.date] = j.departure.date === finalArrival.date ? 'Fim da Viagem' : 'Retorno para casa';
+          titles[finalArrival.date] = 'Fim da Viagem';
+        }
+      });
+      if (j.direction === 'outbound') stage(j,['leave','airport'],()=>{
+        if (!j.home) throw new Error('Informar endereço/cidade de saída de casa.');
+        const terminal = toInstant(j.departure) - policy.airportLeadMinutes * MIN;
+        const leave = terminal - routeMinutes(j.homeToAirport,'trajeto casa → aeroporto') * MIN;
+        emit(j,'leave',leave,j.departure.timeZone,'Saída de casa → ' + j.origin.name,
+          location(j.home),'transport',routeNote(j.homeToAirport!));
+        emit(j,'airport',terminal,j.departure.timeZone,'Chegada ao aeroporto — ' + j.origin.name,
+          location(j.origin),'transport','Antecedência de ' + policy.airportLeadMinutes + ' min.');
+        const leaveDate = clockAt(leave,j.departure.timeZone).date;
+        if (leaveDate !== (j.journeyArrival || j.arrival).date) titles[leaveDate] = 'Saída de casa';
+      });
+    }
+
+    if (j.kind === 'rental') stage(j,['pickupAllowed','dropoffDeadline'],()=>{
+      emit(j,'pickupAllowed',toInstant(j.earliestPickup),j.earliestPickup.timeZone,
+        'Retirada permitida a partir deste horário',location(j.pickupPlace),'car_rental',
+        'Marco contratual. A retirada planejada depende da liberação do viajante.');
+      emit(j,'dropoffDeadline',toInstant(j.returnDeadline),j.returnDeadline.timeZone,
+        'Prazo máximo para concluir a devolução do carro',location(j.returnPlace),'car_rental',
+        'Devolver antes é permitido. Este marco não representa a chegada planejada.');
+    });
+
+    if (j.kind === 'arrival') stage(j,['pickup','leave','arrival','roomReady','end'],()=>{
+      const zone = j.checkIn.timeZone;
+      const ready = toInstant(j.landing) +
+        minuteValue(j.airportProcessingMinutes,'desembarque/imigração/bagagens, sem incluir a locadora')*MIN;
+      let leave = ready, origin = j.airport;
+      if (j.rental) {
+        const rentalArrival = ready + routeMinutes(j.rental.airportToRental,'aeroporto → locadora')*MIN;
+        const pickup = Math.max(rentalArrival,toInstant(j.rental.earliest));
+        const service = minuteValue(j.rental.serviceMinutes,'procedimentos de retirada do carro');
+        emit(j,'pickup',pickup,zone,'Retirada planejada do carro',location(j.rental.place),'car_rental',
+          'Depois da liberação no aeroporto e do início contratual. Procedimentos: ' + service + ' min.',j.rental.id);
+        leave = pickup + service*MIN;
+        origin = j.rental.place;
+      }
+      const arrival = leave + routeMinutes(j.routeToStay,'origem de chegada → acomodação')*MIN;
+      const checkIn = Math.max(arrival,toInstant(j.checkIn));
+      emit(j,'leave',leave,zone,'Deslocamento: ' + origin.name + ' → ' + j.stay.name,
+        location(origin),'transport',routeNote(j.routeToStay));
+      emit(j,'roomReady',checkIn,zone,'Check-in previsto — ' + j.stay.name,
+        location(j.stay),'accommodation','Contratual: ' + j.checkIn.time +
+        '. Chegada estimada: ' + clockAt(arrival,zone).time + '.',j.stay.id);
+      lodgingEnd(j,clockAt(toInstant(j.landing),zone).date,zone,j.stay,arrival,checkIn);
+    });
+
+    if (j.kind === 'transfer') stage(j,['morning','checkout','leave','roomReady','arrival','end'],()=>{
+      const leave = toInstant(j.departure), zone = j.departure.timeZone;
+      const arrival = leave + routeMinutes(j.route,'acomodação anterior → nova acomodação')*MIN;
+      const checkOut = Math.min(toInstant(j.checkOut),leave);
+      const checkIn = Math.max(toInstant(j.checkIn),arrival);
+      const morning = Math.min(at(j.departure.date,policy.normalStart,zone),checkOut-policy.wakeLeadMinutes*MIN);
+      emit(j,'morning',morning,zone,'Início do dia — ' + j.from.name,location(j.from),'accommodation','',j.from.id);
+      emit(j,'checkout',checkOut,zone,'Check-out — ' + j.from.name,location(j.from),'accommodation',
+        'Limite contratual: ' + j.checkOut.time + '.',j.from.id);
+      emit(j,'leave',leave,zone,'Deslocamento: ' + j.from.name + ' → ' + j.to.name,
+        location(j.from),'transport',routeNote(j.route));
+      emit(j,'roomReady',checkIn,zone,'Check-in previsto — ' + j.to.name,location(j.to),'accommodation',
+        'Contratual: ' + j.checkIn.time + '. Chegada estimada: ' + clockAt(arrival,zone).time + '.',j.to.id);
+      lodgingEnd(j,j.departure.date,zone,j.to,arrival,checkIn);
+    });
+
+    if (j.kind === 'airport-return') stage(j,['morning','checkout','leave','dropoff','airport'],()=>{
+      const target = toInstant(j.takeoff)-policy.airportLeadMinutes*MIN;
+      const zone = j.checkOut.timeZone;
+      let leave: number;
+      let firstDrive: number;
+      let returnService = 0, terminalDrive = 0;
+      if (j.rental) {
+        firstDrive = routeMinutes(j.rental.toRental,'acomodação → locadora');
+        returnService = minuteValue(j.rental.serviceMinutes,'procedimentos de devolução');
+        terminalDrive = routeMinutes(j.rental.toTerminal,'locadora → terminal');
+        leave = Math.min(target-(returnService+terminalDrive)*MIN,
+          toInstant(j.rental.deadline)-returnService*MIN)-firstDrive*MIN;
+      } else {
+        firstDrive = routeMinutes(j.directRoute,'acomodação → terminal');
+        leave = target-firstDrive*MIN;
+      }
+      const contractual = toInstant(j.checkOut);
+      const gap = (leave-contractual)/MIN;
+      if (gap >= 0) {
+        if (policy.nearCheckoutMinutes === undefined) {
+          throw new Error('Definir o intervalo considerado curto entre checkout e partida.');
+        } else if (gap <= minuteValue(policy.nearCheckoutMinutes,'intervalo curto de checkout')) {
+          leave = contractual;
+        } else if (!j.luggagePlanConfirmed) {
+          issue(j.id,'LUGGAGE_PLAN','Há intervalo após checkout; definir bagagens/espera.');
+        }
+      }
+      const checkout = Math.min(contractual,leave);
+      const morning = Math.min(at(j.checkOut.date,policy.normalStart,zone),checkout-policy.wakeLeadMinutes*MIN);
+      emit(j,'morning',morning,zone,'Acordar / organizar saída — ' + j.stay.name,
+        location(j.stay),'accommodation','Antes do primeiro compromisso de saída.',j.stay.id);
+      emit(j,'checkout',checkout,zone,'Check-out — ' + j.stay.name,location(j.stay),'accommodation',
+        'Limite contratual: ' + j.checkOut.time + '.',j.stay.id);
+      emit(j,'leave',leave,zone,'Saída para ' + j.airport.name,location(j.stay),'transport',
+        'Planejado para chegar ao terminal pelo menos ' + policy.airportLeadMinutes + ' min antes da decolagem.');
+      let terminal = leave+firstDrive*MIN;
+      if (j.rental) {
+        const end = terminal+returnService*MIN;
+        if (end > toInstant(j.rental.deadline)) throw new Error('Devolução ultrapassa o prazo contratual.');
+        emit(j,'dropoff',terminal,zone,'Devolução planejada do carro',location(j.rental.place),'car_rental',
+          'Procedimentos: ' + returnService + ' min. Conclusão: ' + clockAt(end,zone).time + '.',j.rental.id);
+        terminal = end+terminalDrive*MIN;
+      }
+      if (terminal > target) throw new Error('Chegada ao terminal não respeita as três horas.');
+      emit(j,'airport',terminal,j.takeoff.timeZone,'Chegada ao terminal — ' + j.airport.name,
+        location(j.airport),'transport','Antes do horário-alvo ' + clockAt(target,j.takeoff.timeZone).time + '.');
+    });
+
+    if (j.kind === 'free') {
+      if (parkDates.has(j.date)) {
+        issue(j.id,'FREE_PARK_CONFLICT','Dia livre e parque atribuídos à mesma data. Corrigir adaptação das fontes.','error');
+        continue;
+      }
+      stage(j,['morning','end'],()=>{
+        if (j.sleptPreviousNight) emit(j,'morning',at(j.date,policy.normalStart,j.timeZone),j.timeZone,
+          'Início do dia — ' + j.stay.name,location(j.stay),'accommodation','Dia sem saída estruturada.',j.stay.id);
+        emit(j,'end',normalEnd(j.date,j.timeZone),j.timeZone,'Fim do dia / descanso — ' + j.stay.name,
+          location(j.stay),'accommodation','Dia livre; nenhum deslocamento de parque foi criado.',j.stay.id);
+      });
+    }
+
+    if (j.kind === 'park') {
+      const zone = j.timeZone;
+      const opening = at(j.date,j.opening,zone);
+      let entry = opening, early: number | undefined;
+      if (j.early?.eligible && j.early.available) {
+        const candidate = at(j.date,j.early.time,zone);
+        if (candidate < opening) { entry = candidate; early = candidate; }
+        else issue(j.id,'INVALID_EARLY','Early Entry não antecede a abertura; usar abertura normal.');
+      }
+      const gate = entry-policy.gateLeadMinutes*MIN;
+      const knownAccess = ACCESS[normalize(j.name)];
+      const pOut = j.mode === 'car' ? j.parkingToGateMinutes ?? knownAccess : 0;
+      const pBack = j.mode === 'car' ? j.gateToParkingMinutes ?? pOut : 0;
+      const provisional = j.morningProvisional ? ' Planejamento provisório após a jornada anterior.' : '';
+      stage(j,['gate','early','open','roomReady'],()=>{
+        emit(j,'gate',gate,zone,'Chegada às catracas — ' + j.name,j.name,'park',
+          policy.gateLeadMinutes + ' min antes da entrada válida.' + provisional);
+        if (early !== undefined) emit(j,'early',early,zone,'Early Entry — ' + j.name,j.name,'park',
+          'Elegibilidade e disponibilidade informadas para esta data.');
+        emit(j,'open',opening,zone,'Abertura normal — ' + j.name,j.name,'park','Horário cadastrado de planejamento.');
+        if (j.detour?.roomAvailable) emit(j,'roomReady',toInstant(j.detour.roomAvailable),zone,
+          'Quarto disponível — ' + j.detour.stay.name,location(j.detour.stay),'accommodation',
+          'Informativo; não exige retorno durante o passeio.',j.detour.stay.id);
+      });
+      stage(j,['wake','leave','precheck','hotelLeave','parking','checkout'],()=>{
+        const access = minuteValue(pOut,'acesso à entrada');
+        const drive = routeMinutes(j.outbound,'ida até estacionamento/entrada');
+        const parking = gate-access*MIN;
+        const lastLeave = parking-drive*MIN;
+        let firstLeave = lastLeave;
+        if (j.detour) firstLeave -= (policy.precheckMinutes+
+          routeMinutes(j.detour.fromOrigin,'origem → hotel de pré-check-in'))*MIN;
+        emit(j,'wake',firstLeave-policy.wakeLeadMinutes*MIN,zone,'Acordar — ' + j.origin.name,
+          location(j.origin),'accommodation','Exatamente 30 min antes da primeira saída.'+provisional,j.origin.id);
+        emit(j,'leave',firstLeave,zone,'Saída de ' + j.origin.name,
+          location(j.origin),'transport',j.detour ? routeNote(j.detour.fromOrigin) : routeNote(j.outbound));
+        if (j.detour) {
+          const service = lastLeave-policy.precheckMinutes*MIN;
+          emit(j,'precheck',service,zone,'Pré-check-in / chaves — ' + j.detour.stay.name,
+            location(j.detour.stay),'accommodation','Parada de ' + policy.precheckMinutes + ' min.',j.detour.stay.id);
+          emit(j,'hotelLeave',lastLeave,zone,'Saída do hotel → ' + j.name,
+            location(j.detour.stay),'transport',routeNote(j.outbound));
+        }
+        if (j.mode === 'car') emit(j,'parking',parking,zone,'Chegada ao estacionamento — ' + j.name,
+          j.name,'transport','Acesso até as catracas: ' + access + ' min.');
+        if (j.earlyCheckout) {
+          const checkout = j.earlyCheckout.at ? toInstant(j.earlyCheckout.at) : firstLeave;
+          if (checkout < firstLeave-policy.wakeLeadMinutes*MIN || checkout > firstLeave ||
+              checkout > toInstant(j.earlyCheckout.contractualLimit)) {
+            throw new Error('Checkout precisa ocorrer depois de acordar, antes da saída e até o limite contratual.');
+          }
+          emit(j,'checkout',checkout,zone,'Check-out planejado — ' + j.origin.name,location(j.origin),'accommodation',
+            'Limite: '+j.earlyCheckout.contractualLimit.time+
+            (j.earlyCheckout.luggageConfirmed ? '.' : '. Guarda-volumes pendente.'),j.origin.id);
+          if (!j.earlyCheckout.luggageConfirmed) issue(j.id,'LUGGAGE_PLAN','Confirmar guarda-volumes antes do parque.');
+        }
+      });
+      stage(j,['close','car','return','arrival','end'],()=>{
+        let closing = at(j.date,j.closing,zone);
+        if (closing <= opening) closing = at(shiftDate(j.date,1),j.closing,zone);
+        if (j.returnEndUnknown) throw new Error('Término da última atividade pendente; retorno não confirmado.');
+        const exit = Math.max(closing,j.latestActivityEnd ? toInstant(j.latestActivityEnd) : closing);
+        const lastActivityStart = Math.max(-Infinity,...snapshot.jobs
+          .filter((job): job is Extract<Job,{kind:'activity'}> =>
+            job.kind==='activity' && job.place.id==='park:'+j.sourceId)
+          .map(job=>toInstant(job.at)));
+        if(lastActivityStart>=exit &&
+            (!j.latestActivityEnd || toInstant(j.latestActivityEnd)<lastActivityStart)){
+          throw new Error('Informar o término da atividade agendada no fechamento ou depois dele.');
+        }
+        const access = minuteValue(pBack,'acesso de volta ao transporte');
+        const drive = routeMinutes(j.inbound,'volta à acomodação da noite');
+        const car = exit+access*MIN;
+        const board = j.mode === 'car' ? policy.boardingMinutes : 0;
+        const startReturn = car+board*MIN;
+        const arrival = startReturn+drive*MIN;
+        emit(j,'close',exit,zone,'Término das atividades — ' + j.name,j.name,'park',
+          'Depois do fechamento e das atividades com término conhecido.');
+        if (j.mode === 'car') emit(j,'car',car,zone,'Chegada ao carro — ' + j.name,j.name,'transport',
+          'Percurso de '+access+' min; embarque de '+board+' min antes da partida.');
+        emit(j,'return',startReturn,zone,'Retorno → ' + j.night.name,j.name,'transport',
+          routeNote(j.inbound)+' Destino: '+location(j.night)+'.');
+        lodgingEnd(j,j.date,zone,j.night,arrival);
+      });
+    }
+  }
+
+  // Preservar manuais, fontes não gerenciadas e funções bloqueadas por falta de dados.
+  for (const e of snapshot.existing) {
+    const b = identify(e);
+    if (e.item.sourceType === 'manual') { output.push(e); continue; }
+    if (b) {
+      if (blocked.has(b.jobId+'|'+b.role)) {
+        const warning = '[PENDENTE: regra não recalculada por falta de dados] ';
+        output.push({...e,item:{...e.item,notes:warning+(e.item.notes || '').replace(
+          /^\[PENDENTE: regra não recalculada por falta de dados\] /,'')}});
+      }
+      // Outras funções gerenciadas são substituídas ou removidas se a fonte foi excluída.
+      continue;
+    }
+    output.push(e);
+    if (AUTO_SOURCES.has(e.item.sourceType || '')) {
+      issue('legacy','UNBOUND_AUTOMATIC','Vincular o item automático legado '+e.item.id+
+        ' à fonte e função antes de concluir a migração.','error');
+    }
+  }
+  const ids = new Set<string>();
+  for (const e of output) {
+    if (ids.has(e.item.id)) issue('global','DUPLICATE_ID','ID duplicado: '+e.item.id,'error');
+    ids.add(e.item.id);
+  }
+  output.sort(byDate);
+  const dates = new Set([...snapshot.existing.map(e=>e.date),...output.map(e=>e.date),
+    ...snapshot.storageMismatchDates,...Object.keys(titles)]);
+  const changedDates = [...dates].filter(date=>{
+    if (snapshot.storageMismatchDates.includes(date)) return true;
+    if (titles[date] !== undefined && titles[date] !== snapshot.dayTitles[date]) return true;
+    const old = snapshot.existing.filter(e=>e.date === date).map(signature).sort();
+    const next = output.filter(e=>e.date === date).map(signature).sort();
+    return JSON.stringify(old) !== JSON.stringify(next);
+  }).sort();
+  return {
+    tripId:snapshot.tripId,events:output,titles,issues,changedDates,
+    complete:issues.length === 0,
+  };
+}
+
+export interface RulesStore {
+  /** Ler todas as fontes e as duas representações; lançar erro em qualquer falha. */
+  load(tripId: string): Promise<Snapshot>;
+  /** Salvar todos os dias alterados, inclusive origem/destino da madrugada. */
+  persist(plan: Plan): Promise<void>;
+  /** Relê banco e exige igualdade dos campos/IDs/data no JSON e na tabela. */
+  verify(plan: Plan): Promise<void>;
+  /** Atualiza React com o resultado salvo, sem executar geradores antigos. */
+  apply(plan: Plan): void;
+  /** Exibe pendências; complete=false jamais vira mensagem de validação aprovada. */
+  report(issues: Issue[]): void;
+}
+
+/**
+ * Instanciar uma vez por PlannerProvider.
+ * Todos os modais usam a MESMA fila; o loader não pode chamar este controlador.
+ */
+export function createRulesController(store: RulesStore, policy: Partial<Policy> = {}) {
+  let queue: Promise<unknown> = Promise.resolve();
+  const enqueue = <T,>(work: () => Promise<T>): Promise<T> => {
+    const task = queue.then(work);
+    queue = task.then(()=>undefined,()=>undefined);
+    return task;
+  };
+  const evaluateAndCorrectAllItems = async (tripId: string): Promise<Plan> => {
+    const snapshot = await store.load(tripId);
+    if (snapshot.tripId !== tripId) throw new Error('Loader retornou outra viagem.');
+    const plan = evaluateItineraryRules(snapshot,policy);
+    if (plan.issues.some(i=>i.level === 'error')) {
+      store.report(plan.issues);
+      throw new Error('Conflito estrutural: não foi possível salvar a reconciliação.');
+    }
+    if (plan.changedDates.length) await store.persist(plan);
+    await store.verify(plan);
+    store.apply(plan);
+    store.report(plan.issues);
+    return plan;
+  };
+  return {
+    onTripLoaded: (tripId: string) => enqueue(()=>evaluateAndCorrectAllItems(tripId)),
+    onModalOpen: (tripId: string) => enqueue(()=>evaluateAndCorrectAllItems(tripId)),
+    onModalSave: (tripId: string, saveSource: () => Promise<void>) =>
+      enqueue(async()=>{
+        await saveSource(); // Deve lançar erro se o salvamento da fonte falhar.
+        try { return await evaluateAndCorrectAllItems(tripId); }
+        catch (error) {
+          throw new Error('A fonte foi salva, mas o roteiro precisa de reconciliação: '+
+            (error instanceof Error ? error.message : String(error)));
+        }
+      }),
+    evaluateAndCorrectAllItems: (tripId: string) => enqueue(()=>evaluateAndCorrectAllItems(tripId)),
+  };
+}
+
+```
+
+
+## 3. Substituir integralmente src/services/itineraryRulesAdapter.ts
+
+O construtor agora exige callbacks de apply/report. Atualize o Provider com o bloco da seção 9 e retire a instância global antiga. Nenhum método pode ficar vazio.
+
+```typescript
+import { supabase } from './supabaseClient';
+import { generateDeterministicUUID } from '../utils/uuid';
+import { resolveNight, shiftDate, toInstant } from '../utils/itineraryRules';
+import type {
+  Snapshot, Plan, Issue, RulesStore, Job, ExistingItem, Role, Place, Clock, Route, Policy,
+} from '../utils/itineraryRules';
+
+type Row = Record<string, any>;
+type Binding = { jobId: string; role: Role };
+export type LogisticsConfig = {
+  destinationTimeZone?: string;
+  airportTimeZones?: Record<string, string>;
+  policy?: Partial<Policy>;
+  home?: Place;
+  routes?: Record<string, Route>;
+  airportProcessingMinutes?: Record<string, number | undefined>;
+  rentals?: Record<string, { pickupMinutes?: number; returnMinutes?: number }>;
+  transfers?: Record<string, { departureTime?: string }>;
+  parks?: Record<string, {
+    mode?: 'car' | 'walk' | 'boat' | 'bus';
+    eligibleEarly?: boolean; availableEarly?: boolean;
+    detourStayId?: string;
+    parkingToGateMinutes?: number; gateToParkingMinutes?: number;
+    checkoutTime?: string; luggageConfirmed?: boolean;
+    returnEndUnknown?: boolean; latestActivityEnd?: Clock; morningProvisional?: boolean;
+  }>;
+  activityEnds?: Record<string, Clock>;
+  legacyBindings?: Record<string, Binding>;
+  manualIds?: string[];
+  luggagePlanConfirmed?: boolean;
+};
+export type RawRulesData = {
+  trip: Row; accommodations: Row[]; flights: Row[]; cars: Row[];
+  parks: Row[]; days: Row[]; hourly: Row[];
+};
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const HH = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+const norm = (v: unknown) => String(v ?? '').toLowerCase().normalize('NFD')
+  .replace(/[\u0300-\u036f]/g,'').replace(/[^\w\s]/g,' ').replace(/\s+/g,' ').trim();
+const date = (v: unknown): string => {
+  const s=String(v ?? '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new Error('Data sem formato YYYY-MM-DD: '+s);
+  if (new Date(s+'T12:00:00Z').toISOString().slice(0,10)!==s) throw new Error('Data inválida: '+s);
+  return s;
+};
+const time = (v: unknown): string => {
+  const s=String(v ?? '').trim();
+  if (!HH.test(s)) throw new Error('Horário ausente/inválido: '+s);
+  return s;
+};
+const list = (v: unknown): Row[] => {
+  if (!Array.isArray(v)) throw new Error('Esperada lista JSON válida.');
+  return v;
+};
+const place = (r: Row): Place => ({id:r.id,name:r.name,address:r.address || undefined});
+const tzForAirport = (code: string, config: LogisticsConfig): string => {
+  const registry: Record<string,string> = {
+    GRU:'America/Sao_Paulo',SFB:'America/New_York',MCO:'America/New_York',
+    MIA:'America/New_York',PUJ:'America/Santo_Domingo',
+  };
+  const zone=config.airportTimeZones?.[code] || registry[code];
+  if (!zone) throw new Error('Cadastrar fuso IANA do aeroporto '+code+'.');
+  new Intl.DateTimeFormat('en',{timeZone:zone}).format();
+  return zone;
+};
+export const routeKey = (mode: string, from: string, to: string) => [mode,from,to].join('|');
+const getRoute = (config: LogisticsConfig, mode: string, from: string, to: string): Route => {
+  const key=routeKey(mode,from,to);
+  const r=config.routes?.[key];
+  if (!r) return {description:'Trajeto pendente: '+key,estimated:true};
+  if (r.minutes!==undefined && (!Number.isInteger(r.minutes)||r.minutes<0)) {
+    throw new Error('Duração inválida para '+key);
+  }
+  if (!r.description?.trim()) throw new Error('Informar a origem da duração em '+key);
+  return r;
+};
+function comparable(item: Row, relational=false): string {
+  return JSON.stringify([
+    item.id,item.time,item.title,item.location || '',
+    item.category || 'other',!!item.completed,item.notes || '',
+    item[relational?'source_type':'sourceType'] || '',
+    item[relational?'source_id':'sourceId'] || '',
+  ]);
+}
+function sameItems(a: Row[], b: Row[], rel=false): boolean {
+  return JSON.stringify(a.map(i=>comparable(i)).sort()) ===
+    JSON.stringify(b.map(i=>comparable(i,rel)).sort());
+}
+
+export function buildRulesSnapshot(raw: RawRulesData): Snapshot & { legacyOwnedIds: string[] } {
+  const {trip,days,parks,cars,flights}=raw;
+  if (!trip?.id) throw new Error('Viagem não encontrada.');
+  const config: LogisticsConfig=trip.itinerary_rules_config || {};
+  const stays: Array<Row & {id:string;name:string;checkInDate:string;checkOutDate:string}>=raw.accommodations.map(a=>({
+    ...a,id:a.id,name:a.name,checkInDate:date(a.check_in_date),checkOutDate:date(a.check_out_date),
+  }));
+  const aliases=new Map<string,string>();
+  const flightGroups=new Map<string,Row[]>();
+  for (const f of flights) {
+    const key=JSON.stringify([f.type,f.origin_code,f.destination_code,
+      f.departure_date,f.departure_time,f.arrival_date,f.arrival_time,f.flight_number]);
+    flightGroups.set(key,[...(flightGroups.get(key)||[]),f]);
+  }
+  // Preferir a reserva já usada no roteiro para manter a identidade.
+  const referenced=new Set(days.flatMap(d=>list(d.hourly_schedule || []).map(i=>i.sourceId)));
+  const groups=[...flightGroups.values()].map(group=>{
+    const sorted=group.slice().sort((a,b)=>String(a.id).localeCompare(String(b.id)));
+    const rep=sorted.find(f=>referenced.has(f.id)) || sorted[0];
+    for (const f of group) aliases.set(f.id,'flight-'+rep.id);
+    return rep;
+  });
+  const departureClock=(f:Row):Clock=>({
+    date:date(f.departure_date),time:time(f.departure_time),
+    timeZone:tzForAirport(f.origin_code,config),
+  });
+  const arrivalClock=(f:Row):Clock=>({
+    date:date(f.arrival_date),time:time(f.arrival_time),
+    timeZone:tzForAirport(f.destination_code,config),
+  });
+  groups.sort((a,b)=>toInstant(departureClock(a))-toInstant(departureClock(b)));
+  const outbound=groups.filter(f=>f.type==='outbound');
+  const inbound=groups.filter(f=>f.type==='inbound');
+  const zone=config.destinationTimeZone ||
+    (outbound.length ? tzForAirport(outbound[outbound.length-1].destination_code,config) : '');
+  if (!zone && (stays.length || parks.length)) throw new Error('Cadastrar fuso do destino.');
+  const night=(d:string)=>resolveNight(stays,d,trip.selected_accommodations_per_night || {});
+  const airportPlace=(code:string,name?:string):Place=>({id:'airport:'+code,name:name || code});
+  const rentalPlace=(r:Row,ret=false):Place=>({
+    id:'rental:'+r.id+(ret?':return':':pickup'),
+    name:String(ret?r.dropoff_location:r.pickup_location),
+    address:String(ret?r.dropoff_location:r.pickup_location),
+  });
+  const jobs: Job[]=[];
+  const owner=new Map<string,Job>();
+  const addOwner=(d:string,j:Job)=>{if(owner.has(d))throw new Error('Duas jornadas principais em '+d);owner.set(d,j);jobs.push(j)};
+  for (const f of groups) {
+    const direction=f.id===outbound[0]?.id?'outbound':f.id===inbound[0]?.id?'inbound':'internal';
+    const final=direction==='outbound'?outbound[outbound.length-1]:direction==='inbound'?inbound[inbound.length-1]:f;
+    jobs.push({
+      id:'flight-'+f.id,sourceId:f.id,kind:'flight',direction,
+      departure:departureClock(f),arrival:arrivalClock(f),journeyArrival:arrivalClock(final),
+      origin:airportPlace(f.origin_code,f.origin_airport),
+      destination:airportPlace(f.destination_code,f.destination_airport),
+      home:direction==='outbound'?config.home:undefined,
+      homeToAirport:direction==='outbound'&&config.home
+        ?getRoute(config,'car',config.home.id,'airport:'+f.origin_code):undefined,
+    });
+  }
+  for (const c of cars) jobs.push({
+    id:'rental-'+c.id,sourceId:c.id,kind:'rental',
+    earliestPickup:{date:date(c.pickup_date),time:time(c.pickup_time),timeZone:zone},
+    returnDeadline:{date:date(c.dropoff_date),time:time(c.dropoff_time),timeZone:zone},
+    pickupPlace:rentalPlace(c),returnPlace:rentalPlace(c,true),
+  });
+  const carOn=(d:string):Row|undefined=>{
+    const found=cars.filter(c=>date(c.pickup_date)<=d && d<=date(c.dropoff_date));
+    if(found.length>1)throw new Error('Mais de uma locação ativa em '+d+'; definir a usada na jornada.');
+    return found[0];
+  };
+  for(const day of days.slice().sort((a,b)=>String(a.date).localeCompare(String(b.date)))){
+    const d=date(day.date), previous=night(shiftDate(d,-1)), current=night(d);
+    const pbList=parks.filter(p=>p.itinerary_day_id===day.id);
+    if(pbList.length>1)throw new Error('Mais de uma reserva de parque no mesmo dia.');
+    const pb=pbList[0], car=carOn(d);
+    const takeoff=inbound.find(f=>date(f.departure_date)===d);
+    const landing=outbound.filter(f=>date(f.arrival_date)===d).slice(-1)[0];
+    if(pb){
+      if(!previous||!current)throw new Error('Hospedagem da manhã/noite não resolvida em '+d);
+      const cfg=config.parks?.[pb.id] || {};
+      const mode=cfg.mode || (car?'car':undefined);
+      if(!mode)throw new Error('Definir modo de transporte para '+pb.park_name);
+      const p={id:'park:'+pb.id,name:pb.park_name};
+      const detourId=cfg.detourStayId ||
+        (current.id!==previous.id && current.checkInDate===d ? current.id:undefined);
+      const detour=detourId?stays.find(a=>a.id===detourId):undefined;
+      if(detourId&&!detour)throw new Error('Hotel intermediário inexistente: '+detourId);
+      if(detour && !(detour.checkInDate<=d&&d<detour.checkOutDate)){
+        throw new Error('Hotel intermediário não cobre a data '+d);
+      }
+      const from=detour || previous;
+      const shows=list(pb.shows_and_parades || []);
+      const dining=list(pb.dining_reservations || []).filter(a=>a.status!=='Cancelada');
+      const fast=list(pb.fast_passes || []);
+      let latest=cfg.latestActivityEnd;
+      let unknown=!!cfg.returnEndUnknown;
+      const activities=[
+        ...shows.map(s=>({...s,label:s.showName,source:'show'})),
+        ...dining.map(s=>({...s,label:s.restaurantName,source:'dining'})),
+        ...fast.map(s=>({...s,label:s.attractionName,source:'fastpass',time:String(s.timeWindow||'').split(/\s*[-–]\s*/)[0]})),
+      ];
+      for(const a of activities){
+        if(!a.time)continue; // Sem horário agendado: não criar um horário fictício.
+        const at:Clock={date:d,time:time(a.time),timeZone:zone};
+        const end=config.activityEnds?.[a.id] || (a.endTime?{...at,time:time(a.endTime)}:undefined);
+        if(end){
+          if(toInstant(end)<toInstant(at))throw new Error('Término anterior ao início de '+a.label);
+          if(!latest || toInstant(end)>toInstant(latest))latest=end;
+        }else if(a.source==='show'){unknown=true;}
+        jobs.push({
+          id:a.source+'-'+a.id,sourceId:a.id,kind:'activity',at,title:a.label,
+          place:{id:p.id,name:a.location || p.name},sourceType:a.source as 'show'|'dining'|'fastpass',
+          notes:a.notes,
+        });
+      }
+      const benefitStay=stays.some(s=>s.checkInDate<=d&&d<=s.checkOutDate&&
+        /universal/.test(norm(pb.park_name))&&
+        (s.amenities || []).some((a:string)=>norm(a).includes('entrada antecipada')));
+      const hours=pb.park_hours || {};
+      const checkout=previous.checkOutDate===d;
+      const parkJob:Job={
+        id:'park-'+pb.id,sourceId:pb.id,kind:'park',date:d,timeZone:zone,name:pb.park_name,
+        opening:time(hours.openingTime),closing:time(hours.closingTime),
+        origin:place(previous),night:place(current),mode,
+        outbound:getRoute(config,mode,from.id,p.id),
+        inbound:getRoute(config,mode,p.id,current.id),
+        parkingToGateMinutes:cfg.parkingToGateMinutes,gateToParkingMinutes:cfg.gateToParkingMinutes,
+        early:hours.earlyEntryTime?{
+          time:time(hours.earlyEntryTime),eligible:cfg.eligibleEarly ?? benefitStay,
+          available:cfg.availableEarly ?? true,
+        }:undefined,
+        latestActivityEnd:latest,returnEndUnknown:unknown,morningProvisional:cfg.morningProvisional,
+        detour:detour?{stay:place(detour),fromOrigin:getRoute(config,'car',previous.id,detour.id),
+          roomAvailable:{date:d,time:time(detour.check_in_time),timeZone:zone}}:undefined,
+        earlyCheckout:checkout?{
+          at:cfg.checkoutTime?{date:d,time:time(cfg.checkoutTime),timeZone:zone}:undefined,
+          contractualLimit:{date:d,time:time(previous.check_out_time),timeZone:zone},
+          luggageConfirmed:!!cfg.luggageConfirmed,
+        }:undefined,
+      };
+      addOwner(d,parkJob);continue;
+    }
+    if(takeoff){
+      if(!previous)throw new Error('Hospedagem de origem do voo não resolvida em '+d);
+      const ap=airportPlace(takeoff.origin_code,takeoff.origin_airport);
+      addOwner(d,{
+        id:'airport-return-'+takeoff.id,sourceId:takeoff.id,kind:'airport-return',
+        stay:place(previous),airport:ap,takeoff:departureClock(takeoff),
+        checkOut:{date:previous.checkOutDate,time:time(previous.check_out_time),timeZone:zone},
+        luggagePlanConfirmed:config.luggagePlanConfirmed,
+        directRoute:getRoute(config,'car',previous.id,ap.id),
+        rental:car?{
+          id:car.id,place:rentalPlace(car,true),
+          deadline:{date:date(car.dropoff_date),time:time(car.dropoff_time),timeZone:zone},
+          toRental:getRoute(config,'car',previous.id,rentalPlace(car,true).id),
+          serviceMinutes:config.rentals?.[car.id]?.returnMinutes,
+          toTerminal:getRoute(config,'transfer',rentalPlace(car,true).id,ap.id),
+        }:undefined,
+      });continue;
+    }
+    if(current && !previous && current.checkInDate===d){
+      if(!landing)throw new Error('Definir o deslocamento de chegada à hospedagem em '+d);
+      const ap=airportPlace(landing.destination_code,landing.destination_airport);
+      const start=car?rentalPlace(car):ap;
+      addOwner(d,{
+        id:'arrival-'+current.id,sourceId:current.id,kind:'arrival',landing:arrivalClock(landing),
+        airport:ap,stay:place(current),
+        checkIn:{date:d,time:time(current.check_in_time),timeZone:zone},
+        airportProcessingMinutes:config.airportProcessingMinutes?.[landing.destination_code],
+        routeToStay:getRoute(config,'car',start.id,current.id),
+        rental:car?{
+          id:car.id,place:rentalPlace(car),
+          earliest:{date:date(car.pickup_date),time:time(car.pickup_time),timeZone:zone},
+          airportToRental:getRoute(config,'transfer',ap.id,rentalPlace(car).id),
+          serviceMinutes:config.rentals?.[car.id]?.pickupMinutes,
+        }:undefined,
+      });continue;
+    }
+    if(previous&&current&&previous.id!==current.id){
+      addOwner(d,{
+        id:'transfer-'+previous.id+'-'+current.id,sourceId:current.id,kind:'transfer',
+        from:place(previous),to:place(current),
+        departure:{date:d,time:config.transfers?.[current.id]?.departureTime || '',timeZone:zone},
+        checkOut:{date:previous.checkOutDate,time:time(previous.check_out_time),timeZone:zone},
+        checkIn:{date:current.checkInDate,time:time(current.check_in_time),timeZone:zone},
+        route:getRoute(config,'car',previous.id,current.id),
+      });continue;
+    }
+    if(current)addOwner(d,{
+      id:'free-'+d,sourceId:current.id,kind:'free',date:d,timeZone:zone,stay:place(current),
+      sleptPreviousNight:!!previous,
+    });
+  }
+  for(const pb of parks)if(!days.some(d=>d.id===pb.itinerary_day_id)){
+    throw new Error('Reserva de parque sem dia válido: '+pb.id);
+  }
+
+  const sourceCandidates=(j:Job):string[]=>{
+    const ids=[j.sourceId];
+    if(j.kind==='park')ids.push(j.origin.id,j.night.id,j.detour?.stay.id || '');
+    if(j.kind==='transfer')ids.push(j.from.id,j.to.id);
+    if(j.kind==='airport-return')ids.push(j.stay.id,j.rental?.id || '');
+    if(j.kind==='arrival')ids.push(j.stay.id,j.rental?.id || '');
+    return ids.filter(Boolean);
+  };
+  const infer=(e:ExistingItem):Binding|undefined=>{
+    const explicit=config.legacyBindings?.[e.item.id];
+    if(explicit)return explicit;
+    const source=e.item.sourceType, t=norm(e.item.title);
+    if(source==='manual'||config.manualIds?.includes(e.item.id))return undefined;
+    if(e.binding){
+      if(e.item.sourceId && aliases.has(e.item.sourceId) &&
+          (source==='flight' || e.binding.jobId.startsWith('flight-'))) {
+        return {jobId:aliases.get(e.item.sourceId)!,role:e.binding.role};
+      }
+      const j=jobs.find(j=>j.id===e.binding!.jobId);
+      if(!j)return e.binding; // Fonte antiga removida: o motor pode retirar seu automático.
+      if(j.kind==='park'&&j.returnEndUnknown&&['close','car','return','arrival','end'].includes(e.binding.role)) {
+        return {jobId:'obsolete-unconfirmed-return-'+j.id,role:e.binding.role};
+      }
+      if ((source==='accommodation'&&j.kind==='flight') ||
+          (source==='park'&&j.kind!=='park') ||
+          (e.item.sourceId&&!sourceCandidates(j).includes(e.item.sourceId)&&aliases.get(e.item.sourceId)!==j.id)) {
+        throw new Error('Vínculo persistido incompatível com a fonte: '+e.item.id);
+      }
+      return e.binding;
+    }
+    let j:Job|undefined, role:Role|undefined;
+    if(source==='flight'){
+      const id=aliases.get(e.item.sourceId || '');
+      j=jobs.find(j=>j.id===id);
+      if(t.includes('decolagem'))role='takeoff';
+      else if(t.includes('pouso')||t.startsWith('chegada em'))role='land';
+      else if(t.includes('sair de casa')||t.includes('saida de casa'))role='leave';
+      else if(t.includes('chegada ao aeroporto'))role='airport';
+      else if(t.includes('acordar'))role='wake';
+    }else if(source==='car_rental'){
+      const c=cars.find(c=>c.id===e.item.sourceId);
+      if(c){
+        if(t.includes('a partir')){j=jobs.find(j=>j.id==='rental-'+c.id);role='pickupAllowed';}
+        else if(t.includes('ate')&&t.includes('devolucao')){j=jobs.find(j=>j.id==='rental-'+c.id);role='dropoffDeadline';}
+        else{j=owner.get(e.date);role=t.includes('devolucao')?'dropoff':'pickup';}
+      }
+    }else if(['show','dining','fastpass'].includes(source || '')){
+      j=jobs.find(j=>j.kind==='activity'&&j.sourceId===e.item.sourceId);role='activity';
+    }else{
+      // Prioridade para reserva de parque identificada e jornada da data.
+      j=jobs.find(j=>j.id===aliases.get(e.item.sourceId || '')) ||
+        jobs.find(j=>j.kind==='park'&&j.sourceId===e.item.sourceId) || owner.get(e.date);
+      if(j){
+        if(t.includes('retirada de chaves')||t.includes('pre check in'))role='precheck';
+        else if(t.includes('check out'))role='checkout';
+        else if(t.includes('quarto disponivel')||t.includes('check in'))role='roomReady';
+        else if(t.includes('chegada ao carro'))role='car';
+        else if(t.includes('inicio do trajeto de retorno')||t.startsWith('retorno '))role='return';
+        else if(t.includes('chegada no estacionamento')||t.includes('chegada ao estacionamento'))role='parking';
+        else if(t.includes('catraca')||t.includes('chegada na entrada'))role='gate';
+        else if(t.includes('entrada antecipada')||t.includes('early entry'))role='early';
+        else if(t.includes('abertura'))role='open';
+        else if(t.includes('termino das atividades')||t.includes('fechamento'))role='close';
+        else if(t.includes('inicio do dia')||t.includes('acordar'))role=j.kind==='park'||j.kind==='flight'?'wake':'morning';
+        else if(t.includes('fim do dia'))role=j.kind==='park'?'arrival':'end';
+        else if(t.startsWith('chegada a acomodacao')||t.startsWith('chegada na acomodacao'))role='arrival';
+        else if(t.includes('transferencia')&&j.kind==='park'&&j.detour)role='hotelLeave';
+        else if(t.startsWith('deslocamento')||t.startsWith('saida')||t.startsWith('sair do'))role='leave';
+      }
+    }
+    if(!j||!role)throw new Error('Migração ambígua: conferir item '+e.item.id+' ('+e.item.title+').');
+    if(e.item.sourceId && !sourceCandidates(j).includes(e.item.sourceId) && aliases.get(e.item.sourceId)!==j.id &&
+       !/^split-drive-|^transit-|^transfer-|^acc-transport-/.test(e.item.sourceId)){
+      throw new Error('Fonte incompatível na migração de '+e.item.id);
+    }
+    if (j.kind==='park' && j.returnEndUnknown && ['close','car','return','arrival','end'].includes(role)) {
+      return {jobId:'obsolete-unconfirmed-return-'+j.id,role};
+    }
+    return {jobId:j.id,role};
+  };
+
+  const existing:ExistingItem[]=[];
+  const mismatch=new Set<string>();
+  for(const day of days){
+    const d=date(day.date), json=list(day.hourly_schedule || []);
+    const rel=raw.hourly.filter(h=>h.itinerary_day_id===day.id);
+    if(!sameItems(json,rel,true))mismatch.add(d);
+    const byId=new Map(json.map(i=>[i.id,i]));
+    const candidates=json.map(i=>({...i}));
+    for(const h of rel){
+      const row={id:h.id,time:h.time,title:h.title,location:h.location || undefined,category:h.category,
+        completed:h.completed,notes:h.notes || undefined,sourceType:h.source_type || undefined,
+        sourceId:h.source_id || undefined};
+      const jsonCopy=byId.get(row.id);
+      if(jsonCopy){
+        if(comparable(jsonCopy)!==comparable(row) && (row.sourceType==='manual'||!row.sourceType)){
+          throw new Error('Conflito entre cópias do item manual '+row.id);
+        }
+        continue;
+      }
+      candidates.push(row);
+    }
+    const added=new Set<string>();
+    for(const item of candidates){
+      if(!item.id || typeof item.title!=='string')throw new Error('Item sem ID/título no dia '+d);
+      const e:ExistingItem={date:d,timeZone:item.timeZone || zone,binding:item.ruleBinding,
+        item:{id:String(item.id),time:time(item.time),title:item.title,
+          location:item.location || undefined,category:item.category || 'other',completed:!!item.completed,
+          notes:item.notes || undefined,sourceType:item.sourceType || undefined,sourceId:item.sourceId || undefined}};
+      if(config.manualIds?.includes(item.id))e.item.sourceType='manual';
+      if(e.item.sourceType!=='manual')e.binding=infer(e);
+      if(!UUID.test(e.item.id)){
+        mismatch.add(d);
+        e.item.id=generateDeterministicUUID('legacy-hourly',trip.id+'|'+e.item.id);
+      }
+      if(!item.timeZone || (!item.ruleBinding&&e.binding))mismatch.add(d);
+      if(e.item.category===('airbnb' as string)){e.item.category='hotel';mismatch.add(d);}
+      if(added.has(e.item.id))continue;
+      added.add(e.item.id);existing.push(e);
+    }
+  }
+  for(const h of raw.hourly)if(!days.some(d=>d.id===h.itinerary_day_id)){
+    throw new Error('Linha hora a hora sem dia da mesma viagem: '+h.id);
+  }
+  const legacyOwnedIds=existing.filter(e=>e.binding&&e.item.sourceType!=='manual').map(e=>e.item.id);
+  const collapsed:ExistingItem[]=[];
+  const ownedGroups=new Map<string,ExistingItem>();
+  for(const e of existing){
+    if(!e.binding||e.item.sourceType==='manual'){collapsed.push(e);continue;}
+    const key=e.binding.jobId+'|'+e.binding.role;
+    const old=ownedGroups.get(key);
+    if(old){old.item.completed=!!old.item.completed||!!e.item.completed;mismatch.add(e.date);}
+    else{ownedGroups.set(key,e);collapsed.push(e);}
+  }
+  return {
+    tripId:trip.id,sourcesComplete:true,jobs,existing:collapsed,legacyOwnedIds,
+    storageMismatchDates:[...mismatch],dayTitles:Object.fromEntries(days.map(d=>[date(d.date),d.title || ''])),
+    policy:config.policy || {},
+  };
+}
+
+type Callbacks = {
+  apply:(plan:Plan,days:Row[],trip:Row,parks:Row[])=>void;
+  report:(issues:Issue[],tripId:string)=>void;
+};
+export class SupabaseItineraryRulesStore implements RulesStore {
+  private loaded?: {raw:RawRulesData;snapshot:Snapshot & {legacyOwnedIds:string[]}};
+  private verified?: RawRulesData;
+  private readonly callbacks: Callbacks;
+  constructor(callbacks:Callbacks){this.callbacks=callbacks}
+  private async all(table:string,tripId:string):Promise<Row[]>{
+    const output:Row[]=[];
+    for(let start=0;;start+=500){
+      const {data,error}=await supabase.from(table).select('*').eq('trip_id',tripId)
+        .order('id',{ascending:true}).range(start,start+499);
+      if(error)throw new Error(table+': '+error.message);
+      if(!Array.isArray(data))throw new Error('Leitura inválida de '+table);
+      output.push(...data);if(data.length<500)return output;
+    }
+  }
+  private async read(tripId:string):Promise<RawRulesData>{
+    const [t,accommodations,flights,cars,parks,days,hourly]=await Promise.all([
+      supabase.from('trips').select('*').eq('id',tripId).single(),
+      this.all('accommodations',tripId),this.all('flight_segments',tripId),
+      this.all('car_rentals',tripId),this.all('park_day_bookings',tripId),
+      this.all('itinerary_days',tripId),this.all('hourly_schedules',tripId),
+    ]);
+    if(t.error||!t.data)throw new Error(t.error?.message || 'Viagem ausente.');
+    return {trip:t.data,accommodations,flights,cars,parks,days,hourly};
+  }
+  async load(tripId:string):Promise<Snapshot>{
+    const raw=await this.read(tripId), snapshot=buildRulesSnapshot(raw);
+    this.loaded={raw,snapshot};return snapshot;
+  }
+  async persist(plan:Plan):Promise<void>{
+    const saved=this.loaded;
+    if(!saved||saved.raw.trip.id!==plan.tripId)throw new Error('Carregar antes de persistir.');
+    // Verificar concorrência antes de iniciar as requisições de escrita.
+    const current=await this.read(plan.tripId);
+    if(JSON.stringify(current)!==JSON.stringify(saved.raw))throw new Error('A viagem mudou; recarregar e tentar novamente.');
+    const dayMap=new Map(current.days.map(d=>[date(d.date),d]));
+    // Não criar um dia vazio no verificador, nem reutilizar day_number em várias inclusões.
+    let nextNumber=Math.max(0,...current.days.map(d=>Number(d.day_number)))+1;
+    for(const d of plan.changedDates.slice().sort()){
+      if(dayMap.has(d))continue;
+      if(d<date(current.trip.start_date)){
+        throw new Error('Há evento em '+d+' antes do início da viagem; ampliar o período preservando as datas antes de reconciliar.');
+      }
+      const expectedNumber=Math.floor((Date.parse(d+'T12:00:00Z')-
+        Date.parse(date(current.trip.start_date)+'T12:00:00Z'))/86400000)+1;
+      if(current.days.some(day=>day.day_number===expectedNumber))throw new Error('Número de dia ocupado para '+d);
+      const {data,error}=await supabase.from('itinerary_days').insert({
+        trip_id:plan.tripId,date:d,day_number:Math.max(nextNumber,expectedNumber),
+        title:plan.titles[d] || 'Continuação do roteiro',park:'Sem Parque',hourly_schedule:[],
+      }).select('*').single();
+      if(error||!data)throw new Error(error?.message || 'Não foi possível criar o dia '+d);
+      nextNumber=Number(data.day_number)+1;dayMap.set(d,data);
+    }
+    const desiredIds=new Set(plan.events.map(e=>e.item.id));
+    const owned=new Set(saved.snapshot.legacyOwnedIds);
+    // IDs relacionais legados também precisam ser comprovadamente automáticos antes da limpeza.
+    const legacyOwned=new Set(current.hourly.filter(h=>h.source_type&&h.source_type!=='manual')
+      .filter(h=>saved.snapshot.legacyOwnedIds.includes(h.id)).map(h=>h.id));
+    const rows=plan.events.filter(e=>plan.changedDates.includes(e.date)).map(e=>{
+      if(!UUID.test(e.item.id)||!HH.test(e.item.time))throw new Error('ID/horário inválido: '+e.item.id);
+      const day=dayMap.get(e.date);if(!day)throw new Error('Dia ausente: '+e.date);
+      return {id:e.item.id,trip_id:plan.tripId,itinerary_day_id:day.id,time:e.item.time,
+        title:e.item.title,location:e.item.location || null,category:e.item.category,
+        completed:!!e.item.completed,notes:e.item.notes || null,
+        source_type:e.item.sourceType || null,source_id:e.item.sourceId || null};
+    });
+    // Upsert ANTES de remover qualquer registro antigo.
+    for(let i=0;i<rows.length;i+=200){
+      const batch=rows.slice(i,i+200);
+      const {data,error}=await supabase.from('hourly_schedules').upsert(batch,{onConflict:'id'}).select('id');
+      if(error||data?.length!==batch.length)throw new Error(error?.message || 'Upsert incompleto.');
+    }
+    for(const d of plan.changedDates){
+      const day=dayMap.get(d)!;
+      const payload:Row={hourly_schedule:plan.events.filter(e=>e.date===d).map(e=>({
+        ...e.item,timeZone:e.timeZone,ruleBinding:e.binding,
+      }))};
+      if(plan.titles[d]!==undefined)payload.title=plan.titles[d];
+      const {data,error}=await supabase.from('itinerary_days').update(payload)
+        .eq('trip_id',plan.tripId).eq('id',day.id).select('id');
+      if(error||data?.length!==1)throw new Error(error?.message || 'JSON do dia não foi atualizado: '+d);
+    }
+    const stale=current.hourly.filter(h=>!desiredIds.has(h.id)&&(owned.has(h.id)||legacyOwned.has(h.id))).map(h=>h.id);
+    for(let i=0;i<stale.length;i+=200){
+      const batch=stale.slice(i,i+200);
+      const {data,error}=await supabase.from('hourly_schedules').delete()
+        .eq('trip_id',plan.tripId).in('id',batch).select('id');
+      if(error||data?.length!==batch.length)throw new Error(error?.message || 'Limpeza incompleta de obsoletos.');
+    }
+    // Retirar somente um dia externo ao período que ficou sem eventos após
+    // remover automáticos comprovados. Um dia com atividade/fonte/manual é preservado.
+    for(const oldDay of current.days){
+      const d=date(oldDay.date), oldItems=list(oldDay.hourly_schedule || []);
+      const oldRows=current.hourly.filter(h=>h.itinerary_day_id===oldDay.id);
+      if(d>=date(current.trip.start_date) || !plan.changedDates.includes(d) ||
+         plan.events.some(e=>e.date===d) || !oldItems.length ||
+         current.parks.some(p=>p.itinerary_day_id===oldDay.id) ||
+         oldItems.some(i=>!i.sourceType||i.sourceType==='manual') ||
+         oldRows.some(h=>!owned.has(h.id)))continue;
+      for(const table of ['hourly_schedules','park_day_bookings','park_fast_passes',
+          'park_dining_reservations','park_shows_reservations','park_photo_packages']){
+        const {data,error}=await supabase.from(table).select('id')
+          .eq('trip_id',plan.tripId).eq('itinerary_day_id',oldDay.id).limit(1);
+        if(error)throw new Error('Falha ao conferir dependências do dia: '+error.message);
+        if(data?.length)throw new Error('Preservado dia externo '+d+' porque possui dados vinculados em '+table);
+      }
+      const {data,error}=await supabase.from('itinerary_days').delete()
+        .eq('trip_id',plan.tripId).eq('id',oldDay.id).select('id');
+      if(error||data?.length!==1)throw new Error(error?.message || 'Dia obsoleto não retirado: '+d);
+    }
+    // Requisições separadas: uma falha é parcial e será exibida; isto NÃO é uma transação ACID.
+  }
+  async verify(plan:Plan):Promise<void>{
+    const raw=await this.read(plan.tripId);
+    const dates=new Set([...raw.days.map(d=>date(d.date)),...plan.events.map(e=>e.date)]);
+    for(const d of dates){
+      const day=raw.days.find(day=>date(day.date)===d);
+      if(!day)throw new Error('Verificação: dia inexistente '+d);
+      const expected=plan.events.filter(e=>e.date===d).map(e=>e.item);
+      const json=list(day.hourly_schedule || []);
+      const relational=raw.hourly.filter(h=>h.itinerary_day_id===day.id);
+      if(!sameItems(expected,json)||!sameItems(expected,relational,true)){
+        throw new Error('Verificação campo a campo falhou em '+d);
+      }
+      for(const e of plan.events.filter(e=>e.date===d)){
+        const stored=json.find(i=>i.id===e.item.id);
+        if(stored?.timeZone!==e.timeZone||
+          JSON.stringify(stored?.ruleBinding || null)!==JSON.stringify(e.binding || null)){
+          throw new Error('Metadados não persistidos: '+e.item.id);
+        }
+      }
+      if(plan.titles[d]!==undefined&&day.title!==plan.titles[d])throw new Error('Título não persistido: '+d);
+    }
+    this.verified=raw;
+  }
+  apply(plan:Plan):void{
+    if(!this.verified||this.verified.trip.id!==plan.tripId)throw new Error('Aplicação sem verificação.');
+    this.callbacks.apply(plan,this.verified.days,this.verified.trip,this.verified.parks);
+  }
+  report(issues:Issue[]):void{
+    const labels=(j:Job):string=>{
+      if(j.kind==='park')return j.date+' — '+j.name;
+      if(j.kind==='flight')return j.departure.date+' — '+j.origin.name+' → '+j.destination.name;
+      if(j.kind==='arrival')return j.checkIn.date+' — chegada a '+j.stay.name;
+      if(j.kind==='transfer')return j.departure.date+' — troca para '+j.to.name;
+      if(j.kind==='airport-return')return j.takeoff.date+' — ida ao aeroporto';
+      if(j.kind==='free')return j.date+' — hospedagem';
+      if(j.kind==='activity')return j.at.date+' — '+j.title;
+      return j.earliestPickup.date+' — locadora';
+    };
+    const enriched=issues.map(i=>{
+      const job=this.loaded?.snapshot.jobs.find(j=>j.id===i.jobId);
+      return job?{...i,message:labels(job)+': '+i.message}:i;
+    });
+    this.callbacks.report(enriched,this.loaded?.raw.trip.id || '');
+  }
+}
+
+```
+
+
+## 4. Criar src/hooks/useTripRulesModal.ts
+
+O hook confere ao abrir e serializa o salvamento. O callback precisa aguardar a fonte e retornar true ou {success:true}; erro/falso é propagado. Não envolver um callback já coordenado em outro onModalSave.
+
+```typescript
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { usePlanner } from '../context/PlannerContext';
+import type { Plan } from '../utils/itineraryRules';
+
+export function useTripRulesModal(isOpen: boolean, autoOpen = true) {
+  const { activeTripId, onModalOpen, onModalSave, evaluateAndCorrectAllItems } = usePlanner();
+  const api=useRef({activeTripId,onModalOpen,onModalSave,evaluateAndCorrectAllItems});
+  api.current={activeTripId,onModalOpen,onModalSave,evaluateAndCorrectAllItems};
+  const [checking,setChecking]=useState(false);
+  const [saving,setSaving]=useState(false);
+  const [error,setError]=useState<string|null>(null);
+  const [sourceSaved,setSourceSaved]=useState(false);
+  const savedRef=useRef(false);
+  const lock=useRef(false);
+  const opened=useRef<string|null>(null);
+  const generation=useRef(0);
+  useEffect(()=>{
+    if(!isOpen){
+      opened.current=null;savedRef.current=false;setSourceSaved(false);setError(null);
+      return;
+    }
+    const id=activeTripId;
+    if(!autoOpen||!id||opened.current===id)return;
+    opened.current=id;
+    const token=++generation.current;
+    setChecking(true);setError(null);
+    void api.current.onModalOpen(id).catch(e=>{
+      if(token===generation.current)setError(e instanceof Error?e.message:String(e));
+    }).finally(()=>{if(token===generation.current)setChecking(false)});
+    return ()=>{generation.current++};
+  },[isOpen,activeTripId,autoOpen]);
+
+  const save=useCallback(async<T,>(source:()=>Promise<T>):Promise<{result:T;plan:Plan}>=>{
+    if(lock.current)throw new Error('Já há um salvamento em andamento.');
+    if(savedRef.current)throw new Error('O cadastro já foi salvo. Repita apenas a conferência do roteiro.');
+    const {activeTripId:id,onModalSave}=api.current;
+    if(!id)throw new Error('Selecione a viagem.');
+    lock.current=true;setSaving(true);setError(null);
+    let result:T;
+    let committed=false;
+    try{
+      const plan=await onModalSave(id,async()=>{
+        result=await source();
+        if(!(result===true || (result && typeof result==='object' &&
+            'success' in result && (result as {success?:boolean}).success===true))){
+          throw new Error((result as {error?:string})?.error || 'Não foi possível salvar o cadastro.');
+        }
+        committed=true;
+      });
+      return {result:result!,plan};
+    }catch(e){
+      savedRef.current=committed;setSourceSaved(committed);
+      setError(e instanceof Error?e.message:String(e));
+      throw e;
+    }finally{lock.current=false;setSaving(false)}
+  },[]);
+  const retry=useCallback(async()=>{
+    const {activeTripId:id,evaluateAndCorrectAllItems}=api.current;
+    if(!id)throw new Error('Selecione a viagem.');
+    if(lock.current)throw new Error('Aguarde a operação atual.');
+    lock.current=true;setChecking(true);setError(null);
+    try{return await evaluateAndCorrectAllItems(id)}
+    catch(e){setError(e instanceof Error?e.message:String(e));throw e}
+    finally{lock.current=false;setChecking(false)}
+  },[]);
+  return {save,retry,checking,saving,error,sourceSaved};
+}
+
+```
+
+
+## 5. Criar src/components/ItineraryLogisticsSettings.tsx
+
+Adicionar <ItineraryLogisticsSettings /> ao conteúdo do modal de configurações, com importação correspondente. É um painel de campos, não deve criar um form aninhado. Os botões usam type=button. Os ajustes têm salvamento próprio. Não inserir valores presumidos para obter aprovação.
+
+```tsx
+import React, { useEffect, useMemo, useState } from 'react';
+import { usePlanner } from '../context/PlannerContext';
+import { supabase } from '../services/supabaseClient';
+import { routeKey } from '../services/itineraryRulesAdapter';
+import type { LogisticsConfig } from '../services/itineraryRulesAdapter';
+import { useTripRulesModal } from '../hooks/useTripRulesModal';
+
+export function ItineraryLogisticsSettings() {
+  const {activeTripId,accommodations,carRentals,flights,itineraryDays,rulesIssues}=usePlanner();
+  const [cfg,setCfg]=useState<LogisticsConfig>({});
+  const [message,setMessage]=useState('');
+  const [from,setFrom]=useState(''),[to,setTo]=useState('');
+  const [mode,setMode]=useState('car'),[minutes,setMinutes]=useState('');
+  const [source,setSource]=useState('');
+  const rules=useTripRulesModal(true,false);
+  const airports=useMemo(()=>[...new Set(flights.flatMap(f=>[f.originCode,f.destinationCode]).filter(Boolean))],[flights]);
+  const bookings=itineraryDays.flatMap(d=>d.parkBooking?[d.parkBooking]:[]);
+  const nodes=[
+    {id:'home',name:'Casa'},
+    ...accommodations.map(a=>({id:a.id,name:a.name})),
+    ...airports.map(a=>({id:'airport:'+a,name:'Aeroporto '+a})),
+    ...carRentals.flatMap(c=>[
+      {id:'rental:'+c.id+':pickup',name:'Retirada — '+c.company+' ('+c.pickupLocation+')'},
+      {id:'rental:'+c.id+':return',name:'Devolução — '+c.company+' ('+c.dropoffLocation+')'},
+    ]),
+    ...bookings.map(p=>({id:'park:'+p.id,name:p.parkName+' — '+p.date})),
+  ];
+  useEffect(()=>{
+    let active=true;
+    if(!activeTripId)return;
+    void supabase.from('trips').select('itinerary_rules_config').eq('id',activeTripId).single()
+      .then(({data,error})=>{
+        if(!active)return;
+        if(error)setMessage(error.message);
+        else setCfg(data?.itinerary_rules_config || {});
+      });
+    return()=>{active=false};
+  },[activeTripId]);
+  const number=(text:string):number|undefined=>{
+    if(text==='')return undefined;
+    const n=Number(text);
+    return Number.isInteger(n)&&n>=0?n:undefined;
+  };
+  const addRoute=()=>{
+    try{
+      if(!from||!to||minutes===''||!source.trim())throw new Error('Preencha origem, destino, minutos e fonte da estimativa.');
+      const value=number(minutes);
+      if(value===undefined)throw new Error('Informe minutos inteiros, a partir de zero.');
+      setCfg(c=>({...c,routes:{...c.routes,[routeKey(mode,from,to)]:{
+        minutes:value,description:source.trim(),estimated:true,
+      }}}));setMessage('Trecho incluído nos ajustes. Salve para gravar.');
+    }catch(e){setMessage(String(e))}
+  };
+  const save=async()=>{
+    if(!activeTripId)return;
+    try{
+      for(const end of Object.values(cfg.activityEnds || {})){
+        if(!end.date||!end.time||!cfg.destinationTimeZone)throw new Error('Preencha data, término e fuso do destino ou remova esse ajuste.');
+      }
+      const {plan}=await rules.save(async()=>{
+        const {data,error}=await supabase.from('trips')
+          .update({itinerary_rules_config:cfg}).eq('id',activeTripId).select('id');
+        if(error||data?.length!==1)throw new Error(error?.message || 'Ajustes não gravados.');
+        return {success:true};
+      });
+      setMessage(plan.complete?'Ajustes salvos e roteiro conferido.':'Ajustes salvos. Confira as pendências abaixo.');
+    }catch(e){setMessage(e instanceof Error?e.message:String(e))}
+  };
+  const input=(label:string,value:number|undefined,onChange:(v:number|undefined)=>void)=>(
+    <label className="grid gap-1 text-sm">{label}
+      <input type="number" min="0" step="1" value={value ?? ''}
+        className="rounded border p-2" onChange={e=>onChange(number(e.target.value))}/>
+    </label>
+  );
+  return <section className="space-y-4 rounded border p-4">
+    <h3 className="font-semibold">Ajustes de logística do roteiro</h3>
+    <p className="text-sm">Campos vazios continuam pendentes. Zero significa que a etapa não exige tempo.</p>
+    <label className="grid gap-1 text-sm">Endereço de saída de casa
+      <input className="rounded border p-2" value={cfg.home?.address || ''} onChange={e=>setCfg(c=>({
+        ...c,home:e.target.value?{id:'home',name:'Casa',address:e.target.value}:undefined,
+      }))}/>
+    </label>
+    <label className="grid gap-1 text-sm">Fuso do destino
+      <input className="rounded border p-2" placeholder="America/New_York"
+        value={cfg.destinationTimeZone || ''} onChange={e=>setCfg(c=>({...c,destinationTimeZone:e.target.value}))}/>
+    </label>
+    {input('Unir checkout e partida quando o intervalo for de até (min)',cfg.policy?.nearCheckoutMinutes,
+      v=>setCfg(c=>({...c,policy:{...c.policy,nearCheckoutMinutes:v}})))}
+    {airports.map(a=><div key={a} className="space-y-2 rounded border p-2">
+      {input('Desembarque, imigração e bagagens em '+a+' (min)',cfg.airportProcessingMinutes?.[a],
+        v=>setCfg(c=>({...c,airportProcessingMinutes:{...c.airportProcessingMinutes,[a]:v}})))}
+      <label className="grid gap-1 text-sm">Fuso do aeroporto {a}
+        <input className="rounded border p-2" value={cfg.airportTimeZones?.[a] || ''}
+          onChange={e=>setCfg(c=>({...c,airportTimeZones:{...c.airportTimeZones,[a]:e.target.value}}))}/>
+      </label>
+    </div>)}
+    {carRentals.map(r=><div key={r.id} className="space-y-2 rounded border p-2">
+      {input('Procedimentos de retirada — '+r.company,cfg.rentals?.[r.id]?.pickupMinutes,
+        v=>setCfg(c=>({...c,rentals:{...c.rentals,[r.id]:{...c.rentals?.[r.id],pickupMinutes:v}}})))}
+      {input('Procedimentos de devolução — '+r.company,cfg.rentals?.[r.id]?.returnMinutes,
+        v=>setCfg(c=>({...c,rentals:{...c.rentals,[r.id]:{...c.rentals?.[r.id],returnMinutes:v}}})))}
+    </div>)}
+    {accommodations.map(a=><label key={a.id} className="grid gap-1 text-sm">
+      Partida da hospedagem anterior para chegar a {a.name}, quando houver troca
+      <input type="time" className="rounded border p-2" value={cfg.transfers?.[a.id]?.departureTime || ''}
+        onChange={e=>setCfg(c=>({...c,transfers:{...c.transfers,[a.id]:{departureTime:e.target.value}}}))}/>
+    </label>)}
+    <div className="grid gap-2 rounded border p-3">
+      <h4 className="font-semibold">Tempos de deslocamento</h4>
+      <select value={from} onChange={e=>setFrom(e.target.value)} className="rounded border p-2">
+        <option value="">Origem</option>{nodes.map(n=><option key={n.id} value={n.id}>{n.name}</option>)}
+      </select>
+      <select value={to} onChange={e=>setTo(e.target.value)} className="rounded border p-2">
+        <option value="">Destino</option>{nodes.map(n=><option key={n.id} value={n.id}>{n.name}</option>)}
+      </select>
+      <select value={mode} onChange={e=>setMode(e.target.value)} className="rounded border p-2">
+        <option value="car">Carro</option><option value="transfer">Transfer até a locadora/terminal</option>
+        <option value="walk">Caminhada</option><option value="boat">Barco</option><option value="bus">Ônibus</option>
+      </select>
+      <input type="number" min="0" step="1" placeholder="Minutos" value={minutes}
+        onChange={e=>setMinutes(e.target.value)} className="rounded border p-2"/>
+      <input placeholder="Fonte da estimativa" value={source} onChange={e=>setSource(e.target.value)}
+        className="rounded border p-2"/>
+      <button type="button" onClick={addRoute} className="rounded border p-2">Adicionar ou atualizar trecho</button>
+      {Object.entries(cfg.routes || {}).map(([key,r])=><div key={key} className="text-sm">
+        {key.split('|').slice(1).map(id=>nodes.find(n=>n.id===id)?.name || id).join(' → ')}:
+        {' '}{r.minutes ?? 'pendente'} min — {r.description}
+        <button type="button" className="ml-2 underline" onClick={()=>setCfg(c=>{
+          const routes={...c.routes};delete routes[key];return {...c,routes};
+        })}>Remover ajuste</button>
+      </div>)}
+    </div>
+    <label className="flex gap-2 text-sm"><input type="checkbox" checked={!!cfg.luggagePlanConfirmed}
+      onChange={e=>setCfg(c=>({...c,luggagePlanConfirmed:e.target.checked}))}/>
+      Bagagens e espera após o checkout da volta já combinadas</label>
+    {bookings.map(p=><div key={p.id} className="space-y-2 rounded border p-2">
+      <p className="font-semibold">{p.parkName} — {p.date}</p>
+      <label className="grid gap-1 text-sm">Transporte usado para este parque
+        <select className="rounded border p-2" value={cfg.parks?.[p.id]?.mode || ''}
+          onChange={e=>setCfg(c=>({...c,parks:{...c.parks,[p.id]:{...c.parks?.[p.id],mode:(e.target.value || undefined) as 'car'|'walk'|'boat'|'bus'|undefined}}}))}>
+          <option value="">Usar a locação cadastrada</option><option value="car">Carro</option>
+          <option value="walk">Caminhada</option><option value="boat">Barco</option><option value="bus">Ônibus</option>
+        </select>
+      </label>
+      <label className="grid gap-1 text-sm">Hotel para retirar chaves antes do parque, quando necessário
+        <select className="rounded border p-2" value={cfg.parks?.[p.id]?.detourStayId || ''}
+          onChange={e=>setCfg(c=>({...c,parks:{...c.parks,[p.id]:{...c.parks?.[p.id],detourStayId:e.target.value || undefined}}}))}>
+          <option value="">Usar a hospedagem de chegada quando houver troca</option>
+          {accommodations.map(a=><option key={a.id} value={a.id}>{a.name}</option>)}
+        </select>
+      </label>
+      <label className="grid gap-1 text-sm">Direito à entrada antecipada nesta data
+        <select className="rounded border p-2" value={cfg.parks?.[p.id]?.eligibleEarly===undefined?'':String(cfg.parks[p.id].eligibleEarly)}
+          onChange={e=>setCfg(c=>({...c,parks:{...c.parks,[p.id]:{...c.parks?.[p.id],eligibleEarly:e.target.value===''?undefined:e.target.value==='true'}}}))}>
+          <option value="">Usar os benefícios cadastrados</option><option value="true">Confirmado</option><option value="false">Sem direito</option>
+        </select>
+      </label>
+      <label className="flex gap-2 text-sm"><input type="checkbox" checked={!!cfg.parks?.[p.id]?.luggageConfirmed}
+        onChange={e=>setCfg(c=>({...c,parks:{...c.parks,[p.id]:{...c.parks?.[p.id],luggageConfirmed:e.target.checked}}}))}/>
+        Guarda-volumes combinado para o checkout antes do parque</label>
+      <label className="grid gap-1 text-sm">Horário de checkout antecipado, se necessário
+        <input type="time" className="rounded border p-2" value={cfg.parks?.[p.id]?.checkoutTime || ''}
+          onChange={e=>setCfg(c=>({...c,parks:{...c.parks,[p.id]:{...c.parks?.[p.id],checkoutTime:e.target.value || undefined}}}))}/>
+      </label>
+      {(p.showsAndParades || []).map(s=><div key={s.id} className="grid gap-1 text-sm">
+        Término confirmado de {s.showName}
+        <input type="date" className="rounded border p-2" value={cfg.activityEnds?.[s.id]?.date || ''}
+          onChange={e=>setCfg(c=>({...c,activityEnds:{...c.activityEnds,[s.id]:{
+            date:e.target.value,time:c.activityEnds?.[s.id]?.time || '',timeZone:cfg.destinationTimeZone || '',
+          }}}))}/>
+        <input type="time" className="rounded border p-2" value={cfg.activityEnds?.[s.id]?.time || ''}
+          onChange={e=>setCfg(c=>({...c,activityEnds:{...c.activityEnds,[s.id]:{
+            date:c.activityEnds?.[s.id]?.date || '',time:e.target.value,timeZone:cfg.destinationTimeZone || '',
+          }}}))}/>
+        <button type="button" className="text-left underline" onClick={()=>setCfg(c=>{
+          const activityEnds={...c.activityEnds};delete activityEnds[s.id];return {...c,activityEnds};
+        })}>Término ainda não confirmado</button>
+      </div>)}
+    </div>)}
+    <button type="button" onClick={()=>void save()} disabled={rules.saving || rules.sourceSaved}
+      className="rounded bg-slate-800 p-2 text-white">Salvar ajustes e conferir roteiro</button>
+    {rules.sourceSaved&&<button type="button" onClick={()=>void rules.retry().catch(e=>setMessage(String(e)))}
+      className="ml-2 rounded border p-2">Repetir só a conferência</button>}
+    {(message||rules.error)&&<p role="status" className="text-sm">{message||rules.error}</p>}
+    {!!rulesIssues.length&&<ul className="list-disc space-y-1 pl-5 text-sm">
+      {rulesIssues.map((i,n)=><li key={i.jobId+'-'+n}>{i.message}</li>)}
+    </ul>}
+  </section>;
+}
+
+```
+
+
+## 6. Substituir apenas a função mapHourlyScheduleToDb em src/services/supabaseService.ts
+
+A função atual está perto da linha 621. Os UUIDs de novos manuais devem ser gerados uma vez na criação do item. O mapper não inventa UUID nem horário.
+
+```typescript
+export function mapHourlyScheduleToDb(
+  item: HourlyScheduleItem,
+  itineraryDayId: string,
+  tripId: string,
+  index: number = 0
+): Record<string, any> {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.id || '')) {
+    throw new Error('O item precisa de UUID estável antes de gravar: ' + item.id);
+  }
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(item.time || '')) {
+    throw new Error('Horário inválido: ' + item.time);
+  }
+  const category=item.category==='airbnb'?'hotel':item.category || 'other';
+  if (!(VALID_HOURLY_CATEGORIES as readonly string[]).includes(category)) {
+    throw new Error('Categoria inválida: ' + category);
+  }
+  return {
+    id:item.id,itinerary_day_id:itineraryDayId,trip_id:tripId,time:item.time,
+    title:item.title,location:item.location || null,category,completed:!!item.completed,
+    notes:item.notes || null,source_type:item.sourceType || null,source_id:item.sourceId || null,
+  };
+}
+```
+
+
+## 7. Substituir o método saveHourlyScheduleItem no objeto SupabaseService
+
+O método atual está perto da linha 5211. Usa a RPC da seção 1 para salvar o item e o JSON juntos, preservando fuso/vínculo. A conferência final continua sendo feita pelo coordenador. Somente esse salvamento unitário passa a ser atômico; o motor inteiro continua usando requisições separadas.
+
+```typescript
+async saveHourlyScheduleItem(
+  tripId: string, itineraryDayId: string, item: HourlyScheduleItem
+): Promise<{success:boolean;error?:string;rowId?:string}> {
+  try {
+    const row=mapHourlyScheduleToDb(item,itineraryDayId,tripId);
+    const normalized:HourlyScheduleItem={...item,category:row.category};
+    const {data,error}=await supabase.rpc('save_itinerary_hourly_item',{
+      p_trip_id:tripId,p_day_id:itineraryDayId,p_item:normalized,
+    });
+    if(error)throw new Error(error.message);
+    if(!data || data.success!==true || data.rowId!==item.id){
+      throw new Error('O banco não confirmou a gravação do item.');
+    }
+    return {success:true,rowId:data.rowId};
+  } catch(error:any) {
+    return {success:false,error:error?.message || 'Falha ao gravar horário'};
+  }
+},
+```
+
+
+## 8. Substituir o método saveItineraryDay no objeto SupabaseService
+
+O método atual começa perto da linha 4604. A sincronização de fontes secundárias existente é preservada; a regeneração do hora a hora sai deste método. Não voltar a excluir a tabela de horários antes de inserir. Cadastramento/importação de itens manuais deve usar o caminho explícito de itens; um array de horários antigos não pode sobrescrever a agenda calculada ao salvar um parque.
+
+```typescript
+  async saveItineraryDay(
+    tripId: string,
+    day: Omit<ItineraryDay, 'date'> & {date?:string},
+    fallbackTrip?: Partial<Trip>
+  ): Promise<{success:boolean;error?:string;resolvedDayId?:string;hourlyCount?:number;debugLogs?:string[]}> {
+    const debugLogs:string[]=[];
+    const addLog=(message:string)=>{debugLogs.push(message)};
+    try {
+      if(!tripId||!day)throw new Error('Viagem/dia ausente.');
+      const {data:trip,error:tripError}=await supabase.from('trips').select('id,start_date')
+        .eq('id',tripId).single();
+      if(tripError||!trip)throw new Error(tripError?.message || 'Cadastre a viagem antes do roteiro.');
+      let existingRow:any=null;
+      const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if(uuid.test(day.id || '')){
+        const response=await supabase.from('itinerary_days').select('*')
+          .eq('trip_id',tripId).eq('id',day.id).maybeSingle();
+        if(response.error)throw new Error(response.error.message);
+        existingRow=response.data;
+      }
+      if(!existingRow){
+        const response=await supabase.from('itinerary_days').select('*')
+          .eq('trip_id',tripId).eq('day_number',day.dayNumber).maybeSingle();
+        if(response.error)throw new Error(response.error.message);
+        existingRow=response.data;
+      }
+      const resolvedDayId=existingRow?.id || (uuid.test(day.id || '')?day.id:generateUUID());
+      const base=trip.start_date;
+      const dayDate=day.date || existingRow?.date || new Date(
+        Date.parse(base+'T12:00:00Z')+(Number(day.dayNumber)-1)*86400000
+      ).toISOString().slice(0,10);
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(dayDate))throw new Error('Data do dia inválida.');
+      const fullHourlyItems:HourlyScheduleItem[]=Array.isArray(existingRow?.hourly_schedule)
+        ?existingRow.hourly_schedule:[];
+      const dayDb=mapItineraryDayToDb({...day,id:resolvedDayId,date:dayDate},tripId);
+      // Este salvamento grava a fonte. O adaptador é o único dono da regeneração do hora a hora.
+      // Manuais novos/editados usam saveHourlyScheduleItem; não entram como uma lista automática aqui.
+      delete dayDb.hourly_schedule;
+      const {data:written,error:dayError}=await supabase.from('itinerary_days')
+        .upsert(dayDb,{onConflict:'id'}).select('id');
+      if(dayError||written?.length!==1)throw new Error(dayError?.message || 'Dia não gravado.');
+      // 5. Synchronize park_day_bookings table and secondary event tables for this day
+      try {
+        if (day.parkBooking && day.park && day.park !== 'Sem Parque') {
+          const pbDb = mapParkBookingToDb(day.parkBooking, resolvedDayId, tripId);
+
+          // Localizar ID existente de park_day_bookings para esta viagem e dia do roteiro
+          const { data: existingPbRow, error: fetchPbErr } = await supabase
+            .from('park_day_bookings')
+            .select('id')
+            .eq('trip_id', tripId)
+            .eq('itinerary_day_id', resolvedDayId)
+            .maybeSingle();
+
+          if (fetchPbErr) {
+            addLog(`Erro ao consultar agendamento existente em park_day_bookings: ${fetchPbErr.message}`);
+            return {
+              success: false,
+              error: `Falha ao consultar agendamento existente do parque no Supabase: ${fetchPbErr.message}`,
+              resolvedDayId,
+              debugLogs,
+            };
+          }
+
+          const bookingId = existingPbRow?.id || pbDb.id || ensureValidUUID(day.parkBooking.id, 'park-booking', resolvedDayId);
+          pbDb.id = bookingId;
+
+          const { error: pbErr } = await supabase
+            .from('park_day_bookings')
+            .upsert(pbDb, { onConflict: 'id' });
+
+          if (pbErr) {
+            addLog(`Erro ao salvar park_day_bookings: ${pbErr.message}`);
+            return {
+              success: false,
+              error: `Falha ao salvar agendamento do parque: ${pbErr.message}`,
+              resolvedDayId,
+              debugLogs,
+            };
+          }
+          addLog(`Registro de reserva de parque salvo na tabela park_day_bookings (ID: ${bookingId}).`);
+
+          // 5.1 Sincronização de tabelas secundárias para Fast Passes, Refeições e Shows
+          try {
+            // Fast Passes
+            const fastPasses = day.parkBooking.fastPasses || [];
+            const fpRows = fastPasses.map((fp) => ({
+              id: ensureValidUUID(fp.id, 'fastpass', `${bookingId}-${fp.attractionName}-${fp.timeWindow}`),
+              trip_id: tripId,
+              park_day_booking_id: bookingId,
+              itinerary_day_id: resolvedDayId,
+              attraction_name: fp.attractionName || 'Atração',
+              time_window: fp.timeWindow || '',
+              pass_type: fp.type || 'Lightning Lane Multi Pass',
+              tier: fp.tier || null,
+              status: fp.status || 'Agendado',
+              party_members: fp.partyMembers || null,
+              notes: fp.notes || null,
+              updated_at: new Date().toISOString(),
+            }));
+            await supabase.from('park_fast_passes').delete().eq('itinerary_day_id', resolvedDayId);
+            if (fpRows.length > 0) {
+              await supabase.from('park_fast_passes').upsert(fpRows, { onConflict: 'id' });
+              addLog(`${fpRows.length} FastPasses sincronizados na tabela secundária park_fast_passes.`);
+            }
+
+            // Refeições / Almoço / Jantar
+            const diningList = day.parkBooking.diningReservations || [];
+            const dinRows = diningList.map((dr) => ({
+              id: ensureValidUUID(dr.id, 'dining', `${bookingId}-${dr.restaurantName}-${dr.time}`),
+              trip_id: tripId,
+              park_day_booking_id: bookingId,
+              itinerary_day_id: resolvedDayId,
+              restaurant_name: dr.restaurantName || 'Restaurante',
+              meal_type: dr.mealType || 'Almoço (Lunch)',
+              reservation_time: dr.time || '12:30',
+              confirmation_code: dr.confirmationCode || null,
+              party_size: dr.partySize || null,
+              table_service: Boolean(dr.tableService),
+              status: dr.status || 'Confirmada',
+              cancellation_policy_notes: dr.cancellationPolicyNotes || null,
+              notes: dr.notes || null,
+              updated_at: new Date().toISOString(),
+            }));
+            await supabase.from('park_dining_reservations').delete().eq('itinerary_day_id', resolvedDayId);
+            if (dinRows.length > 0) {
+              await supabase.from('park_dining_reservations').upsert(dinRows, { onConflict: 'id' });
+              addLog(`${dinRows.length} refeições sincronizadas na tabela secundária park_dining_reservations.`);
+            }
+
+            // Shows e Paradas (persistidos centralizadamente em park_shows_reservations e hourly_schedules principal)
+            const showsList = day.parkBooking.showsAndParades || [];
+            const showRows = showsList.map((show) => ({
+              id: ensureValidUUID(show.id, 'show', `${bookingId}-${show.showName}-${show.time}`),
+              trip_id: tripId,
+              park_day_booking_id: bookingId,
+              itinerary_day_id: resolvedDayId,
+              show_name: show.showName || 'Show',
+              show_time: show.time || '20:00',
+              location: show.location || null,
+              reserved_area: show.reservedArea || null,
+              status: show.status || 'Agendado',
+              notes: show.notes || null,
+              updated_at: new Date().toISOString(),
+            }));
+            await supabase.from('park_shows_reservations').delete().eq('itinerary_day_id', resolvedDayId);
+            if (showRows.length > 0) {
+              await supabase.from('park_shows_reservations').upsert(showRows, { onConflict: 'id' });
+              addLog(`${showRows.length} shows sincronizados na tabela secundária park_shows_reservations.`);
+            }
+            // Photo Package
+            const pkg = day.parkBooking.hasPhotoPackage && day.parkBooking.photoPackage ? day.parkBooking.photoPackage : null;
+            if (pkg && (pkg.costUSD || pkg.costBRL || pkg.name)) {
+              const sideTableId = generateDeterministicUUID('photo-pkg-row', `${tripId}-${resolvedDayId}-${pkg.id}`);
+              const photoPkgRow = {
+                id: sideTableId,
+                trip_id: tripId,
+                park_day_booking_id: bookingId,
+                itinerary_day_id: resolvedDayId,
+                name: pkg.name || 'Pacote de Fotos',
+                package_type: pkg.type || 'trip_30days',
+                validity_description: pkg.validityDescription || null,
+                complex: pkg.complex || 'Disney',
+                included_parks: pkg.includedParks || [],
+                confirmation_code: pkg.confirmationCode || null,
+                account_email_or_user: pkg.accountEmailOrUser || null,
+                cost_usd: pkg.costUSD !== undefined ? Number(pkg.costUSD) : null,
+                cost_brl: pkg.costBRL !== undefined ? Number(pkg.costBRL) : null,
+                status: pkg.status || 'Confirmado',
+                payment_status: pkg.paymentStatus || 'Não informado',
+                payer_id: pkg.payerId || 'all',
+                traveler_ids: pkg.travelerIds || ['all'],
+                notes: pkg.notes || null,
+                updated_at: new Date().toISOString(),
+              };
+              await supabase.from('park_photo_packages').upsert(photoPkgRow, { onConflict: 'id' });
+              addLog(`Pacote de fotos sincronizado na tabela park_photo_packages.`);
+            } else {
+              await supabase.from('park_photo_packages').delete().eq('itinerary_day_id', resolvedDayId);
+            }
+          } catch (secErr: any) {
+            if (!isSupabaseMissingTableError(secErr)) {
+              console.warn('Sync secondary park tables note:', secErr);
+            }
+          }
+        } else {
+          await supabase.from('park_day_bookings').delete().eq('itinerary_day_id', resolvedDayId);
+          try {
+            await Promise.allSettled([
+              supabase.from('park_fast_passes').delete().eq('itinerary_day_id', resolvedDayId),
+              supabase.from('park_dining_reservations').delete().eq('itinerary_day_id', resolvedDayId),
+              supabase.from('park_shows_reservations').delete().eq('itinerary_day_id', resolvedDayId),
+              supabase.from('park_photo_packages').delete().eq('itinerary_day_id', resolvedDayId),
+            ]);
+          } catch {}
+        }
+      } catch (pbErr: any) {
+        addLog(`Erro sync park_day_bookings: ${pbErr?.message}`);
+        return {
+          success: false,
+          error: `Falha ao sincronizar reserva de parque no Supabase: ${pbErr?.message || 'Erro inesperado'}`,
+          resolvedDayId,
+          debugLogs,
+        };
+      }
+
+      return {
+        success: true,
+        resolvedDayId,
+        hourlyCount: fullHourlyItems.length,
+        debugLogs,
+      };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erro desconhecido ao salvar dia', debugLogs };
+    }
+  },
+```
+
+
+## 9. Integração do controlador em src/context/PlannerContext.tsx
+
+Adicionar importações: Issue (somente tipo) do motor; mapDbToItineraryDay e mapDbToParkBooking do supabaseService. Remover o bloco antigo das linhas 7354–7367 antes de inserir este bloco. Colocar após a declaração do estado supabaseStatus e antes das rotinas de carga. Não criar um controlador a cada modal.
+
+```tsx
+// Inserir após todos os estados do Provider (incluindo supabaseStatus),
+// antes de reloadFromSupabase/initSupabase e dos efeitos de carga.
+const [rulesIssues, setRulesIssues] = useState<Issue[]>([]);
+const [rulesHydrated, setRulesHydrated] = useState(false);
+const rulesLive = useRef({ activeTripId, travelerName: currentUser.name });
+rulesLive.current = { activeTripId, travelerName: currentUser.name };
+const lastRulesNotice = useRef('');
+const rulesControllerRef = useRef<ReturnType<typeof createRulesController> | null>(null);
+if (!rulesControllerRef.current) {
+  const store = new SupabaseItineraryRulesStore({
+    apply: (plan, dbDays, dbTrip, dbParks) => {
+      const mapped = dbDays.slice().sort((a,b)=>String(a.date).localeCompare(String(b.date))).map(row => ({
+        ...mapDbToItineraryDay(row),
+        // O motor já deduplicou por função. Não chamar novamente a deduplicação por título.
+        hourlySchedule: row.hourly_schedule || [],
+        parkBooking: (() => {
+          const pb = dbParks.find(p=>p.itinerary_day_id===row.id);
+          return pb ? {...mapDbToParkBooking(pb),date:row.date,itineraryDayId:row.id} : undefined;
+        })(),
+      }));
+      setTrips(previous => previous.map(trip => trip.id!==plan.tripId ? trip : ({
+        ...trip,
+        rawDays:mapped,
+        itineraryRulesConfig:dbTrip.itinerary_rules_config || {},
+      })));
+      if (rulesLive.current.activeTripId===plan.tripId) {
+        setRawDays(mapped);
+      }
+    },
+    report: (issues, tripId) => {
+      if (rulesLive.current.activeTripId!==tripId) return;
+      setRulesIssues(issues);
+      const key=JSON.stringify(issues);
+      if (key!==lastRulesNotice.current && issues.length) {
+        setSyncNotifications(previous => [{
+          id:'rules-'+Date.now(),
+          travelerName:rulesLive.current.travelerName,
+          action:'Roteiro com '+issues.length+' pendência(s). Revise os ajustes de logística.',
+          timestamp:'Agora mesmo',
+        },...previous.slice(0,9)]);
+      }
+      lastRulesNotice.current=key;
+    },
+  });
+  rulesControllerRef.current=createRulesController(store);
+}
+const rulesController=rulesControllerRef.current;
+const onModalOpen=useCallback((tripId:string)=>rulesController.onModalOpen(tripId),[rulesController]);
+const onModalSave=useCallback(
+  (tripId:string,saveSource:()=>Promise<void>)=>rulesController.onModalSave(tripId,saveSource),
+  [rulesController]
+);
+const evaluateAndCorrectAllItems=useCallback(
+  (tripId:string)=>rulesController.evaluateAndCorrectAllItems(tripId),
+  [rulesController]
+);
+useEffect(()=>{
+  if (!rulesHydrated || !activeTripId) return;
+  void rulesController.onTripLoaded(activeTripId).catch(error=>{
+    setSupabaseStatus(previous=>({...previous,error:error instanceof Error?error.message:String(error)}));
+  });
+},[rulesHydrated,activeTripId,rulesController]);
+```
+
+
+## 10. Criar scripts/verifySingleRulesEngine.mjs
+
+Executar com node scripts/verifySingleRulesEngine.mjs. Se falhar, a substituição não terminou, mesmo que o build passe. O verificador cobre os chamadores centrais e exige o hook nos componentes principais; o inventário/teste de outros modais continua obrigatório.
+
+```javascript
+import { readdir,readFile } from 'node:fs/promises';
+import path from 'node:path';
+
+const banned=[
+  'syncAllEventsToHourlySchedule','generateParkHourlySchedule','generateParkScheduleResult',
+  'applyAccommodationMorningRule','adjustScheduleForCheckoutAndDeparture',
+  'syncFlightsWithItineraryDays','syncAccommodationsWithItineraryDays','auditAndCorrectTrip',
+  'reconcileItineraryDay',
+];
+const failures=[];
+async function visit(dir){
+  for(const e of await readdir(dir,{withFileTypes:true})){
+    const name=path.join(dir,e.name);
+    if(e.isDirectory())await visit(name);
+    else if(/\.[jt]sx?$/.test(e.name)){
+      const text=await readFile(name,'utf8');
+      text.split(/\r?\n/).forEach((line,index)=>{
+        const call=banned.find(n=>new RegExp('\\b'+n+'\\s*\\(').test(line));
+        if(call)failures.push(name+':'+(index+1)+' ainda chama '+call);
+      });
+    }
+  }
+}
+await visit('src/context');
+await visit('src/components');
+await visit('src/services');
+for(const file of ['AccommodationsView','FlightsView','TransportationView','ItineraryPlanner',
+ 'ParkBookingModal','ParkTicketModal','GlobalSettingsModal','SwapParkDayModal']){
+ const source=await readFile('src/components/'+file+'.tsx','utf8');
+ if(!source.includes('useTripRulesModal'))failures.push(file+' ainda não integra o hook dos modais.');
+}
+if(failures.length){console.error(failures.join('\n'));process.exit(1)}
+console.log('OK: contexto/componentes sem chamadas aos geradores antigos.');
+
+```
+
+
+## 11. Tipos e mapeamentos — alterações pontuais obrigatórias
+
+Em src/types.ts:
+- Importar Role apenas como tipo, de ./utils/itineraryRules.
+- Importar LogisticsConfig apenas como tipo, de ./services/itineraryRulesAdapter.
+- Trocar role:any pelo tipo Role.
+- Acrescentar itineraryRulesConfig?: LogisticsConfig em Trip e GlobalSettings.
+
+O campo de horário deve manter:
+~~~typescript
+timeZone?: string;
+ruleBinding?: { jobId: string; role: Role };
+~~~
+
+Em src/services/supabaseService.ts:
+- mapDbToTrip: incluir itineraryRulesConfig: row.itinerary_rules_config || {} no retorno.
+- mapTripToDb: incluir a configuração somente quando informada; uma atualização sem configuração não deve substituir a existente por {}.
+~~~typescript
+...(trip.itineraryRulesConfig === undefined ? {} : {
+  itinerary_rules_config: trip.itineraryRulesConfig
+}),
+~~~
+- mapDbToItineraryDay, perto da linha 608: trocar hourlySchedule: deduplicateHourlySchedule(parsedHourly) por hourlySchedule: parsedHourly. A leitura deve conservar o que foi salvo, inclusive fuso e ruleBinding.
+- Não passar itens verificados novamente por deduplicação de texto.
+- As rotinas de sincronização em lote também devem preservar IDs/metadados e não executar os geradores antigos.
+
+Em PlannerContextType e no value do Provider, expor:
+~~~typescript
+rulesIssues: Issue[];
+onModalOpen: (tripId:string)=>Promise<Plan>;
+onModalSave: (tripId:string,saveSource:()=>Promise<void>)=>Promise<Plan>;
+evaluateAndCorrectAllItems: (tripId:string)=>Promise<Plan>;
+~~~
+
+## 12. Carga do Provider — retirar a reconciliação antiga
+
+Na versão revisada:
+- reloadFromSupabase contém o bloco targetTripId e a reconciliação do Dia 1 nas linhas 1095–1111.
+- initSupabase repete esse padrão nas linhas 1188–1203.
+- O fim do arquivo, perto da linha 7499, cria globalRulesStore/globalRulesController e exporta reconcileItineraryDay.
+- A inicialização do cache e selectTrip ainda chamam auditAndCorrectTrip.
+- As alterações de parque e hospedagem continuam chamando o gerador antigo nas linhas 4011, 4359, 4363, 6150, 6217 e 6623.
+- As alterações de voo ainda chamam syncFlightsWithItineraryDays nas linhas 5401, 5496, 5612 e 5700.
+- applySmartAccommodationRules ainda recalcula horários no fluxo antigo.
+
+Substituições:
+1. Na carga, ler e hidratar as fontes sem gerar horários.
+2. No primeiro bloco, usar const reconciledTrips = remoteTrips no lugar do map que reconcilia o Dia 1.
+3. No segundo, retirar o Promise.all de reconciliação antiga.
+4. Depois de hidratar com sucesso a primeira carga, chamar setRulesHydrated(true). O efeito fornecido chama onTripLoaded para a viagem ativa.
+5. Nas recargas posteriores, após hidratar, aguardar o controlador da mesma instância para a viagem selecionada. Não criar outro controlador e não fazer o adaptador chamar reloadFromSupabase.
+6. Remover o controlador global e reconcileItineraryDay; atualizar qualquer importação antiga.
+7. Retirar auditAndCorrectTrip das leituras/seleção. Não recalcular ao renderizar ou hidratar cache.
+8. Retirar geração de horários dos salvamentos de voo/hotel/parque e de suas sincronizações auxiliares. Eles salvam as fontes; o coordenador calcula o roteiro.
+9. Não substituir a lógica financeira desses salvamentos. Só retirar a geração paralela de horários e aguardar as gravações existentes.
+10. Métodos internos de persistência não chamam onModalSave; isso impediria a própria fila de terminar.
+
+Não basta deixar os métodos novos no contexto sem utilizá-los.
+
+## 13. Ligar os modais aos handlers reais
+
+Importar useTripRulesModal em cada componente. Usar um hook por estado de modal, depois da declaração desse estado. Não usar hooks dentro de if ou handler.
+
+Exemplos com os nomes reais da versão revisada:
+~~~tsx
+// AccommodationsView.tsx: depois de isModalOpen
+const accommodationRules = useTripRulesModal(isModalOpen);
+// Para a escolha da noite:
+const nightRules = useTripRulesModal(nightChoiceModalDate !== null);
+
+// FlightsView.tsx: depois de modalOpen
+const flightRules = useTripRulesModal(modalOpen);
+
+// TransportationView.tsx: depois de isModalOpen
+const rentalRules = useTripRulesModal(isModalOpen);
+
+// ItineraryPlanner.tsx: depois das declarações de estado
+const hourlyRules = useTripRulesModal(isHourlyModalOpen);
+const parkRules = useTripRulesModal(parkModalOpen);
+const nightRules = useTripRulesModal(nightChoiceModalDate !== null);
+~~~
+
+Substituir o bloco de persistência de handleSaveForm em AccommodationsView (atualmente linhas 378–388) por:
+~~~tsx
+const { result: res } = await accommodationRules.save(async () => {
+  return editingAcc
+    ? await updateAccommodation(editingAcc.id, dataToSave)
+    : await addAccommodation(dataToSave);
+});
+~~~
+Manter as validações financeiras existentes e o fechamento somente após esse bloco retornar. Se o hook indicar sourceSaved com erro, manter o aviso e oferecer retry; não cadastrar o hotel outra vez.
+
+FlightsView, bloco de handleSaveFlight (linhas 346–351):
+~~~tsx
+const { result } = await flightRules.save(async () => {
+  return editingFlight
+    ? await updateFlight(editingFlight.id, dataToSave)
+    : await addFlight(dataToSave);
+});
+~~~
+
+TransportationView, bloco de handleSubmitModal (linhas 265–274):
+~~~tsx
+const { result: res } = await rentalRules.save(async () => {
+  return editingRental
+    ? await updateCarRental(editingRental.id, cleanedData)
+    : await addCarRental(cleanedData);
+});
+~~~
+
+ItineraryPlanner, handleSaveHourlyItem:
+- Desabilitar Salvar enquanto o hook estiver checking. Se o item tiver recebido outro ID na migração e o ID antigo não existir mais, pedir que o usuário selecione novamente o item atualizado; não criar um manual por fallback.
+- Ao editar, iniciar updatedItem com ...existing antes dos campos alterados, para preservar ruleBinding/timeZone.
+- Não transformar um automático em manual para permitir salvar.
+- Trocar cada chamada direta a saveHourlyScheduleItem por:
+~~~tsx
+const { result } = await hourlyRules.save(
+  () => saveHourlyScheduleItem(targetDayId, itemToPersist)
+);
+success = result;
+~~~
+itemToPersist é o próprio updatedItem ou newItem já montado no respectivo ramo. Gerar o UUID do manual novo uma única vez ao abrir o cadastro e guardá-lo em ref até fechar; reutilizar o mesmo UUID em tentativas de salvamento. Não gerar outro UUID em cada clique ou durante o recálculo.
+- Adicionar campo de fuso local ao formulário de horário manual; preservar o valor existente e persistir o escolhido, sobretudo em dias com voo.
+- Um horário de automático é recalculado pelas fontes. Se a intenção for mudar a logística, ajustar a fonte/parâmetro correspondente.
+
+Para selecionar pernoite:
+~~~tsx
+await nightRules.save(() =>
+  setSelectedAccommodationForNight(dateStr, accommodationId)
+);
+~~~
+A função existente retorna boolean; false será tratado como falha. Fechar a janela após confirmação. Se outro dado da viagem continuar pendente, reportá-lo sem dizer que a seleção falhou.
+
+ParkBookingModal:
+- Usar o hook com a prop real de abertura.
+- handleSaveAll deve manter as validações e o salvamento de reservas/pagamentos/fotos.
+- Agrupar o commit das fontes em um callback aguardado, retornando {success:true} apenas depois das confirmações existentes.
+- Executar esse callback uma vez com rules.save.
+- Retirar a montagem antiga de hourlySchedule dessa função; os arrays de Fast Passes, refeições, shows e o parque permanecem nas fontes.
+- Não envolver handleSaveAll inteiro se ele engole erros ou fecha o modal antes do resultado. Adaptar o trecho de commit, não o rascunho do formulário.
+- Um onSave passado pelo pai precisa salvar somente a fonte e devolver confirmação; não pode abrir outra onModalSave.
+- Para exibir a hospedagem, usar resolveNight com selectedAccommodationsPerNight e checkout exclusivo. Retirar o find com <= checkOutDate.
+
+Também integrar:
+- ParkTicketModal, SwapParkDayModal e GlobalSettingsModal.
+- Modal de gerenciamento de sobreposições e suas escolhas de noite.
+- Modais de refeições, shows, fotos, passagens e carro.
+- Confirmações de exclusão que alteram fontes da viagem.
+- Os demais modais da viagem devem conferir na abertura. Não exigir viagem em modais de acesso/autenticação.
+
+Nos componentes:
+- Exibir rules.error quando existir.
+- Desabilitar duplo salvamento.
+- Se rules.sourceSaved for true, o botão de nova criação deve ficar bloqueado até repetir somente rules.retry ou fechar/reabrir para editar o registro salvo.
+- complete=false significa “cadastro salvo; roteiro com pendências”.
+- Não usar um callback que dispara uma gravação sem await e retorna undefined.
+- Se o método interno retorna void, torná-lo realmente aguardável e fazer o callback devolver {success:true} depois da confirmação. Não simular confirmação.
+
+## 14. Recuperação dos registros já afetados
+
+Usar as reservas reais como fonte. Não reaplicar o script/gerador antigo.
+
+1. Restaurar 07:30 e 22:30 nos quatro dias livres: 28/12, 02/01, 04/01 e 06/01.
+2. Retirar as duplicidades de função comprovadas, preservando atividades manuais.
+3. Restaurar a noite no Hard Rock em 08/01 e a origem Hard Rock na manhã de 09/01.
+4. Restaurar o fluxo de checkout antecipado de 09/01, com guarda-volumes pendente se ainda não confirmado.
+5. Recalcular rotas de ida/volta por origem/destino; os 25 minutos universais não são um dado válido.
+6. Restaurar o trajeto de chegada do primeiro dia quando os dados de aeroporto/locadora forem definidos. Não substituir tempos ausentes por 45/30 minutos.
+7. Transferir madrugadas confirmadas para a data correta. Enquanto o término do Réveillon for desconhecido, retirar a saída/chegada automática fictícia e manter a pendência.
+8. Resolver o dia 26/12 day_number=17: seus dois despertares de voo foram gerados por uma regra adicional e por reservas duplicadas. O motor fornecido retira esses automáticos; o adaptador só retira o dia vazio quando comprovar ausência de dependências. Não remover 26/12 se uma saída real da viagem vier a ser cadastrada nessa data.
+9. Se uma saída real cair antes de start_date, ampliar o período com datas e numeração coerentes antes de reconciliar; não anexar um dia anterior como Dia 17. O adaptador bloqueia esse caso em vez de inventar o calendário.
+10. Garantir que o período/calendário da interface inclua qualquer data nova legítima após meia-noite, preservando IDs dos dias e vínculos das reservas.
+11. Reler as duas representações e verificar todos os campos/IDs/metadados. Não se limitar à contagem.
+
+Há dados que precisam ser informados, não inferidos:
+- endereço de saída e duração até o aeroporto;
+- duração de desembarque/imigração/bagagens;
+- procedimentos de retirada/devolução da locadora e transferências;
+- horários planejados de partidas em trocas de hospedagem;
+- limite do intervalo curto entre checkout e partida;
+- trajetos individuais, com origem da estimativa;
+- término da celebração de Réveillon e guarda-volumes de 09/01.
+
+A captura anterior continha referências de trajeto diferentes por parque. Elas podem ser revistas e cadastradas como estimativas com sua origem identificada; não copiá-las cegamente de ida para volta e não dizer que houve consulta ao Maps se não houve.
+
+## 15. Testes e entrega
+
+Foram executados localmente 27 testes do motor e 14 do adaptador proposto, sem escrever no Supabase. Também foi simulado o snapshot de 17 dias/111 itens: o código voltou a gerar os quatro dias livres, deixou de gerar 26/12 exclusivamente pelo despertar de voo e apontou 20 pendências reais em vez de afirmar aprovação.
+
+Isso não é uma compilação do aplicativo integrado. A nova RPC e a interface de configurações também precisam ser validadas no ambiente do Studio; os testes locais citados são do motor/adaptador. No Studio, executar:
+- verificador estático da seção 10;
+- tsc e build reais;
+- testes de abrir/salvar os modais de hospedagem, parque, horário, voo e carro;
+- teste de fonte salva com falha posterior do roteiro;
+- teste de read falhando sem apagar registros;
+- teste de verify divergente sem criar dias ou gravar dados;
+- teste real da RPC de item, com leitura das duas representações e verificação do rollback em caso de erro;
+- teste de horários depois da meia-noite;
+- teste de preservação de custos, passageiros e atividades manuais.
+
+Casos numéricos de referência:
+- E=08:00, Dida=28, acesso=15: acordar06:17, saída06:47, estacionamento07:15, catracas07:30.
+- Fechamento22:00, acesso15, embarque5, Dvolta28: chegada/fim22:48.
+- Chegada21:40 no Hard Rock: chegada21:40 e descanso22:30.
+- E=08:30, hotel→estacionamento5, acesso25, pré-check-in30 e acomodação→hotel41: acordar05:49, primeira saída06:19, pré-check-in07:00 e saída do hotel07:30.
+Esses exemplos testam fórmulas. Não preencher dados de produção com números de fixtures sem validar sua origem.
+
+Entregar o diff real de todos os arquivos alterados e a lista dos modais conectados. Demonstrar a leitura final por data, incluindo os quatro dias livres restaurados, hotel correto em 08/09, fim do dia e retorno. Listar pendências remanescentes.
+
+Não declarar “tudo concluído”, “paridade absoluta” ou “nenhuma limitação” se houver fontes sem duração, modais sem integração, chamadas antigas ou divergência entre JSON e linhas.
+
+Documentação usada para os formatos de gravação: [upsert do Supabase](https://supabase.com/docs/reference/javascript/upsert). Os campos gravados e as chaves de conflito não dispensam conferência após persistir. A reconciliação completa usa requisições separadas e não promete transação ACID. O salvamento unitário usa a função PostgreSQL fornecida, chamada pelo formato documentado de [rpc](https://supabase.com/docs/reference/javascript/rpc), e deve ser validado antes da publicação.

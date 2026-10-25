@@ -4,6 +4,7 @@ import { AccommodationBooking } from '../types';
 import { calculateUniqueAccommodationNights, getAccommodationsForNight, resolveAccommodationForNight } from '../utils/parkScheduleUtils';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
+import { useTripRulesModal } from '../hooks/useTripRulesModal';
 import { TravelerSelector } from './TravelerSelector';
 import { PaymentSection, PaymentStatusType } from './PaymentSection';
 import { LogisticsCardHeader } from './LogisticsCardHeader';
@@ -60,6 +61,9 @@ export const AccommodationsView: React.FC = () => {
     openOverviewModal,
     addNotification,
   } = usePlanner();
+
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const accommodationRules = useTripRulesModal(isModalOpen);
 
   // Determine min and max allowed dates for the active trip
 
@@ -149,7 +153,6 @@ export const AccommodationsView: React.FC = () => {
   };
 
   // Modal State
-  const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingAcc, setEditingAcc] = useState<AccommodationBooking | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [accToDelete, setAccToDelete] = useState<AccommodationBooking | null>(null);

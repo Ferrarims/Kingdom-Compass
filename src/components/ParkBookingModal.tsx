@@ -45,6 +45,7 @@ import { PARKS_GUIDE_DATA } from '../data/initialData';
 import { formatDisplayDate, usePlanner, isZeroCost } from '../context/PlannerContext';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
+import { useTripRulesModal } from '../hooks/useTripRulesModal';
 import { fetchParkHours, ParkHoursResult } from '../services/parkHoursClient';
 import {
   generateParkHourlySchedule,

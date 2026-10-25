@@ -107,7 +107,7 @@ export type Job =
       latestActivityEnd?: Clock; returnEndUnknown?: boolean;
       morningProvisional?: boolean;
       detour?: { stay: Place; fromOrigin: Route; roomAvailable?: Clock };
-      earlyCheckout?: { at: Clock; contractualLimit: Clock; luggageConfirmed: boolean };
+      earlyCheckout?: { at?: Clock; contractualLimit: Clock; luggageConfirmed: boolean };
     });
 
 export type Snapshot = {
@@ -375,12 +375,10 @@ export function evaluateItineraryRules(
           titles[finalArrival.date] = 'Fim da Viagem';
         }
       });
-      if (j.direction === 'outbound') stage(j,['wake','leave','airport'],()=>{
+      if (j.direction === 'outbound') stage(j,['leave','airport'],()=>{
         if (!j.home) throw new Error('Informar endereço/cidade de saída de casa.');
         const terminal = toInstant(j.departure) - policy.airportLeadMinutes * MIN;
         const leave = terminal - routeMinutes(j.homeToAirport,'trajeto casa → aeroporto') * MIN;
-        emit(j,'wake',leave-policy.wakeLeadMinutes*MIN,j.departure.timeZone,
-          'Acordar / preparativos',location(j.home),'transport');
         emit(j,'leave',leave,j.departure.timeZone,'Saída de casa → ' + j.origin.name,
           location(j.home),'transport',routeNote(j.homeToAirport!));
         emit(j,'airport',terminal,j.departure.timeZone,'Chegada ao aeroporto — ' + j.origin.name,
@@ -546,7 +544,7 @@ export function evaluateItineraryRules(
         if (j.mode === 'car') emit(j,'parking',parking,zone,'Chegada ao estacionamento — ' + j.name,
           j.name,'transport','Acesso até as catracas: ' + access + ' min.');
         if (j.earlyCheckout) {
-          const checkout = toInstant(j.earlyCheckout.at);
+          const checkout = j.earlyCheckout.at ? toInstant(j.earlyCheckout.at) : firstLeave;
           if (checkout < firstLeave-policy.wakeLeadMinutes*MIN || checkout > firstLeave ||
               checkout > toInstant(j.earlyCheckout.contractualLimit)) {
             throw new Error('Checkout precisa ocorrer depois de acordar, antes da saída e até o limite contratual.');
@@ -562,6 +560,14 @@ export function evaluateItineraryRules(
         if (closing <= opening) closing = at(shiftDate(j.date,1),j.closing,zone);
         if (j.returnEndUnknown) throw new Error('Término da última atividade pendente; retorno não confirmado.');
         const exit = Math.max(closing,j.latestActivityEnd ? toInstant(j.latestActivityEnd) : closing);
+        const lastActivityStart = Math.max(-Infinity,...snapshot.jobs
+          .filter((job): job is Extract<Job,{kind:'activity'}> =>
+            job.kind==='activity' && job.place.id==='park:'+j.sourceId)
+          .map(job=>toInstant(job.at)));
+        if(lastActivityStart>=exit &&
+            (!j.latestActivityEnd || toInstant(j.latestActivityEnd)<lastActivityStart)){
+          throw new Error('Informar o término da atividade agendada no fechamento ou depois dele.');
+        }
         const access = minuteValue(pBack,'acesso de volta ao transporte');
         const drive = routeMinutes(j.inbound,'volta à acomodação da noite');
         const car = exit+access*MIN;

@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef, ReactNode } from 'react';
 import { createRulesController, Plan } from '../utils/itineraryRules';
 import { SupabaseItineraryRulesStore } from '../services/itineraryRulesAdapter';
+import { Issue } from '../utils/itineraryRules';
+import { mapDbToItineraryDay, mapDbToParkBooking } from '../services/supabaseService';
 import {
   GlobalSettings,
   ExpenseItem,
@@ -29,7 +31,7 @@ import { fetchLiveExchangeRate } from '../services/exchangeRateService';
 import { supabase, checkSupabaseConnection } from '../services/supabaseClient';
 import { SupabaseService } from '../services/supabaseService';
 import { detectGenderByName, Gender } from '../utils/genderDetector';
-import { clearParkReferencesFromDay, generateParkHourlySchedule, generateParkScheduleResult, deduplicateHourlySchedule, cleanInvalidAutoItems, isDayWithPark, isNonParkEvent, syncAllEventsToHourlySchedule, adjustScheduleForCheckoutAndDeparture, compareScheduleItemOrder, calculateDay1AccommodationTimeline, Day1AirportAccommodationTimeline, addMinutesToTimeString, maxTimeString, syncFlightsWithItineraryDays, isDefaultItineraryDayTitle, syncAccommodationsWithItineraryDays, auditAndCorrectTrip, ensureHourlyScheduleItems, cleanOrphanedAccommodationSelections, getAccommodationsForNight, resolveAccommodationForNight, calculateUniqueAccommodationNights } from '../utils/parkScheduleUtils';
+import { clearParkReferencesFromDay, generateParkScheduleResult, deduplicateHourlySchedule, cleanInvalidAutoItems, isDayWithPark, isNonParkEvent, adjustScheduleForCheckoutAndDeparture, compareScheduleItemOrder, calculateDay1AccommodationTimeline, Day1AirportAccommodationTimeline, addMinutesToTimeString, maxTimeString, syncFlightsWithItineraryDays, isDefaultItineraryDayTitle, syncAccommodationsWithItineraryDays, ensureHourlyScheduleItems, cleanOrphanedAccommodationSelections, getAccommodationsForNight, resolveAccommodationForNight, calculateUniqueAccommodationNights } from '../utils/parkScheduleUtils';
 import { generateEssentialBaggageItems, BaggageTemplateOptions, WeatherCondition, detectOrlandoWeatherFromTrip } from '../utils/baggageGenerator';
 import { normalizeAttractionName } from '../utils/attractionUtils';
 import {
@@ -690,6 +692,8 @@ interface PlannerContextType {
   };
   syncAllToSupabase: () => Promise<boolean>;
   reloadFromSupabase: (silent?: boolean) => Promise<boolean>;
+  updateTripParameters: (id: string, updates: Partial<Trip>) => Promise<{ success: boolean; error?: string }>;
+  rulesIssues: Issue[];
   onModalOpen: (tripId: string) => Promise<Plan>;
   onModalSave: (tripId: string, saveSource: () => Promise<void>) => Promise<Plan>;
   evaluateAndCorrectAllItems: (tripId: string) => Promise<Plan>;
@@ -803,7 +807,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const loaded = parsed.map((t: Trip) => auditAndCorrectTrip({
+          const loaded = parsed.map((t: Trip) => ({
             ...t,
             tripCode: t.tripCode || t.id.replace('trip-', '').toUpperCase(),
             travelers: t.travelers && t.travelers.length > 0 ? t.travelers : (t.settings?.travelers || []),
@@ -813,11 +817,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         }
       }
       const backup = getTripEmergencyBackup();
-      if (backup.length > 0) return backup.map(auditAndCorrectTrip);
-      return INITIAL_TRIPS.map(auditAndCorrectTrip);
+      if (backup.length > 0) return backup;
+      return INITIAL_TRIPS;
     } catch {
       const backup = getTripEmergencyBackup();
-      return (backup.length > 0 ? backup : INITIAL_TRIPS).map(auditAndCorrectTrip);
+      return (backup.length > 0 ? backup : INITIAL_TRIPS);
     }
   });
 
@@ -834,6 +838,52 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   const activeTrip = useMemo(() => {
     return trips.find((t) => t.id === activeTripId) || trips[0] || null;
   }, [trips, activeTripId]);
+
+  const [rulesIssues, setRulesIssues] = useState<Issue[]>([]);
+  const activeRulesTrip = useRef(activeTripId);
+  activeRulesTrip.current = activeTripId;
+  const rulesControllerRef = useRef<ReturnType<typeof createRulesController> | null>(null);
+  if (!rulesControllerRef.current) {
+    rulesControllerRef.current = createRulesController(new SupabaseItineraryRulesStore({
+      apply: (plan, dbDays, _dbTrip, dbParks) => {
+        const mapped = dbDays.slice()
+          .sort((a, b) => String(a.date).localeCompare(String(b.date)))
+          .map(row => {
+            if (!Array.isArray(row.hourly_schedule)) {
+              throw new Error('Cronograma verificado inválido no dia ' + row.id);
+            }
+            const park = dbParks.find(item => item.itinerary_day_id === row.id);
+            return {
+              ...mapDbToItineraryDay(row),
+              hourlySchedule: row.hourly_schedule,
+              parkBooking: park
+                ? { ...mapDbToParkBooking(park), date: String(row.date).slice(0, 10), itineraryDayId: row.id }
+                : undefined,
+            };
+          });
+        setTrips(previous => previous.map(trip =>
+          trip.id === plan.tripId ? { ...trip, rawDays: mapped } : trip));
+        if (activeRulesTrip.current === plan.tripId) setRawDays(mapped);
+      },
+      report: (issues, tripId) => {
+        if (activeRulesTrip.current !== tripId) return;
+        setRulesIssues(issues);
+      },
+    }));
+  }
+  const rulesController = rulesControllerRef.current;
+  useEffect(() => {
+    providerRulesController = rulesController;
+    return () => { if (providerRulesController === rulesController) providerRulesController = null; };
+  }, [rulesController]);
+  const onModalOpen = useCallback(
+    (tripId: string) => rulesController.onModalOpen(tripId), [rulesController]);
+  const onModalSave = useCallback(
+    (tripId: string, saveSource: () => Promise<void>) => rulesController.onModalSave(tripId, saveSource),
+    [rulesController]);
+  const evaluateAndCorrectAllItems = useCallback(
+    (tripId: string) => rulesController.evaluateAndCorrectAllItems(tripId), [rulesController]);
+
 
   // Load active trip sub-states
   const [settings, setSettings] = useState<GlobalSettings>(activeTrip?.settings || INITIAL_SETTINGS);
@@ -1095,17 +1145,10 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         const targetTripId = '78bbd4b1-2857-43d0-9520-2318a3b157a3';
         
         const reconciledTrips = await Promise.all(remoteTrips.map(async (trip) => {
-          if (trip.id === targetTripId && trip.rawDays) {
-            const day1 = trip.rawDays.find(d => d.dayNumber === 1);
-            if (day1) {
-              const success = await reconcileItineraryDay(trip, day1);
-              if (!success) {
-                setSupabaseStatus((prev) => ({ ...prev, error: `Falha ao persistir alterações automáticas no Dia 1 da viagem ${targetTripId}.` }));
-                return trip;
-              }
-              // Update local object to reflect the change
-              day1.hourlySchedule = deduplicateHourlySchedule(syncAllEventsToHourlySchedule(day1, trip));
-            }
+          if (trip.id === targetTripId) {
+            await evaluateAndCorrectAllItems(trip.id);
+            const refreshed = await SupabaseService.fetchTripById(trip.id);
+            if (refreshed) return refreshed;
           }
           return trip;
         }));
@@ -1188,16 +1231,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
             const targetTripId = '78bbd4b1-2857-43d0-9520-2318a3b157a3';
             
             await Promise.all(remoteTrips.map(async (trip) => {
-              if (trip.id === targetTripId && trip.rawDays) {
-                const day1 = trip.rawDays.find(d => d.dayNumber === 1);
-                if (day1) {
-                  const success = await reconcileItineraryDay(trip, day1);
-                  if (!success) {
-                    throw new Error(`Falha ao persistir alterações automáticas no Dia 1 da viagem ${targetTripId}.`);
-                  }
-                  // Update local object to reflect the change
-                  day1.hourlySchedule = deduplicateHourlySchedule(syncAllEventsToHourlySchedule(day1, trip));
-                }
+              if (trip.id === targetTripId) {
+                await evaluateAndCorrectAllItems(trip.id);
               }
               return trip;
             }));
@@ -2235,43 +2270,42 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   const selectTrip = (tripId: string, overrideTrip?: Trip) => {
     const rawFound = overrideTrip || trips.find((t) => t.id === tripId);
     if (rawFound) {
-      const found = auditAndCorrectTrip(rawFound);
       setActiveTripId(tripId);
-      const tripStart = normalizeDateToYMD(found.startDate) || '2026-12-30';
+      const tripStart = normalizeDateToYMD(rawFound.startDate) || '2026-12-30';
       const tripSettings: GlobalSettings = {
-        id: found.id,
-        tripCode: found.tripCode || found.id,
-        tripName: found.tripName,
-        destination: found.destination,
+        id: rawFound.id,
+        tripCode: rawFound.tripCode || rawFound.id,
+        tripName: rawFound.tripName,
+        destination: rawFound.destination,
         startDate: tripStart,
-        durationDays: found.durationDays,
-        isFlexibleDates: found.isFlexibleDates ?? false,
-        flexibleOutboundStart: normalizeDateToYMD(found.flexibleOutboundStart || tripStart),
-        flexibleOutboundEnd: normalizeDateToYMD(found.flexibleOutboundEnd || calculateDateOffset(tripStart, 7)),
-        flexibleInboundStart: normalizeDateToYMD(found.flexibleInboundStart || calculateDateOffset(tripStart, found.durationDays)),
-        flexibleInboundEnd: normalizeDateToYMD(found.flexibleInboundEnd || calculateDateOffset(tripStart, found.durationDays + 7)),
-        flexibleMinDays: found.flexibleMinDays,
-        flexibleMaxDays: found.flexibleMaxDays,
-        outboundFlexibility: found.outboundFlexibility || 'Datas Fixas',
-        inboundFlexibility: found.inboundFlexibility || 'Datas Fixas',
-        flexibilityNotes: found.flexibilityNotes || '',
-        travelers: found.travelers || [],
-        travelersCount: found.travelers?.length || found.travelersCount || 1,
-        dollarRate: found.dollarRate || 5.75,
-        totalBudgetGoalBRL: found.totalBudgetGoalBRL || 75000,
-        currentUserId: found.travelers?.[0]?.id || '1',
-        ...found.settings,
+        durationDays: rawFound.durationDays || 16,
+        isFlexibleDates: rawFound.isFlexibleDates ?? false,
+        flexibleOutboundStart: normalizeDateToYMD(rawFound.flexibleOutboundStart || tripStart),
+        flexibleOutboundEnd: normalizeDateToYMD(rawFound.flexibleOutboundEnd || calculateDateOffset(tripStart, 7)),
+        flexibleInboundStart: normalizeDateToYMD(rawFound.flexibleInboundStart || calculateDateOffset(tripStart, rawFound.durationDays || 16)),
+        flexibleInboundEnd: normalizeDateToYMD(rawFound.flexibleInboundEnd || calculateDateOffset(tripStart, rawFound.durationDays + 7)),
+        flexibleMinDays: rawFound.flexibleMinDays,
+        flexibleMaxDays: rawFound.flexibleMaxDays,
+        outboundFlexibility: rawFound.outboundFlexibility || 'Datas Fixas',
+        inboundFlexibility: rawFound.inboundFlexibility || 'Datas Fixas',
+        flexibilityNotes: rawFound.flexibilityNotes || '',
+        travelers: rawFound.travelers || [],
+        travelersCount: rawFound.travelers?.length || rawFound.travelersCount || 1,
+        dollarRate: rawFound.dollarRate || 5.75,
+        totalBudgetGoalBRL: rawFound.totalBudgetGoalBRL || 75000,
+        currentUserId: rawFound.travelers?.[0]?.id || '1',
+        ...rawFound.settings,
       };
       setSettings(tripSettings);
       
-      const currentTravelers = (found.travelers && found.travelers.length > 0) ? found.travelers : (tripSettings.travelers || []);
+      const currentTravelers = (rawFound.travelers && rawFound.travelers.length > 0) ? rawFound.travelers : (tripSettings.travelers || []);
       const reconciledExpenses = reconcileExpensesWithBookings(
-        found.expenses || [],
-        found.flights || [],
-        found.accommodations || [],
-        found.carRentals || [],
-        found.parkTickets || [],
-        found.rawDays || [],
+        rawFound.expenses || [],
+        rawFound.flights || [],
+        rawFound.accommodations || [],
+        rawFound.carRentals || [],
+        rawFound.parkTickets || [],
+        rawFound.rawDays || [],
         tripSettings.dollarRate || 5.75,
         currentUser,
         currentTravelers
@@ -2280,9 +2314,9 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
       // Sincronizar com o Supabase se houve alterações nas despesas (limpeza, adição, ajuste de valores/status)
       const expensesChanged =
-        reconciledExpenses.length !== (found.expenses || []).length ||
+        reconciledExpenses.length !== (rawFound.expenses || []).length ||
         reconciledExpenses.some((re, idx) => {
-          const fe = (found.expenses || [])[idx];
+          const fe = (rawFound.expenses || [])[idx];
           return (
             !fe ||
             fe.id !== re.id ||
@@ -2292,40 +2326,40 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           );
         });
 
-      if (expensesChanged && found.id) {
-        SupabaseService.syncExpenses(found.id, reconciledExpenses, {
-          ...found,
+      if (expensesChanged && rawFound.id) {
+        SupabaseService.syncExpenses(rawFound.id, reconciledExpenses, {
+          ...rawFound,
           travelers: currentTravelers,
         }).catch((e) => console.warn('Auto-sync docs in selectTrip:', e));
       }
 
-      setRawDays(normalizeTripDays(found.rawDays, found.durationDays));
+      setRawDays(normalizeTripDays(rawFound.rawDays, rawFound.durationDays));
       const guaranteedDocs = ensurePreparationDocsForTravelers(
         currentTravelers,
-        found.prepDocuments || INITIAL_PREPARATION_DOCS,
-        found.id
+        rawFound.prepDocuments || INITIAL_PREPARATION_DOCS,
+        rawFound.id
       );
       setPrepDocuments(guaranteedDocs);
 
       // If missing docs were populated, sync to Supabase in background
-      if (guaranteedDocs.length !== (found.prepDocuments || []).length) {
-        SupabaseService.syncPrepDocuments(found.id, guaranteedDocs, {
-          ...found,
+      if (guaranteedDocs.length !== (rawFound.prepDocuments || []).length) {
+        SupabaseService.syncPrepDocuments(rawFound.id, guaranteedDocs, {
+          ...rawFound,
           travelers: currentTravelers,
         }).catch((e) => console.warn('Auto-sync docs in selectTrip:', e));
       }
-      setBookingMilestones(found.bookingMilestones || INITIAL_BOOKING_MILESTONES);
-      setBaggageItems(found.baggageItems || INITIAL_BAGGAGE_ITEMS);
-      setFlights(found.flights || []);
-      setCarRentals(found.carRentals || []);
-      setAccommodations(found.accommodations || []);
+      setBookingMilestones(rawFound.bookingMilestones || INITIAL_BOOKING_MILESTONES);
+      setBaggageItems(rawFound.baggageItems || INITIAL_BAGGAGE_ITEMS);
+      setFlights(rawFound.flights || []);
+      setCarRentals(rawFound.carRentals || []);
+      setAccommodations(rawFound.accommodations || []);
       const cleanedAccSel = cleanOrphanedAccommodationSelections(
-        found.selectedAccommodationsPerNight || found.settings?.selectedAccommodationsPerNight || {},
-        found.accommodations || []
+        rawFound.selectedAccommodationsPerNight || rawFound.settings?.selectedAccommodationsPerNight || {},
+        rawFound.accommodations || []
       );
       setSelectedAccommodationsPerNightState(cleanedAccSel);
-      setParkTickets(found.parkTickets || []);
-      setAttractionSelections(found.attractionSelections || {});
+      setParkTickets(rawFound.parkTickets || []);
+      setAttractionSelections(rawFound.attractionSelections || {});
     }
   };
 
@@ -2660,6 +2694,41 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
     return { success: true };
   };
+
+  const updateTripParameters = async (
+    id: string, changes: Partial<Trip>,
+  ): Promise<{ success: boolean; error?: string }> => {
+    const existing = trips.find(trip => trip.id === id);
+    if (!existing) return { success: false, error: 'Viagem não encontrada.' };
+    const updates = { ...changes };
+    for (const field of ['startDate', 'returnDate', 'flexibleOutboundStart', 'flexibleOutboundEnd', 'flexibleInboundStart', 'flexibleInboundEnd'] as const) {
+      if (updates[field]) updates[field] = normalizeDateToYMD(updates[field]);
+    }
+    const candidate: Trip = {
+      ...existing, ...updates,
+      settings: { ...existing.settings, ...updates.settings },
+    };
+    if ((updates.startDate !== undefined || updates.durationDays !== undefined) && updates.returnDate === undefined && candidate.startDate) {
+      const duration = Number(candidate.durationDays || candidate.settings?.durationDays);
+      if (!Number.isInteger(duration) || duration < 1) return { success: false, error: 'Duração da viagem inválida.' };
+      candidate.returnDate = calculateDateOffset(candidate.startDate, duration - 1);
+    }
+    const result = await SupabaseService.saveTripParameters(candidate, updates);
+    if (!result.success) return result;
+    setTrips(previous => previous.map(trip => trip.id === id
+      ? { ...trip, ...updates, returnDate: candidate.returnDate, settings: candidate.settings }
+      : trip));
+    if (activeTripId === id) {
+      const headerSettings: Partial<GlobalSettings> = {};
+      for (const key of ['tripName', 'destination', 'startDate', 'returnDate', 'durationDays', 'isFlexibleDates', 'flexibleOutboundStart', 'flexibleOutboundEnd', 'flexibleInboundStart', 'flexibleInboundEnd', 'outboundFlexibility', 'inboundFlexibility', 'flexibilityNotes', 'dollarRate', 'totalBudgetGoalBRL', 'travelersCount', 'travelers'] as const) {
+        if (Object.prototype.hasOwnProperty.call(updates, key)) Object.assign(headerSettings, { [key]: updates[key] });
+      }
+      if (candidate.returnDate) headerSettings.returnDate = candidate.returnDate;
+      setSettings(previous => ({ ...previous, ...headerSettings }));
+    }
+    return { success: true };
+  };
+
 
   const deleteTrip = (id: string) => {
     const remaining = trips.filter((t) => t.id !== id);
@@ -3959,21 +4028,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           });
           const accName = activeAcc ? activeAcc.name : '';
           const pb = finalUpdates.parkBooking;
-          finalUpdates.hourlySchedule = generateParkHourlySchedule(
-            updates.park,
-            pb?.parkHours?.openingTime || '09:00',
-            pb?.parkHours?.closingTime || '21:00',
-            pb?.parkHours?.earlyEntryTime,
-            accName,
-            currentDay.hourlySchedule || [],
-            pb?.id,
-            currentDay.dayNumber,
-            activeAcc?.address || accName,
-            currentDay,
-            rawDays,
-            settings?.destination,
-            pb
-          );
+          finalUpdates.hourlySchedule = currentDay.hourlySchedule || [];
         }
       }
 
@@ -4008,7 +4063,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         dayToSave.hourlySchedule = finalUpdates.hourlySchedule || [];
       } else if (isParkChanged) {
         const tripContext = { flights, accommodations, carRentals };
-        const fullySyncedHourly = syncAllEventsToHourlySchedule(dayToSave, tripContext);
+        const fullySyncedHourly = dayToSave.hourlySchedule || [];
         dayToSave.hourlySchedule = fullySyncedHourly;
         finalUpdates.hourlySchedule = fullySyncedHourly;
       }
@@ -6147,7 +6202,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
       const calculatedDate = calculateDateOffset(settings.startDate, index);
       const dayWithDate = { ...d, date: calculatedDate };
-      const newSchedule = syncAllEventsToHourlySchedule(dayWithDate, tripContext);
+      const newSchedule = dayWithDate.hourlySchedule || [];
       return {
         ...d,
         date: calculatedDate,
@@ -6620,7 +6675,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         if (!affectedDayIndexes.has(index)) return d;
         const calculatedDate = calculateDateOffset(settings.startDate, index);
         const dayWithDate = { ...d, date: calculatedDate };
-        const newSchedule = syncAllEventsToHourlySchedule(dayWithDate, tripContext);
+        const newSchedule = dayWithDate.hourlySchedule || [];
         return {
           ...d,
           hourlySchedule: newSchedule,
@@ -7351,20 +7406,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   };
 
-  const rulesControllerRef = useRef(createRulesController(new SupabaseItineraryRulesStore()));
-  const rulesController = rulesControllerRef.current;
-
-  const onModalOpen = useCallback(async (tripId: string) => {
-    return await rulesController.onModalOpen(tripId);
-  }, [rulesController]);
-
-  const onModalSave = useCallback(async (tripId: string, saveSource: () => Promise<void>) => {
-    return await rulesController.onModalSave(tripId, saveSource);
-  }, [rulesController]);
-
-  const evaluateAndCorrectAllItems = useCallback(async (tripId: string) => {
-    return await rulesController.evaluateAndCorrectAllItems(tripId);
-  }, [rulesController]);
+// ...
 
   return (
     <PlannerContext.Provider
@@ -7374,8 +7416,13 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         selectTrip,
         addTrip,
         updateTrip,
+        updateTripParameters,
         deleteTrip,
         duplicateTrip,
+        rulesIssues,
+        onModalOpen,
+        onModalSave,
+        evaluateAndCorrectAllItems,
         settings,
         updateSettings,
         updateModuleReadiness,
@@ -7478,9 +7525,6 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
         supabaseStatus,
         syncAllToSupabase,
         reloadFromSupabase,
-        onModalOpen,
-        onModalSave,
-        evaluateAndCorrectAllItems,
       }}
     >
       {children}
@@ -7496,15 +7540,10 @@ export const usePlanner = () => {
   return context;
 };
 
-const globalRulesStore = new SupabaseItineraryRulesStore();
-const globalRulesController = createRulesController(globalRulesStore);
+let providerRulesController: ReturnType<typeof createRulesController> | null = null;
 
-export async function reconcileItineraryDay(trip: Trip, day: ItineraryDay): Promise<boolean> {
-  try {
-    const plan = await globalRulesController.evaluateAndCorrectAllItems(trip.id);
-    return plan.complete;
-  } catch (err) {
-    console.error('Falha na reconciliação pelo motor de regras:', err);
-    return false;
-  }
+export async function reconcileItineraryDay(trip: Trip, _day: ItineraryDay): Promise<boolean> {
+  if (!providerRulesController) throw new Error('O planejador ainda não está disponível para reconciliar.');
+  const plan = await providerRulesController.evaluateAndCorrectAllItems(trip.id);
+  return plan.complete;
 }

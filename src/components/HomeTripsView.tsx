@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Sparkles,
   Plus,
@@ -59,6 +59,10 @@ export const HomeTripsView: React.FC = () => {
     liveExchangeRate,
     supabaseStatus,
     reloadFromSupabase,
+    onModalSave,
+    onModalOpen,
+    rulesIssues,
+    updateTripParameters,
   } = usePlanner();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -66,6 +70,15 @@ export const HomeTripsView: React.FC = () => {
   const [tripToDelete, setTripToDelete] = useState<Trip | null>(null);
   const [showEmailModal, setShowEmailModal] = useState(false);
   const [isBackupModalOpen, setIsBackupModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isModalOpen || !editingTrip?.id) return;
+    let cancelled = false;
+    void onModalOpen(editingTrip.id).catch(error => {
+      if (!cancelled) setSaveError(error instanceof Error ? error.message : String(error));
+    });
+    return () => { cancelled = true; };
+  }, [isModalOpen, editingTrip?.id, onModalOpen]);
 
   useConfirmationKeyboard({
     isOpen: !!tripToDelete,
@@ -343,102 +356,63 @@ export const HomeTripsView: React.FC = () => {
   };
 
   const handleSaveTrip = async (e?: React.FormEvent) => {
-    if (e && e.preventDefault) {
-      e.preventDefault();
-    }
+    e?.preventDefault();
     if (saveTripModalLockRef.current || isSavingTrip) return;
     saveTripModalLockRef.current = true;
     setIsSavingTrip(true);
+    setSaveError(null);
     try {
-      const finalTripName = tripName.trim() || editingTrip?.tripName || (destination ? `Viagem a ${destination}` : 'Viagem Orlando 2026/2027');
-
-      let currentTravelers = [...travelers];
+      const finalTripName = tripName.trim() || editingTrip?.tripName ||
+        (destination ? 'Viagem a ' + destination : 'Viagem Orlando 2026/2027');
+      const currentTravelers = [...travelers];
       if (newTravelerName.trim()) {
-        const colors = ['#E5A93C', '#3B82F6', '#EC4899', '#10B981', '#8B5CF6', '#F59E0B', '#EF4444', '#06B6D4'];
-        const randomColor = colors[Math.floor(Math.random() * colors.length)];
-        const sanitizedEmail = newTravelerEmail.trim() || `${newTravelerName.toLowerCase().replace(/\s+/g, '')}@exemplo.com`;
-        const newT: Traveler = {
-          id: generateUUID(),
-          name: newTravelerName.trim(),
-          email: sanitizedEmail,
-          avatarColor: randomColor,
-          role: 'traveler',
-        };
-        currentTravelers.push(newT);
+        const colors = ['#E5A93C','#3B82F6','#EC4899','#10B981','#8B5CF6','#F59E0B','#EF4444','#06B6D4'];
+        currentTravelers.push({
+          id:generateUUID(),name:newTravelerName.trim(),
+          email:newTravelerEmail.trim() ||
+            newTravelerName.toLowerCase().replace(/\s+/g,'') + '@exemplo.com',
+          avatarColor:colors[Math.floor(Math.random()*colors.length)],role:'traveler',
+        });
         setTravelers(currentTravelers);
         setNewTravelerName('');
         setNewTravelerEmail('');
       }
-
       const finalStartDate = normalizeDateToYMD(startDate || flexibleOutboundStart || '2026-12-30');
-      const finalOutboundStart = normalizeDateToYMD(isFlexibleDates ? (flexibleOutboundStart || finalStartDate) : finalStartDate);
-      const finalOutboundEnd = normalizeDateToYMD(isFlexibleDates ? (flexibleOutboundEnd || calculateDateOffset(finalOutboundStart, 7)) : calculateDateOffset(finalStartDate, 7));
-      const finalInboundStart = normalizeDateToYMD(isFlexibleDates ? (flexibleInboundStart || calculateDateOffset(finalOutboundStart, durationDays)) : calculateDateOffset(finalStartDate, durationDays));
-      const finalInboundEnd = normalizeDateToYMD(isFlexibleDates ? (flexibleInboundEnd || calculateDateOffset(finalOutboundEnd, durationDays)) : calculateDateOffset(finalStartDate, durationDays + 7));
-
-      const effectiveOutFlex = isFlexibleDates
-        ? 'Data Não Definida'
-        : 'Datas Fixas';
-      const effectiveInFlex = isFlexibleDates
-        ? 'Data Não Definida'
-        : 'Datas Fixas';
-
+      const finalOutboundStart = normalizeDateToYMD(isFlexibleDates
+        ? flexibleOutboundStart || finalStartDate : finalStartDate);
+      const finalOutboundEnd = normalizeDateToYMD(isFlexibleDates
+        ? flexibleOutboundEnd || calculateDateOffset(finalOutboundStart,7)
+        : calculateDateOffset(finalStartDate,7));
+      const finalInboundStart = normalizeDateToYMD(isFlexibleDates
+        ? flexibleInboundStart || calculateDateOffset(finalOutboundStart,durationDays)
+        : calculateDateOffset(finalStartDate,durationDays));
+      const finalInboundEnd = normalizeDateToYMD(isFlexibleDates
+        ? flexibleInboundEnd || calculateDateOffset(finalOutboundEnd,durationDays)
+        : calculateDateOffset(finalStartDate,durationDays+7));
+      const flexibility = isFlexibleDates ? 'Data Não Definida' : 'Datas Fixas';
+      const changes:Partial<Trip> = {
+        tripName:finalTripName,
+        destination:destination || editingTrip?.destination || 'Orlando, Flórida',
+        startDate:finalStartDate,durationDays,isFlexibleDates,
+        flexibleOutboundStart:finalOutboundStart,flexibleOutboundEnd:finalOutboundEnd,
+        flexibleInboundStart:finalInboundStart,flexibleInboundEnd:finalInboundEnd,
+        outboundFlexibility:flexibility,inboundFlexibility:flexibility,flexibilityNotes,
+        totalBudgetGoalBRL,dollarRate,travelers:currentTravelers,
+        travelersCount:currentTravelers.length,
+      };
       if (editingTrip) {
-        const res = await updateTrip(editingTrip.id, {
-          tripName: finalTripName,
-          destination: destination || editingTrip.destination,
-          startDate: finalStartDate,
-          durationDays,
-          isFlexibleDates,
-          flexibleOutboundStart: finalOutboundStart,
-          flexibleOutboundEnd: finalOutboundEnd,
-          flexibleInboundStart: finalInboundStart,
-          flexibleInboundEnd: finalInboundEnd,
-          outboundFlexibility: effectiveOutFlex,
-          inboundFlexibility: effectiveInFlex,
-          flexibilityNotes,
-          totalBudgetGoalBRL,
-          dollarRate,
-          travelers: currentTravelers,
-          travelersCount: currentTravelers.length,
+        await onModalSave(editingTrip.id, async () => {
+          const result = await updateTripParameters(editingTrip.id,changes);
+          if (!result.success) throw new Error(result.error || 'Falha ao salvar os parâmetros.');
         });
-        if (res && !res.success) {
-          setSaveError(res.error || 'Erro ao salvar viagem.');
-          setIsSavingTrip(false);
-          saveTripModalLockRef.current = false;
-          return;
-        }
       } else {
-        const res = await addTrip({
-          tripName: finalTripName,
-          destination: destination || 'Orlando, Flórida',
-          startDate: finalStartDate,
-          durationDays,
-          isFlexibleDates,
-          flexibleOutboundStart: finalOutboundStart,
-          flexibleOutboundEnd: finalOutboundEnd,
-          flexibleInboundStart: finalInboundStart,
-          flexibleInboundEnd: finalInboundEnd,
-          outboundFlexibility: effectiveOutFlex,
-          inboundFlexibility: effectiveInFlex,
-          flexibilityNotes,
-          totalBudgetGoalBRL,
-          dollarRate,
-          travelers: currentTravelers,
-        });
-        if (res && !res.success) {
-          setSaveError(res.error || 'Erro ao criar viagem.');
-          setIsSavingTrip(false);
-          saveTripModalLockRef.current = false;
-          return;
-        }
+        const result = await addTrip(changes);
+        if (result && !result.success) throw new Error(result.error || 'Erro ao criar viagem.');
       }
-
       setIsModalOpen(false);
-      setIsSavingTrip(false);
-      saveTripModalLockRef.current = false;
-    } catch (err: any) {
-      setSaveError(err?.message || 'Erro inesperado ao salvar viagem.');
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Erro inesperado ao salvar viagem.');
+    } finally {
       setIsSavingTrip(false);
       saveTripModalLockRef.current = false;
     }
@@ -1166,6 +1140,16 @@ export const HomeTripsView: React.FC = () => {
                   <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-start gap-2 shadow-2xs">
                     <AlertCircle className="w-4 h-4 shrink-0 text-red-500 mt-0.5" />
                     <span>{saveError}</span>
+                  </div>
+                )}
+                {rulesIssues.length > 0 && (
+                  <div role="status" className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 shadow-2xs">
+                    <p className="font-semibold mb-1">O roteiro ainda tem pendências:</p>
+                    <ul className="list-disc list-inside space-y-0.5">
+                      {rulesIssues.map((issue, index) => (
+                        <li key={issue.jobId + '-' + issue.code + '-' + index}>{issue.message}</li>
+                      ))}
+                    </ul>
                   </div>
                 )}
 

@@ -59,6 +59,7 @@ import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { SupabaseService } from '../services/supabaseService';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
 import { generateUUID } from '../utils/uuid';
+import { useTripRulesModal } from '../hooks/useTripRulesModal';
 
 const cleanText = (text?: string): string => {
   if (!text) return '';
@@ -144,6 +145,7 @@ const isPeriodProgrammed = (day: any, periodKey?: 'morning' | 'afternoon' | 'nig
 };
 
 export const ItineraryPlanner: React.FC = () => {
+  useTripRulesModal(true);
   const {
     itineraryDays,
     updateItineraryDay,
@@ -163,6 +165,8 @@ export const ItineraryPlanner: React.FC = () => {
     parkTickets,
     daysCountdown,
     openOverviewModal,
+    evaluateAndCorrectAllItems,
+    activeTripId,
   } = usePlanner();
 
   // Selected Day & View Mode State
@@ -577,11 +581,13 @@ export const ItineraryPlanner: React.FC = () => {
       completed: !isCurrentEffective,
     };
     await saveHourlyScheduleItem(dayId, updatedItem);
+    if (activeTripId) await evaluateAndCorrectAllItems(activeTripId);
   };
 
   // Delete hourly item
   const handleDeleteScheduleItem = async (dayId: string, itemId: string) => {
     await deleteHourlyScheduleItem(dayId, itemId);
+    if (activeTripId) await evaluateAndCorrectAllItems(activeTripId);
   };
 
   // Open Hourly modal for add or edit
@@ -672,6 +678,7 @@ export const ItineraryPlanner: React.FC = () => {
       if (success) {
         setIsHourlyModalOpen(false);
         setEditingHourlyItemId(null);
+        if (activeTripId) await evaluateAndCorrectAllItems(activeTripId);
       } else {
         throw new Error('Falha ao salvar atividade.');
       }

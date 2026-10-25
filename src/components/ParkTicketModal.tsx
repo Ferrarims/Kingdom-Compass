@@ -11,6 +11,7 @@ import {
 import { ParkTicketPurchase, Traveler } from '../types';
 import { usePlanner } from '../context/PlannerContext';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
+import { useTripRulesModal } from '../hooks/useTripRulesModal';
 import { PaymentSection, PaymentStatusType } from './PaymentSection';
 
 interface ParkTicketModalProps {
@@ -560,6 +561,7 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
   onDelete,
 }) => {
   const { settings, deleteParkTicket } = usePlanner();
+  const { save } = useTripRulesModal(isOpen);
   const dollarRate = settings.dollarRate || 5.75;
   const travelers: Traveler[] = settings.travelers || [];
 
@@ -845,11 +847,13 @@ export const ParkTicketModal: React.FC<ParkTicketModalProps> = ({
         notes: notes.trim() || undefined,
       };
 
-      const res = await onSave(ticketData, ticketToEdit?.id);
-      if (res && typeof res === 'object' && 'success' in res && !res.success) {
-        setSaveError(res.error || 'Erro ao salvar os ingressos. Tente novamente.');
-        return;
-      }
+      await save(async () => {
+        const res = await onSave(ticketData, ticketToEdit?.id);
+        if (res && typeof res === 'object' && 'success' in res && !res.success) {
+          throw new Error(res.error || 'Erro ao salvar os ingressos. Tente novamente.');
+        }
+        return { success: true };
+      });
 
       onClose();
     } catch (err: any) {

@@ -20,12 +20,14 @@ import { Traveler, AiParsedData } from '../types';
 import { SendTripEmailModal } from './SendTripEmailModal';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
+import { useTripRulesModal } from '../hooks/useTripRulesModal';
 import { parseInputToNumber, formatInputDisplay } from '../utils/currency';
 import { generateUUID } from '../utils/uuid';
 import { MoneyInput } from './MoneyInput';
 
 export const GlobalSettingsModal: React.FC = () => {
   const { isSettingsOpen, setIsSettingsOpen, settings, updateSettings, deleteTrip, trips, activeTripId } = usePlanner();
+  const { save } = useTripRulesModal(isSettingsOpen);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [showEmailModal, setShowEmailModal] = useState(false);
 
@@ -127,30 +129,30 @@ export const GlobalSettingsModal: React.FC = () => {
       const effectiveOutFlex = isFlexibleDates ? 'Data Não Definida' : 'Datas Fixas';
       const effectiveInFlex = isFlexibleDates ? 'Data Não Definida' : 'Datas Fixas';
 
-      const res = await updateSettings({
-        startDate: effectiveStartDate,
-        returnDate: calculatedReturnDate,
-        durationDays: Number(durationDays),
-        travelersCount: currentTravelers.length,
-        dollarRate: Number(dollarRate),
-        tripName: tripName.trim() || settings.tripName,
-        destination: destination.trim() || settings.destination,
-        isFlexibleDates,
-        flexibleOutboundStart: effectiveOutStart,
-        flexibleOutboundEnd: effectiveOutEnd,
-        flexibleInboundStart: effectiveInStart,
-        flexibleInboundEnd: effectiveInEnd,
-        outboundFlexibility: effectiveOutFlex,
-        inboundFlexibility: effectiveInFlex,
-        flexibilityNotes: isFlexibleDates ? 'Viagem com data não definida' : flexibilityNotes,
-        travelers: currentTravelers,
+      await save(async () => {
+        const res = await updateSettings({
+          startDate: effectiveStartDate,
+          returnDate: calculatedReturnDate,
+          durationDays: Number(durationDays),
+          travelersCount: currentTravelers.length,
+          dollarRate: Number(dollarRate),
+          tripName: tripName.trim() || settings.tripName,
+          destination: destination.trim() || settings.destination,
+          isFlexibleDates,
+          flexibleOutboundStart: effectiveOutStart,
+          flexibleOutboundEnd: effectiveOutEnd,
+          flexibleInboundStart: effectiveInStart,
+          flexibleInboundEnd: effectiveInEnd,
+          outboundFlexibility: effectiveOutFlex,
+          inboundFlexibility: effectiveInFlex,
+          flexibilityNotes: isFlexibleDates ? 'Viagem com data não definida' : flexibilityNotes,
+          travelers: currentTravelers,
+        });
+        if (res && res.success === false) {
+          throw new Error(res.error || 'Erro ao salvar parâmetros da viagem no Supabase.');
+        }
+        return { success: true };
       });
-
-      if (res && res.success === false) {
-        setErrorMsg(res.error || 'Erro ao salvar parâmetros da viagem no Supabase.');
-        setIsSaving(false);
-        return;
-      }
 
       setIsSettingsOpen(false);
     } catch (err: any) {

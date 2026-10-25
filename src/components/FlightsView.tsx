@@ -32,6 +32,7 @@ import { FlightSegment, FlightPaymentStatus, FlightOperationalStatus } from '../
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { parseInputToNumber, formatInputDisplay } from '../utils/currency';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
+import { useTripRulesModal } from '../hooks/useTripRulesModal';
 import { MoneyInput } from './MoneyInput';
 import { LogisticsCardHeader } from './LogisticsCardHeader';
 import { PaymentSection } from './PaymentSection';

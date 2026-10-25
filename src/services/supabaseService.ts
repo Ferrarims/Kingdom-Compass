@@ -4,6 +4,7 @@ import { ensurePreparationDocsForTravelers } from '../utils/prepDocs';
 import { deduplicateHourlySchedule, syncAllEventsToHourlySchedule, ensureHourlyScheduleItems, compareScheduleItemOrder } from '../utils/parkScheduleUtils';
 import { normalizeAttractionName } from '../utils/attractionUtils';
 import { validatePartialPayment } from '../utils/currency';
+import { hydrateHourlySchedule, preserveHourlyMetadata, stableJson } from '../utils/itineraryMetadata';
 import {
   Trip,
   ExpenseItem,
@@ -604,7 +605,7 @@ export function mapDbToItineraryDay(row: any): ItineraryDay {
     afternoon: row.afternoon || { notes: '', where: '', dining: '' },
     night: row.night || { notes: '', where: '', dining: '' },
     generalNotes: row.general_notes || '',
-    hourlySchedule: deduplicateHourlySchedule(parsedHourly),
+    hourlySchedule: parsedHourly,
   };
 }
 
@@ -1278,10 +1279,131 @@ export interface FetchTripsResult {
  * Service API Methods
  */
 
+async function preserveTripHourlyMetadata(trip: Trip): Promise<Trip> {
+  const stored = new Map<string, HourlyScheduleItem>();
+  for (let offset = 0; ; offset += 500) {
+    const { data, error } = await supabase.from('itinerary_days')
+      .select('id,hourly_schedule').eq('trip_id', trip.id)
+      .order('id', { ascending: true }).range(offset, offset + 499);
+    if (error) throw new Error('Não foi possível ler metadados existentes: ' + error.message);
+    if (!Array.isArray(data)) throw new Error('Leitura de dias inválida.');
+    for (const day of data) {
+      const items = typeof day.hourly_schedule === 'string'
+        ? JSON.parse(day.hourly_schedule) : day.hourly_schedule;
+      if (items != null && !Array.isArray(items)) throw new Error('Cronograma JSON inválido.');
+      for (const item of items ?? []) {
+        if (stored.has(item.id)) throw new Error('ID repetido entre dias: ' + item.id);
+        stored.set(item.id, item);
+      }
+    }
+    if (data.length < 500) break;
+  }
+  return {
+    ...trip,
+    rawDays: (trip.rawDays ?? []).map(day => ({
+      ...day,
+      hourlySchedule: (day.hourlySchedule ?? []).map(item =>
+        preserveHourlyMetadata(item, stored.get(item.id))),
+    })),
+  };
+}
+
 export const SupabaseService = {
   /**
    * Fetch all trips summary with robust error inspection on all queries (travelers, trips, and collections)
    */
+  async fetchTripById(tripId: string): Promise<Trip | null> {
+    const result = await this.fetchAllTrips();
+    if (!result) throw new Error('A recarga da viagem falhou.');
+    if (result.errors.length) {
+      throw new Error('Falha ao recarregar fontes: ' +
+        result.errors.map(error => error.table + ': ' + error.message).join('; '));
+    }
+    return result.trips.find(trip => trip.id === tripId) ?? null;
+  },
+
+  async saveTripParameters(
+    trip: Trip, updates: Partial<Trip>,
+  ): Promise<{ success: boolean; error?: string }> {
+    let tripWritten = false;
+    try {
+      const mapped = mapTripToDb(trip);
+      const columns: Record<string, string> = {
+        tripName: 'trip_name', destination: 'destination', startDate: 'start_date',
+        returnDate: 'return_date', durationDays: 'duration_days',
+        isFlexibleDates: 'is_flexible_dates',
+        flexibleOutboundStart: 'flexible_outbound_start',
+        flexibleOutboundEnd: 'flexible_outbound_end',
+        flexibleInboundStart: 'flexible_inbound_start',
+        flexibleInboundEnd: 'flexible_inbound_end',
+        outboundFlexibility: 'outbound_flexibility', inboundFlexibility: 'inbound_flexibility',
+        flexibilityNotes: 'flexibility_notes', dollarRate: 'dollar_rate',
+        totalBudgetGoalBRL: 'total_budget_goal_brl', travelersCount: 'travelers_count',
+      };
+      const payload: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      for (const [field, column] of Object.entries(columns)) {
+        if (Object.prototype.hasOwnProperty.call(updates, field)) payload[column] = mapped[column];
+      }
+      if ((updates.startDate !== undefined || updates.durationDays !== undefined) &&
+        updates.returnDate === undefined) {
+        payload.return_date = calculateDateOffset(mapped.start_date, Number(mapped.duration_days) - 1);
+      }
+      const people = updates.travelers;
+      const peopleRows = people?.map(person => mapTravelerToDb(person, trip.id));
+      if (peopleRows) {
+        if (!peopleRows.length) throw new Error('A viagem precisa de pelo menos um viajante.');
+        if (new Set(peopleRows.map(row => row.id)).size !== peopleRows.length) {
+          throw new Error('Existem viajantes com o mesmo ID.');
+        }
+        payload.travelers_count = peopleRows.length;
+      }
+      const result = await supabase.from('trips').update(payload)
+        .eq('id', trip.id).select('id');
+      if (result.error || result.data?.length !== 1) {
+        throw new Error(result.error?.message || 'A viagem não foi atualizada.');
+      }
+      tripWritten = true;
+      if (peopleRows) {
+        const upserted = await supabase.from('travelers').upsert(peopleRows, { onConflict: 'id' }).select('id');
+        if (upserted.error || upserted.data?.length !== peopleRows.length) {
+          throw new Error(upserted.error?.message || 'Não foi possível gravar todos os viajantes.');
+        }
+        const current = await supabase.from('travelers').select('id').eq('trip_id', trip.id);
+        if (current.error || !current.data) throw new Error(current.error?.message || 'Falha ao conferir viajantes.');
+        const expected = new Set(peopleRows.map(row => row.id));
+        const removed = current.data.map(row => row.id).filter(id => !expected.has(id));
+        if (removed.length) {
+          const deletion = await supabase.from('travelers').delete()
+            .eq('trip_id', trip.id).in('id', removed).select('id');
+          if (deletion.error || deletion.data?.length !== removed.length) {
+            throw new Error(deletion.error?.message || 'Não foi possível remover os viajantes retirados do formulário.');
+          }
+        }
+        const check = await supabase.from('travelers').select('*').eq('trip_id', trip.id);
+        const checkedPeople = check.data;
+        if (check.error || !checkedPeople || checkedPeople.length !== peopleRows.length ||
+          peopleRows.some(wanted => !checkedPeople.some(actual =>
+            actual.id === wanted.id && Object.entries(wanted).every(([key, value]) =>
+              key === 'updated_at' || stableJson(actual[key] ?? null) === stableJson(value ?? null))))) {
+          throw new Error(check.error?.message || 'Viajantes gravados diferem do formulário.');
+        }
+      }
+      const check = await supabase.from('trips').select('*').eq('id', trip.id).single();
+      const checkedTrip = check.data;
+      if (check.error || !checkedTrip || Object.entries(payload).some(([key, value]) =>
+        key !== 'updated_at' && stableJson(checkedTrip[key] ?? null) !== stableJson(value ?? null))) {
+        throw new Error(check.error?.message || 'Parâmetros gravados diferem do formulário.');
+      }
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        success: false,
+        error: (tripWritten ? 'Os parâmetros podem ter sido gravados parcialmente. ' : '') + message,
+      };
+    }
+  },
+
   async fetchAllTrips(): Promise<FetchTripsResult | null> {
     try {
       const { data: tripsData, error: tripsErr } = await supabase
@@ -1673,11 +1795,10 @@ export const SupabaseService = {
               baseDay.parkBooking = pb;
             }
             // Leitura por dia: A agenda de cada dia é reconstruída com base nos registros confirmados daquele dia.
-            if (dedicatedHourly.length > 0) {
-              baseDay.hourlySchedule = dedicatedHourly;
-            } else {
-              baseDay.hourlySchedule = baseDay.hourlySchedule || [];
-            }
+            baseDay.hourlySchedule = hydrateHourlySchedule(
+              baseDay.hourlySchedule || [],
+              dedicatedHourly,
+            );
             rawDays.push(baseDay);
           } else {
             let title = 'Sem Parque';
@@ -1708,7 +1829,7 @@ export const SupabaseService = {
         // Ao carregar do banco, ler e exibir estritamente os horários já persistidos.
         // Não gerar novos horários nem sobrescrever/reconciliar na leitura.
         rawDays.forEach((rd) => {
-          rd.hourlySchedule = ensureHourlyScheduleItems(rd.hourlySchedule || []);
+          rd.hourlySchedule = rd.hourlySchedule || [];
         });
 
         const rawDocs = (docData || []).map(mapDbToPrepDoc);
@@ -1830,6 +1951,7 @@ export const SupabaseService = {
     trip: Trip
   ): Promise<{ success: boolean; error?: string; tablesExist?: boolean; tableErrors?: Array<{ table: string; operation: string; error: string }> }> {
     try {
+      trip = await preserveTripHourlyMetadata(trip);
       const tripDb = mapTripToDb(trip);
       const { error: tripErr } = await supabase.from('trips').upsert(tripDb, { onConflict: 'id' });
       if (tripErr) {
@@ -1893,15 +2015,15 @@ export const SupabaseService = {
       // Ensure rawDays have normalized dates and deduplicated schedules before syncing
       const startDate = sanitizeDate(trip.startDate) || '2026-12-27';
       const durationDays = Math.max(1, trip.durationDays || (trip.rawDays?.length || 16));
-      const normalizedRawDays = (trip.rawDays || []).map((d, index) => {
-        const dayNum = d.dayNumber || index + 1;
-        const realDate = calculateDateOffset(startDate, dayNum - 1);
-        const deduplicatedSchedule = deduplicateHourlySchedule(d.hourlySchedule || []);
+      const normalizedRawDays = (trip.rawDays || []).map((day, index) => {
+        const realDate = sanitizeDate(day.date);
+        if (!realDate) throw new Error('Dia sem data explícita: ' + day.id);
         return {
-          ...d,
-          dayNumber: dayNum,
+          ...day,
+          dayNumber: day.dayNumber || index + 1,
           date: realDate,
-          hourlySchedule: deduplicatedSchedule,
+          // A deduplicação por função pertence ao motor central.
+          hourlySchedule: [...(day.hourlySchedule || [])],
         };
       });
       trip.rawDays = normalizedRawDays;

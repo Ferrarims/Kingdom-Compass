@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { usePlanner, calculateDateOffset } from '../context/PlannerContext';
 import { CarRentalBooking } from '../types';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
+import { useTripRulesModal } from '../hooks/useTripRulesModal';
 import { TravelerSelector } from './TravelerSelector';
 import { PaymentSection, PaymentStatusType } from './PaymentSection';
 import { LogisticsCardHeader } from './LogisticsCardHeader';
@@ -207,9 +208,11 @@ export const TransportationView: React.FC = () => {
     setIsModalOpen(true);
   };
 
+  const { save, checking, saving: rulesSaving, error: rulesError } = useTripRulesModal(isModalOpen);
+
   const handleSubmitModal = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (rentalFormSubmitLockRef.current || isSaving) return;
+    if (rentalFormSubmitLockRef.current || isSaving || rulesSaving) return;
 
     if (!formData.company?.trim()) {
       setValidationError('Por favor, informe a empresa locadora.');
@@ -262,16 +265,18 @@ export const TransportationView: React.FC = () => {
         dropoffLocation: cleanAddressString(formData.dropoffLocation),
         paymentStatus: formData.paymentStatus || 'Não informado',
       };
-      let res: { success: boolean; error?: string } | undefined;
-      if (editingRental) {
-        res = await updateCarRental(editingRental.id, cleanedData);
-      } else {
-        res = await addCarRental(cleanedData);
-      }
-      if (res && !res.success) {
-        setValidationError(res.error || 'Erro ao salvar aluguel de veículo.');
-        return;
-      }
+      await save(async () => {
+        let res: { success: boolean; error?: string } | undefined;
+        if (editingRental) {
+          res = await updateCarRental(editingRental.id, cleanedData);
+        } else {
+          res = await addCarRental(cleanedData);
+        }
+        if (res && !res.success) {
+          throw new Error(res.error || 'Erro ao salvar aluguel de veículo.');
+        }
+        return res;
+      });
       setIsModalOpen(false);
     } catch (err: any) {
       setValidationError(`Erro inesperado ao salvar aluguel de veículo: ${err?.message || 'Erro desconhecido'}`);

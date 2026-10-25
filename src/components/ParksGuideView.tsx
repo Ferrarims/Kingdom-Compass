@@ -74,6 +74,7 @@ export const ParksGuideView: React.FC = () => {
     toggleAttractionSelection,
     openOverviewModal,
     expenses = [],
+    evaluateAndCorrectAllItems,
   } = usePlanner();
 
   const dollarRate = settings.dollarRate || 5.75;
@@ -1994,8 +1995,9 @@ export const ParksGuideView: React.FC = () => {
         }}
         sourceDay={swapSourceDay}
         allDays={itineraryDays}
-        onConfirmSwap={(sourceDayNum, targetDayNum) => {
+        onConfirmSwap={async (sourceDayNum, targetDayNum) => {
           swapOrMoveParkDay(sourceDayNum, targetDayNum);
+          if (activeTripId) await evaluateAndCorrectAllItems(activeTripId);
         }}
       />
 
