@@ -1772,16 +1772,21 @@ export interface ParkScheduleResult {
 }
 
 /**
- * Converte um item de FastPass/Lightning Lane para um item da tabela hora a hora do roteiro.
+ * Converte um agendamento individual de atração dentro de um FastPass para um item do roteiro hora a hora.
  */
-export function convertFastPassToHourly(
+export function convertFastPassReservationToHourly(
   fp: FastPassItem,
+  res: { id?: string; attractionName?: string; timeWindow?: string; tier?: string; status?: string; reservationConfirmationCode?: string; notes?: string },
   parkName: string,
   parkBookingId: string
-): HourlyScheduleItem {
+): HourlyScheduleItem | null {
+  const attractionName = (res.attractionName || '').trim();
+  if (!attractionName) return null;
+
   let time = '10:00';
-  if (fp.timeWindow) {
-    const match = fp.timeWindow.match(/(\d{1,2}:\d{2})/);
+  const windowToUse = res.timeWindow || fp.timeWindow || '';
+  if (windowToUse) {
+    const match = windowToUse.match(/(\d{1,2}:\d{2})/);
     if (match) {
       const parts = match[1].split(':');
       time = `${parts[0].padStart(2, '0')}:${parts[1]}`;
@@ -1811,31 +1816,60 @@ export function convertFastPassToHourly(
   }
 
   const details: string[] = [];
-  if (fp.timeWindow) details.push(`Janela: ${fp.timeWindow}`);
+  if (windowToUse) details.push(`Janela: ${windowToUse}`);
   if (fp.type) details.push(`Serviço: ${fp.type}`);
-  if (fp.tier) details.push(`Tier: ${fp.tier}`);
+  if (res.tier || fp.tier) details.push(`Tier: ${res.tier || fp.tier}`);
+  if (res.reservationConfirmationCode || fp.reservationConfirmationCode) {
+    details.push(`Voucher: #${res.reservationConfirmationCode || fp.reservationConfirmationCode}`);
+  }
   if (fp.partyMembers) details.push(`Grupo: ${fp.partyMembers}`);
-  if (fp.notes) details.push(fp.notes);
+  if (res.notes || fp.notes) details.push((res.notes || fp.notes)!);
 
-  const rawAttraction = (fp.attractionName || 'Atração Agendada').trim();
   let title: string;
-  if (rawAttraction.startsWith('⚡')) {
-    title = rawAttraction.replace(/⚡\s*Fast\s*Pass:/gi, `⚡ ${serviceLabel}:`).replace(/⚡\s*FastPass:/gi, `⚡ ${serviceLabel}:`);
+  if (attractionName.startsWith('⚡')) {
+    title = attractionName.replace(/⚡\s*Fast\s*Pass:/gi, `⚡ ${serviceLabel}:`).replace(/⚡\s*FastPass:/gi, `⚡ ${serviceLabel}:`);
   } else {
-    title = `⚡ ${serviceLabel}: ${rawAttraction}`;
+    title = `⚡ ${serviceLabel}: ${attractionName}`;
   }
 
   return {
-    id: `auto-fp-${fp.id || Math.random().toString(36).substring(2, 8)}`,
+    id: `auto-fp-${res.id || fp.id || Math.random().toString(36).substring(2, 8)}`,
     time,
     title,
     location: parkName,
     category: 'park',
-    completed: fp.status === 'Concluído',
+    completed: res.status === 'Concluído' || fp.status === 'Concluído',
     notes: details.join(' • '),
     sourceType: 'fastpass',
     sourceId: fp.id || parkBookingId,
   };
+}
+
+/**
+ * Converte um item de FastPass/Lightning Lane para um item da tabela hora a hora do roteiro.
+ */
+export function convertFastPassToHourly(
+  fp: FastPassItem,
+  parkName: string,
+  parkBookingId: string
+): HourlyScheduleItem | null {
+  const rawAttraction = (fp.attractionName || '').trim();
+  if (!rawAttraction) return null;
+
+  return convertFastPassReservationToHourly(
+    fp,
+    {
+      id: fp.id,
+      attractionName: rawAttraction,
+      timeWindow: fp.timeWindow,
+      tier: fp.tier,
+      status: fp.status,
+      reservationConfirmationCode: fp.reservationConfirmationCode,
+      notes: fp.notes,
+    },
+    parkName,
+    parkBookingId
+  );
 }
 
 /**
@@ -2456,8 +2490,17 @@ export function generateParkScheduleResult(
   // Adicionar eventos de FastPass, Almoço/Refeições e Shows/Paradas à agenda hora a hora
   if (effectiveBookingEvents) {
     fastPasses.forEach((fp: FastPassItem) => {
-      if (fp && fp.attractionName) {
-        currentDayGenerated.push(convertFastPassToHourly(fp, resolvedParkDisplayName, resolvedPbSourceId));
+      // O roteiro horário só pode criar atividades a partir dos itens de attraction_reservations quando reservation_required estiver ligado
+      if (fp && fp.reservationRequired !== false) {
+        if (fp.attractionReservations && fp.attractionReservations.length > 0) {
+          fp.attractionReservations.forEach((res) => {
+            const item = convertFastPassReservationToHourly(fp, res, resolvedParkDisplayName, resolvedPbSourceId);
+            if (item) currentDayGenerated.push(item);
+          });
+        } else if (fp.attractionName && fp.attractionName.trim()) {
+          const item = convertFastPassToHourly(fp, resolvedParkDisplayName, resolvedPbSourceId);
+          if (item) currentDayGenerated.push(item);
+        }
       }
     });
 

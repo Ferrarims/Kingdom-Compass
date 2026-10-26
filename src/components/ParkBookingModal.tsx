@@ -257,13 +257,12 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
 
   // FastPass Mini-Form
   const [editingFpId, setEditingFpId] = useState<string | null>(null);
-  const [fpName, setFpName] = useState('');
-  const [fpTime, setFpTime] = useState('10:00 - 11:00');
   const [fpType, setFpType] = useState<FastPassItem['type']>('Lightning Lane Multi Pass');
   const [fpTier, setFpTier] = useState<FastPassItem['tier']>('Tier 1');
   const [fpNotes, setFpNotes] = useState('');
   const [fpChargeMode, setFpChargeMode] = useState<FastPassChargeMode>('paid');
-  const [fpCourtesyProvider, setFpCourtesyProvider] = useState<string>('');
+  const [courtesyAccSelection, setCourtesyAccSelection] = useState<string>('');
+  const [customCourtesyProvider, setCustomCourtesyProvider] = useState<string>('');
   const [fpCostUSD, setFpCostUSD] = useState<number | null>(0);
   const [fpCostBRL, setFpCostBRL] = useState<number | null>(0);
   const [fpPaymentStatus, setFpPaymentStatus] = useState<NonNullable<FastPassItem['paymentStatus']>>('Pendente');
@@ -272,10 +271,18 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
   const [fpPayerId, setFpPayerId] = useState<string>('all');
   const [fpTravelerIds, setFpTravelerIds] = useState<string[]>(['all']);
   const [fpReservationRequired, setFpReservationRequired] = useState<boolean>(false);
-  const [fpReservationStatus, setFpReservationStatus] = useState<FastPassReservationStatus>('Não necessária');
-  const [fpReservationCode, setFpReservationCode] = useState<string>('');
   const [isFpChargeModeManuallyEdited, setIsFpChargeModeManuallyEdited] = useState<boolean>(false);
   const [isFpReservationRequiredManuallyEdited, setIsFpReservationRequiredManuallyEdited] = useState<boolean>(false);
+
+  // Inner FastPass Attraction Reservations State
+  const [fpAttractionReservations, setFpAttractionReservations] = useState<FastPassItem['attractionReservations']>([]);
+  const [editingResId, setEditingResId] = useState<string | null>(null);
+  const [resAttractionName, setResAttractionName] = useState<string>('');
+  const [resTimeWindow, setResTimeWindow] = useState<string>('10:00 - 11:00');
+  const [resTier, setResTier] = useState<string>('Tier 1');
+  const [resStatus, setResStatus] = useState<FastPassReservationStatus>('Confirmada');
+  const [resCode, setResCode] = useState<string>('');
+  const [resNotes, setResNotes] = useState<string>('');
 
   // Dining Mini-Form
   const [editingDinId, setEditingDinId] = useState<string | null>(null);
@@ -517,13 +524,17 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       setDiningList(existing?.diningReservations ? [...existing.diningReservations] : []);
       setShowsList(existing?.showsAndParades ? [...existing.showsAndParades] : []);
       setEditingFpId(null);
-      setFpName('');
       setFpNotes('');
-      setFpTime('10:00 - 11:00');
       setFpType('Lightning Lane Multi Pass');
       setFpTier('Tier 1');
       setFpChargeMode('paid');
-      setFpCourtesyProvider(activeAccommodation?.name || '');
+      if (accommodations.length > 0) {
+        setCourtesyAccSelection(accommodations[0].id);
+        setCustomCourtesyProvider('');
+      } else {
+        setCourtesyAccSelection('other');
+        setCustomCourtesyProvider(activeAccommodation?.name || activeAccommodation?.hotelName || '');
+      }
       setFpCostUSD(0);
       setFpCostBRL(0);
       setFpPaymentStatus('Pendente');
@@ -532,8 +543,14 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       setFpPayerId('all');
       setFpTravelerIds(['all']);
       setFpReservationRequired(false);
-      setFpReservationStatus('Não necessária');
-      setFpReservationCode('');
+      setFpAttractionReservations([]);
+      setEditingResId(null);
+      setResAttractionName('');
+      setResTimeWindow('10:00 - 11:00');
+      setResTier('Tier 1');
+      setResStatus('Confirmada');
+      setResCode('');
+      setResNotes('');
       setIsFpChargeModeManuallyEdited(false);
       setIsFpReservationRequiredManuallyEdited(false);
       setEditingDinId(null);
@@ -882,19 +899,25 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
 
   const resetFpForm = () => {
     setEditingFpId(null);
-    setFpName('');
-    setFpTime('10:00 - 11:00');
     const defaultType: FastPassItem['type'] = 'Lightning Lane Multi Pass';
     setFpType(defaultType);
     setFpTier('Tier 1');
     setFpNotes('');
 
     const rule = typeRules[defaultType];
-    const defaultCharge: FastPassChargeMode = (rule?.default_charge_mode || rule?.defaultChargeMode) || 'paid';
+    const defaultCharge: FastPassChargeMode = (rule?.default_charge_mode || rule?.defaultChargeMode) as FastPassChargeMode || 'paid';
     const defaultReq: boolean = rule ? Boolean(rule.default_reservation_required ?? rule.defaultReservationRequired) : false;
 
     setFpChargeMode(defaultCharge);
-    setFpCourtesyProvider(activeAccommodation?.name || activeAccommodation?.hotelName || '');
+
+    if (accommodations.length > 0) {
+      setCourtesyAccSelection(accommodations[0].id);
+      setCustomCourtesyProvider('');
+    } else {
+      setCourtesyAccSelection('other');
+      setCustomCourtesyProvider(activeAccommodation?.name || activeAccommodation?.hotelName || '');
+    }
+
     setFpCostUSD(0);
     setFpCostBRL(0);
     setFpPaymentStatus('Pendente');
@@ -903,8 +926,16 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     setFpPayerId('all');
     setFpTravelerIds(['all']);
     setFpReservationRequired(defaultReq);
-    setFpReservationStatus(defaultReq ? 'Pendente' : 'Não necessária');
-    setFpReservationCode('');
+
+    setFpAttractionReservations([]);
+    setEditingResId(null);
+    setResAttractionName('');
+    setResTimeWindow('10:00 - 11:00');
+    setResTier('Tier 1');
+    setResStatus('Confirmada');
+    setResCode('');
+    setResNotes('');
+
     setIsFpChargeModeManuallyEdited(false);
     setIsFpReservationRequiredManuallyEdited(false);
   };
@@ -921,12 +952,16 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       ? Boolean(rule.default_reservation_required ?? rule.defaultReservationRequired)
       : false;
 
-    // Se o usuário ainda não editou manualmente o modo de cobrança, carrega da regra
     if (!isFpChargeModeManuallyEdited) {
       setFpChargeMode(targetChargeMode);
       if (targetChargeMode === 'hotel_courtesy') {
-        const hotelName = activeAccommodation?.name || activeAccommodation?.hotelName || '';
-        if (hotelName) setFpCourtesyProvider(hotelName);
+        if (accommodations.length > 0) {
+          setCourtesyAccSelection(accommodations[0].id);
+          setCustomCourtesyProvider('');
+        } else {
+          setCourtesyAccSelection('other');
+          setCustomCourtesyProvider(activeAccommodation?.name || activeAccommodation?.hotelName || '');
+        }
       }
       if (targetChargeMode !== 'paid') {
         setFpCostUSD(0);
@@ -934,10 +969,8 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       }
     }
 
-    // Se o usuário ainda não editou manualmente a reserva, carrega da regra
     if (!isFpReservationRequiredManuallyEdited) {
       setFpReservationRequired(targetResRequired);
-      setFpReservationStatus(targetResRequired ? 'Pendente' : 'Não necessária');
     }
   };
 
@@ -945,9 +978,8 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     setIsFpChargeModeManuallyEdited(true);
     setFpChargeMode(mode);
     if (mode === 'hotel_courtesy') {
-      const hotelName = activeAccommodation?.name || activeAccommodation?.hotelName || '';
-      if (!fpCourtesyProvider && hotelName) {
-        setFpCourtesyProvider(hotelName);
+      if (!courtesyAccSelection && accommodations.length > 0) {
+        setCourtesyAccSelection(accommodations[0].id);
       }
       setFpCostUSD(0);
       setFpCostBRL(0);
@@ -960,26 +992,30 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
   const handleToggleReservationRequired = (required: boolean) => {
     setIsFpReservationRequiredManuallyEdited(true);
     setFpReservationRequired(required);
-    if (required) {
-      if (fpReservationStatus === 'Não necessária') {
-        setFpReservationStatus('Pendente');
-      }
-    } else {
-      setFpReservationStatus('Não necessária');
-    }
   };
 
   const handleStartEditFastPass = (item: FastPassItem) => {
     setEditingFpId(item.id);
-    setFpName(item.attractionName || '');
-    setFpTime(item.timeWindow || '10:00 - 11:00');
     setFpType(item.type || 'Lightning Lane Multi Pass');
     setFpTier(item.tier || 'Tier 1');
     setFpNotes(item.notes || '');
 
     const mode = item.chargeMode || 'paid';
     setFpChargeMode(mode);
-    setFpCourtesyProvider(item.courtesyProvider || '');
+
+    const provider = item.courtesyProvider || '';
+    const matchedAcc = accommodations.find((a) => (a.name || a.hotelName || '').trim() === provider.trim());
+    if (matchedAcc) {
+      setCourtesyAccSelection(matchedAcc.id);
+      setCustomCourtesyProvider('');
+    } else if (accommodations.length > 0 && !provider) {
+      setCourtesyAccSelection(accommodations[0].id);
+      setCustomCourtesyProvider('');
+    } else {
+      setCourtesyAccSelection('other');
+      setCustomCourtesyProvider(provider);
+    }
+
     setFpCostUSD(item.costUSD ?? 0);
     setFpCostBRL(item.costBRL ?? (item.costUSD ? Math.round(item.costUSD * dollarRate * 100) / 100 : 0));
     setFpPaymentStatus(item.paymentStatus || 'Pendente');
@@ -990,8 +1026,31 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
 
     const isReq = item.reservationRequired ?? (item.reservationStatus !== 'Não necessária');
     setFpReservationRequired(isReq);
-    setFpReservationStatus(item.reservationStatus || (isReq ? 'Pendente' : 'Não necessária'));
-    setFpReservationCode(item.reservationConfirmationCode || '');
+
+    let reservations = item.attractionReservations ? [...item.attractionReservations] : [];
+    if (reservations.length === 0 && item.attractionName) {
+      reservations = [
+        {
+          id: `res-legacy-${Date.now()}`,
+          attractionName: item.attractionName,
+          timeWindow: item.timeWindow || '10:00 - 11:00',
+          tier: item.tier,
+          status: item.status || 'Agendado',
+          reservationStatus: item.reservationStatus || 'Confirmada',
+          reservationConfirmationCode: item.reservationConfirmationCode,
+          notes: item.notes,
+        },
+      ];
+    }
+    setFpAttractionReservations(reservations);
+
+    setEditingResId(null);
+    setResAttractionName('');
+    setResTimeWindow('10:00 - 11:00');
+    setResTier('Tier 1');
+    setResStatus('Confirmada');
+    setResCode('');
+    setResNotes('');
 
     setIsFpChargeModeManuallyEdited(true);
     setIsFpReservationRequiredManuallyEdited(true);
@@ -1002,8 +1061,6 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
   };
 
   const handleAddFastPass = () => {
-    if (!fpName.trim()) return;
-
     const isPaid = fpChargeMode === 'paid';
     const effectiveCostUSD = isPaid ? (fpCostUSD || 0) : 0;
     const effectiveCostBRL = isPaid ? (fpCostBRL || (effectiveCostUSD * dollarRate)) : 0;
@@ -1013,14 +1070,24 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     const effectivePayerId = isPaid ? (fpPayerId || 'all') : 'all';
     const effectiveTravelerIds = fpTravelerIds && fpTravelerIds.length > 0 ? fpTravelerIds : ['all'];
 
+    let resolvedCourtesyProvider: string | undefined = undefined;
+    if (fpChargeMode === 'hotel_courtesy') {
+      if (courtesyAccSelection && courtesyAccSelection !== 'other') {
+        const selectedAcc = accommodations.find((a) => a.id === courtesyAccSelection);
+        resolvedCourtesyProvider = selectedAcc ? (selectedAcc.name || selectedAcc.hotelName || '') : customCourtesyProvider.trim();
+      } else {
+        resolvedCourtesyProvider = customCourtesyProvider.trim() || undefined;
+      }
+    }
+
     const effectiveResStatus: FastPassReservationStatus = fpReservationRequired
-      ? (fpReservationStatus === 'Não necessária' ? 'Pendente' : fpReservationStatus)
+      ? (fpAttractionReservations.length > 0 ? 'Confirmada' : 'Pendente')
       : 'Não necessária';
+
+    const firstRes = fpAttractionReservations[0];
 
     const itemData: FastPassItem = {
       id: editingFpId || `fp-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      attractionName: fpName.trim(),
-      timeWindow: fpTime.trim(),
       type: fpType,
       tier: fpTier,
       status: editingFpId
@@ -1028,7 +1095,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
         : 'Agendado',
       notes: fpNotes.trim() || undefined,
       chargeMode: fpChargeMode,
-      courtesyProvider: fpChargeMode === 'hotel_courtesy' ? (fpCourtesyProvider.trim() || undefined) : undefined,
+      courtesyProvider: resolvedCourtesyProvider,
       costUSD: effectiveCostUSD,
       costBRL: effectiveCostBRL,
       paymentStatus: effectivePaymentStatus,
@@ -1038,7 +1105,10 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       travelerIds: effectiveTravelerIds,
       reservationRequired: fpReservationRequired,
       reservationStatus: effectiveResStatus,
-      reservationConfirmationCode: fpReservationCode.trim() || undefined,
+      attractionReservations: fpAttractionReservations,
+      attractionName: fpAttractionReservations.length > 0 ? firstRes.attractionName : undefined,
+      timeWindow: fpAttractionReservations.length > 0 ? firstRes.timeWindow : undefined,
+      reservationConfirmationCode: fpAttractionReservations.find((r) => r.reservationConfirmationCode)?.reservationConfirmationCode,
     };
 
     if (editingFpId) {
@@ -1049,6 +1119,60 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     }
 
     resetFpForm();
+  };
+
+  const handleAddAttractionReservation = () => {
+    if (!resAttractionName.trim()) return;
+
+    const newRes = {
+      id: editingResId || `res-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      attractionName: resAttractionName.trim(),
+      timeWindow: resTimeWindow.trim() || '10:00 - 11:00',
+      tier: resTier,
+      status: 'Agendado',
+      reservationStatus: resStatus,
+      reservationConfirmationCode: resCode.trim() || undefined,
+      notes: resNotes.trim() || undefined,
+    };
+
+    if (editingResId) {
+      setFpAttractionReservations(fpAttractionReservations.map((r) => (r.id === editingResId ? newRes : r)));
+      setEditingResId(null);
+    } else {
+      setFpAttractionReservations([...fpAttractionReservations, newRes]);
+    }
+
+    setResAttractionName('');
+    setResTimeWindow('10:00 - 11:00');
+    setResTier('Tier 1');
+    setResStatus('Confirmada');
+    setResCode('');
+    setResNotes('');
+  };
+
+  const handleStartEditAttractionReservation = (res: FastPassItem['attractionReservations'][0]) => {
+    setEditingResId(res.id);
+    setResAttractionName(res.attractionName);
+    setResTimeWindow(res.timeWindow || '10:00 - 11:00');
+    setResTier(res.tier || 'Tier 1');
+    setResStatus((res.reservationStatus as FastPassReservationStatus) || 'Confirmada');
+    setResCode(res.reservationConfirmationCode || '');
+    setResNotes(res.notes || '');
+  };
+
+  const handleCancelEditAttractionReservation = () => {
+    setEditingResId(null);
+    setResAttractionName('');
+    setResTimeWindow('10:00 - 11:00');
+    setResCode('');
+    setResNotes('');
+  };
+
+  const handleRemoveAttractionReservation = (id: string) => {
+    if (editingResId === id) {
+      handleCancelEditAttractionReservation();
+    }
+    setFpAttractionReservations(fpAttractionReservations.filter((r) => r.id !== id));
   };
 
   const handleRemoveFastPass = (id: string) => {
@@ -1698,8 +1822,13 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
         const expenseStatus = fp.paymentStatus || 'Pendente';
         const finalPaidBRL = expenseStatus === 'Pago' ? fpParsedBrl : (expenseStatus === 'Parcial' ? (fp.paidValueBRL || 0) : 0);
         const finalPaidUSD = expenseStatus === 'Pago' ? fpParsedUsd : (expenseStatus === 'Parcial' ? ((fp.paidValueBRL || 0) / dollarRate) : 0);
-        const expenseTitle = `Fast Pass: ${fp.attractionName} (${fp.type})`;
-        const expenseNotes = `Parque: ${selectedParkName} (Dia ${activeDay.dayNumber}) | Atração: ${fp.attractionName} | Tipo: ${fp.type}${fp.timeWindow ? ' | Horário: ' + fp.timeWindow : ''}${fp.reservationConfirmationCode ? ' | Confirmação: #' + fp.reservationConfirmationCode : ''}`;
+        const firstAttraction = fp.attractionReservations && fp.attractionReservations.length > 0 ? fp.attractionReservations[0].attractionName : fp.attractionName;
+        const fpDisplayName = firstAttraction || fp.type || 'Fila Rápida';
+        const expenseTitle = `Fast Pass: ${fp.type}${fp.attractionReservations && fp.attractionReservations.length > 0 ? ` (${fp.attractionReservations.length} atrações)` : ''}`;
+        const reservationsText = fp.attractionReservations && fp.attractionReservations.length > 0
+          ? fp.attractionReservations.map((r) => `${r.attractionName}${r.timeWindow ? ' (' + r.timeWindow + ')' : ''}`).join(', ')
+          : (fp.attractionName || 'Sem agendamento individual');
+        const expenseNotes = `Parque: ${selectedParkName} (Dia ${activeDay.dayNumber}) | Tipo: ${fp.type} | Agendamentos: ${reservationsText}`;
 
         let financeRes: { success: boolean; error?: string };
         if (existingExpense) {
@@ -1740,7 +1869,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
         }
 
         if (!financeRes.success) {
-          await rollbackAllSaveState(`Despesa vinculada do Fast Pass "${fp.attractionName}"`, financeRes.error || 'Falha de conexão');
+          await rollbackAllSaveState(`Despesa vinculada do Fast Pass "${fpDisplayName}"`, financeRes.error || 'Falha de conexão');
           return { success: false, error: financeRes.error };
         }
       } else {
@@ -2908,7 +3037,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
                     </span>
                   </div>
                   <p className="text-[11px] text-amber-800 mt-0.5 font-medium">
-                    {fastPasses.length} {fastPasses.length === 1 ? 'atração cadastrada' : 'atrações cadastradas'}
+                    {fastPasses.length} {fastPasses.length === 1 ? 'compra registrada' : 'compras registradas'}
                     {dayFastPassTotals.paidCount > 0 && ` • ${dayFastPassTotals.paidCount} paga(s)`}
                     {dayFastPassTotals.courtesyCount > 0 && ` • ${dayFastPassTotals.courtesyCount} cortesia`}
                     {dayFastPassTotals.freeCount > 0 && ` • ${dayFastPassTotals.freeCount} gratuita(s)`}
@@ -2941,7 +3070,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
               {/* 1. FORMULÁRIO DO FAST PASS */}
               <div className="space-y-4">
                 <label className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
-                  <span>{editingFpId ? '1. Editar Atração com Fila Rápida' : '1. Adicionar Atração com Fila Rápida'}</span>
+                  <span>{editingFpId ? '1. Editar Compra de Fast Pass / Lightning Lane' : '1. Adicionar Compra de Fast Pass / Lightning Lane'}</span>
                   {editingFpId && (
                     <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
                       Modo Edição
@@ -2949,64 +3078,24 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
                   )}
                 </label>
                 <div className="bg-slate-50 p-4 sm:p-5 rounded-2xl border border-slate-200 space-y-5 shadow-2xs">
-                  {/* Nome da Atração */}
+                  {/* Tipo de Passe */}
                   <div className="space-y-1.5">
-                    <label className="text-[11px] font-bold text-slate-700 block">Nome da Atração</label>
-                    <input
-                      type="text"
-                      value={fpName}
-                      onChange={(e) => setFpName(e.target.value)}
-                      placeholder="Ex: Space Mountain ou Flight of Passage"
-                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs focus:ring-2 focus:ring-[#1A2B4C]/20 outline-none"
-                    />
-                    {/* Suggestions */}
-                    {selectedParkGuide?.mustDoAttractions && (
-                      <div className="flex flex-wrap gap-1.5 pt-1">
-                        {selectedParkGuide.mustDoAttractions.slice(0, 4).map((att, i) => (
-                          <button
-                            key={i}
-                            type="button"
-                            onClick={() => setFpName(att)}
-                            className="text-[9px] px-2 py-0.5 rounded-lg bg-white border border-slate-200 text-slate-600 hover:border-slate-400 font-bold transition-colors cursor-pointer"
-                          >
-                            + {att}
-                          </button>
-                        ))}
-                      </div>
-                    )}
+                    <label className="text-[11px] font-bold text-slate-700 block">Tipo do Passe / Passe Comprado</label>
+                    <select
+                      value={fpType}
+                      onChange={(e) => handleFpTypeChange(e.target.value as FastPassItem['type'])}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs cursor-pointer focus:ring-2 focus:ring-[#1A2B4C]/20 outline-none"
+                    >
+                      <option value="Lightning Lane Multi Pass">Lightning Lane Multi Pass</option>
+                      <option value="Lightning Lane Single Pass">Lightning Lane Single Pass</option>
+                      <option value="Universal Express Pass">Universal Express Pass</option>
+                      <option value="Quick Queue">Quick Queue (SeaWorld / Busch)</option>
+                      <option value="Fila Virtual (Virtual Queue)">Fila Virtual (Virtual Queue)</option>
+                      <option value="Outro">Outro</option>
+                    </select>
                   </div>
 
-                  {/* Tipo de Passe e Janela de Horário */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] font-bold text-slate-700 block">Tipo do Passe</label>
-                      <select
-                        value={fpType}
-                        onChange={(e) => handleFpTypeChange(e.target.value as FastPassItem['type'])}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs cursor-pointer focus:ring-2 focus:ring-[#1A2B4C]/20 outline-none"
-                      >
-                        <option value="Lightning Lane Multi Pass">Lightning Lane Multi Pass</option>
-                        <option value="Lightning Lane Single Pass">Lightning Lane Single Pass</option>
-                        <option value="Universal Express Pass">Universal Express Pass</option>
-                        <option value="Quick Queue">Quick Queue (SeaWorld / Busch)</option>
-                        <option value="Fila Virtual (Virtual Queue)">Fila Virtual (Virtual Queue)</option>
-                        <option value="Outro">Outro</option>
-                      </select>
-                    </div>
-
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] font-bold text-slate-700 block">Janela de Horário</label>
-                      <input
-                        type="text"
-                        value={fpTime}
-                        onChange={(e) => setFpTime(e.target.value)}
-                        placeholder="Ex: 10:30 - 11:30"
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs focus:ring-2 focus:ring-[#1A2B4C]/20 outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Modalidade de Cobrança (3 Opções Claras) */}
+                  {/* Modalidade de Cobrança */}
                   <div className="space-y-2 pt-1">
                     <label className="text-[11px] font-bold text-slate-700 block uppercase tracking-wider">
                       Modalidade de Custo
@@ -3062,39 +3151,73 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
                     </div>
                   </div>
 
-                  {/* Campos específicos para Cortesia */}
+                  {/* Cortesia: Seletor de Acomodações da viagem ativa */}
                   {fpChargeMode === 'hotel_courtesy' && (
-                    <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl space-y-2 animate-in fade-in duration-200">
+                    <div className="p-3.5 bg-blue-50/80 border border-blue-200 rounded-xl space-y-2.5 animate-in fade-in duration-200">
                       <label className="text-[11px] font-bold text-blue-900 block">
-                        Fornecedor da Cortesia (ex: Hotel ou Patrocinador)
+                        Acomodação ou Fornecedor da Cortesia
                       </label>
-                      <input
-                        type="text"
-                        value={fpCourtesyProvider}
-                        onChange={(e) => setFpCourtesyProvider(e.target.value)}
-                        placeholder={activeAccommodation?.name || "Ex: Loews Portofino Bay Hotel ou Hard Rock Hotel"}
-                        className="w-full px-3 py-2 bg-white border border-blue-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs focus:ring-2 focus:ring-blue-500/20 outline-none"
-                      />
+
+                      {accommodations && accommodations.length > 0 ? (
+                        <div className="space-y-2">
+                          <select
+                            value={courtesyAccSelection}
+                            onChange={(e) => setCourtesyAccSelection(e.target.value)}
+                            className="w-full px-3 py-2 bg-white border border-blue-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs focus:ring-2 focus:ring-blue-500/20 outline-none cursor-pointer"
+                          >
+                            {accommodations.map((acc) => (
+                              <option key={acc.id} value={acc.id}>
+                                🏨 {acc.name || acc.hotelName}
+                              </option>
+                            ))}
+                            <option value="other">Outro fornecedor</option>
+                          </select>
+
+                          {courtesyAccSelection === 'other' && (
+                            <input
+                              type="text"
+                              value={customCourtesyProvider}
+                              onChange={(e) => setCustomCourtesyProvider(e.target.value)}
+                              placeholder="Informe o nome do hotel ou fornecedor"
+                              className="w-full px-3 py-2 bg-white border border-blue-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs focus:ring-2 focus:ring-blue-500/20 outline-none"
+                            />
+                          )}
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <p className="text-[11px] text-blue-800">
+                            Nenhuma acomodação cadastrada na viagem ativa. Informe o fornecedor manualmente abaixo:
+                          </p>
+                          <input
+                            type="text"
+                            value={customCourtesyProvider}
+                            onChange={(e) => setCustomCourtesyProvider(e.target.value)}
+                            placeholder="Ex: Loews Portofino Bay Hotel, Hard Rock Hotel ou Patrocinador"
+                            className="w-full px-3 py-2 bg-white border border-blue-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs focus:ring-2 focus:ring-blue-500/20 outline-none"
+                          />
+                        </div>
+                      )}
+
                       <p className="text-[10px] text-blue-700">
-                        ℹ️ Valor efetivo mantido em <strong>R$ 0,00</strong>. Nenhuma despesa será cobrada dos viajantes no Financeiro.
+                        ℹ️ Valor efetivo mantido em <strong>R$ 0,00</strong>. Nenhuma despesa será criada para os viajantes.
                       </p>
                     </div>
                   )}
 
-                  {/* Campos específicos para Gratuito */}
+                  {/* Gratuito */}
                   {fpChargeMode === 'free' && (
                     <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl text-[11px] text-emerald-900 font-medium animate-in fade-in duration-200">
-                      ℹ️ Esta atração está configurada como <strong>Gratuita / Sem Custo</strong> (ex: Boarding Group ou Virtual Queue). Valor mantido em R$ 0,00 e sem despesa lançada aos viajantes.
+                      ℹ️ Este passe está configurado como <strong>Gratuito / Sem Custo</strong>. Valor mantido em R$ 0,00 e nenhuma despesa será lançada no Financeiro.
                     </div>
                   )}
 
-                  {/* Campos específicos para Pago */}
+                  {/* Pago: Detalhes Financeiros */}
                   {fpChargeMode === 'paid' && (
                     <div className="p-4 bg-white border border-amber-200/90 rounded-xl space-y-4 shadow-2xs animate-in fade-in duration-200">
                       <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-slate-100">
                         <span className="text-xs font-black uppercase tracking-wider text-amber-950 flex items-center gap-1.5">
                           <CreditCard className="w-4 h-4 text-amber-600" />
-                          <span>Custos Totais do Grupo para esta Atração</span>
+                          <span>Custos Totais da Compra do Passe</span>
                         </span>
                         <div className="text-[10px] text-slate-500 font-mono">
                           Câmbio: US$ 1 = R$ {dollarRate.toFixed(2).replace('.', ',')}
@@ -3104,7 +3227,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div className="space-y-1">
                           <label className="text-[11px] font-bold text-slate-700 block">
-                            Custo Total Grupo (US$)
+                            Custo Total Passe (US$)
                           </label>
                           <MoneyInput
                             currency="USD"
@@ -3116,7 +3239,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
 
                         <div className="space-y-1">
                           <label className="text-[11px] font-bold text-slate-700 block">
-                            Custo Total Grupo (R$)
+                            Custo Total Passe (R$)
                           </label>
                           <MoneyInput
                             currency="BRL"
@@ -3185,7 +3308,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
                     </div>
                   )}
 
-                  {/* Exige Reserva Prévia */}
+                  {/* Pergunta de Reserva Reordenada / Renomeada */}
                   <div className="p-3.5 bg-white border border-slate-200 rounded-xl space-y-3 shadow-2xs">
                     <div className="flex items-center justify-between">
                       <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -3196,7 +3319,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
                           className="w-4 h-4 rounded text-[#1A2B4C] focus:ring-[#1A2B4C] cursor-pointer"
                         />
                         <span className="text-xs font-bold text-slate-800">
-                          Esta atração exige agendamento ou reserva prévia?
+                          Este passe exige agendamento individual das atrações após a compra?
                         </span>
                       </label>
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md uppercase ${
@@ -3204,81 +3327,219 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
                           ? 'bg-amber-100 text-amber-800 border border-amber-200'
                           : 'bg-slate-100 text-slate-600 border border-slate-200'
                       }`}>
-                        {fpReservationRequired ? 'Exige Reserva' : 'Não Necessária'}
+                        {fpReservationRequired ? 'Exige Agendamento' : 'Sem Agendamento Individual'}
                       </span>
                     </div>
 
-                    {fpReservationRequired ? (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 border-t border-slate-100 animate-in fade-in duration-200">
-                        <div className="space-y-1">
-                          <label className="text-[11px] font-bold text-slate-700 block">
-                            Situação da Reserva
-                          </label>
-                          <select
-                            value={fpReservationStatus}
-                            onChange={(e) => {
-                              setIsFpReservationRequiredManuallyEdited(true);
-                              setFpReservationStatus(e.target.value as FastPassReservationStatus);
-                            }}
-                            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs cursor-pointer"
-                          >
-                            <option value="Pendente">⏳ Pendente</option>
-                            <option value="Confirmada">✅ Confirmada</option>
-                            <option value="Cancelada">❌ Cancelada</option>
-                          </select>
-                        </div>
-
-                        <div className="space-y-1">
-                          <label className="text-[11px] font-bold text-slate-700 block">
-                            Código / Voucher da Reserva (Opcional)
-                          </label>
-                          <input
-                            type="text"
-                            value={fpReservationCode}
-                            onChange={(e) => setFpReservationCode(e.target.value)}
-                            placeholder="Ex: LL-84920 ou BG-42"
-                            className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-800 shadow-2xs focus:bg-white outline-none"
-                          />
-                        </div>
+                    {!fpReservationRequired ? (
+                      <div className="text-[11px] text-slate-500 italic p-2 bg-slate-50 rounded-lg border border-slate-100">
+                        ℹ️ Este passe permite usar as atrações elegíveis diretamente, sem necessidade de agendamento individual prévio (ex: Universal Express).
                       </div>
                     ) : (
-                      <div className="text-[11px] text-slate-500 italic">
-                        ℹ️ Situação: <strong>Não necessária</strong>. (Horário e códigos previamente digitados continuam salvos no formulário).
+                      <div className="space-y-3 pt-2 border-t border-slate-100 animate-in fade-in duration-200">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-bold text-slate-800 block">
+                            Atrações Agendadas para este Passe ({fpAttractionReservations?.length || 0})
+                          </label>
+                          <span className="text-[10px] text-slate-500 font-medium">
+                            Você pode salvar o passe e cadastrar as atrações depois
+                          </span>
+                        </div>
+
+                        {/* Formulário Interno de Atração */}
+                        <div className="p-3.5 bg-slate-100/80 border border-slate-200 rounded-xl space-y-3">
+                          <div className="text-[11px] font-bold text-slate-700 flex items-center justify-between">
+                            <span>{editingResId ? 'Editar Atração do Passe' : 'Agendar Nova Atração neste Passe'}</span>
+                            {editingResId && (
+                              <button
+                                type="button"
+                                onClick={handleCancelEditAttractionReservation}
+                                className="text-[10px] text-rose-600 hover:underline font-semibold"
+                              >
+                                Cancelar edição da atração
+                              </button>
+                            )}
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-bold text-slate-600 block">Nome da Atração</label>
+                            <input
+                              type="text"
+                              value={resAttractionName}
+                              onChange={(e) => setResAttractionName(e.target.value)}
+                              placeholder="Ex: Space Mountain ou Flight of Passage"
+                              className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 focus:outline-none"
+                            />
+                            {selectedParkGuide?.mustDoAttractions && (
+                              <div className="flex flex-wrap gap-1 pt-1">
+                                {selectedParkGuide.mustDoAttractions.slice(0, 4).map((att, i) => (
+                                  <button
+                                    key={i}
+                                    type="button"
+                                    onClick={() => setResAttractionName(att)}
+                                    className="text-[9px] px-1.5 py-0.5 rounded bg-white border border-slate-200 text-slate-600 hover:border-slate-400 font-semibold"
+                                  >
+                                    + {att}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-slate-600 block">Janela de Horário</label>
+                              <input
+                                type="text"
+                                value={resTimeWindow}
+                                onChange={(e) => setResTimeWindow(e.target.value)}
+                                placeholder="Ex: 10:30 - 11:30"
+                                className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800"
+                              />
+                            </div>
+
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-slate-600 block">Situação</label>
+                              <select
+                                value={resStatus}
+                                onChange={(e) => setResStatus(e.target.value as FastPassReservationStatus)}
+                                className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-800 cursor-pointer"
+                              >
+                                <option value="Pendente">⏳ Pendente</option>
+                                <option value="Confirmada">✅ Confirmada</option>
+                                <option value="Cancelada">❌ Cancelada</option>
+                              </select>
+                            </div>
+
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-slate-600 block">Voucher / Código</label>
+                              <input
+                                type="text"
+                                value={resCode}
+                                onChange={(e) => setResCode(e.target.value)}
+                                placeholder="Ex: LL-84920"
+                                className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-mono font-bold text-slate-800"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="text-[10px] font-bold text-slate-600 block">Observações da Atração</label>
+                            <input
+                              type="text"
+                              value={resNotes}
+                              onChange={(e) => setResNotes(e.target.value)}
+                              placeholder="Ex: Agendado para todo o grupo no app oficial"
+                              className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-slate-800"
+                            />
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={handleAddAttractionReservation}
+                            disabled={!resAttractionName.trim()}
+                            className="w-full py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 transition-colors"
+                          >
+                            <Plus className="w-3.5 h-3.5 text-[#D4AF37]" />
+                            <span>{editingResId ? 'Salvar Atração no Passe' : 'Adicionar Atração a este Passe'}</span>
+                          </button>
+                        </div>
+
+                        {/* Lista de Atrações Adicionadas ao Passe */}
+                        {(!fpAttractionReservations || fpAttractionReservations.length === 0) ? (
+                          <div className="p-3 bg-white border border-slate-200 rounded-xl text-center text-xs text-slate-500 font-medium">
+                            Ainda sem atrações agendadas. Você pode salvar a compra do passe e cadastrar as atrações mais tarde.
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            {fpAttractionReservations.map((res) => (
+                              <div
+                                key={res.id}
+                                className="p-2.5 bg-white border border-slate-200 rounded-xl flex items-center justify-between gap-2 shadow-2xs"
+                              >
+                                <div className="min-w-0 space-y-0.5">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-xs font-bold text-slate-800 truncate">{res.attractionName}</span>
+                                    <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded ${
+                                      res.reservationStatus === 'Confirmada'
+                                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                        : res.reservationStatus === 'Cancelada'
+                                        ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                        : 'bg-amber-50 text-amber-700 border border-amber-200'
+                                    }`}>
+                                      {res.reservationStatus || 'Confirmada'}
+                                    </span>
+                                  </div>
+                                  <div className="text-[10px] text-slate-500 flex items-center gap-2 flex-wrap">
+                                    <span className="flex items-center gap-1 font-medium">
+                                      <Clock className="w-3 h-3 text-slate-400" />
+                                      <span>{res.timeWindow}</span>
+                                    </span>
+                                    {res.reservationConfirmationCode && (
+                                      <span className="font-mono text-slate-600 bg-slate-100 px-1.5 py-0.2 rounded">
+                                        #{res.reservationConfirmationCode}
+                                      </span>
+                                    )}
+                                    {res.notes && <span className="text-slate-400 truncate">• {res.notes}</span>}
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-1 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStartEditAttractionReservation(res)}
+                                    className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-md transition-colors"
+                                    title="Editar atração"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveAttractionReservation(res.id)}
+                                    className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
+                                    title="Remover atração"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
 
-                  {/* Observações */}
+                  {/* Observações da Compra */}
                   <div className="space-y-1.5">
-                    <label className="text-[11px] font-bold text-slate-700 block">Observações do Agendamento</label>
+                    <label className="text-[11px] font-bold text-slate-700 block">Observações da Compra do Passe</label>
                     <input
                       type="text"
                       value={fpNotes}
                       onChange={(e) => setFpNotes(e.target.value)}
-                      placeholder="Ex: Agendado para todo o grupo no app oficial"
+                      placeholder="Ex: Comprado no app oficial para todo o grupo"
                       className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 shadow-2xs focus:ring-2 focus:ring-[#1A2B4C]/20 outline-none"
                     />
                   </div>
 
-                  {/* Botões Salvar / Cancelar */}
+                  {/* Botões Salvar / Cancelar Passe */}
                   <div className="flex items-center gap-2 pt-2">
                     <button
                       type="button"
                       onClick={handleAddFastPass}
-                      disabled={!fpName.trim()}
-                      className={`flex-1 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer shadow-md text-white ${
+                      className={`flex-1 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md text-white ${
                         editingFpId ? 'bg-amber-600 hover:bg-amber-700' : 'bg-[#1A2B4C] hover:bg-[#2A437E]'
                       }`}
                     >
                       {editingFpId ? (
                         <>
                           <CheckCircle2 className="w-4 h-4 text-white" />
-                          <span>Salvar Alterações do Fast Pass</span>
+                          <span>Salvar Alterações da Compra de Passe</span>
                         </>
                       ) : (
                         <>
                           <Plus className="w-4 h-4 text-[#D4AF37]" />
-                          <span>Adicionar à Lista de Fast Passes</span>
+                          <span>Adicionar Passe à Lista do Dia</span>
                         </>
                       )}
                     </button>
@@ -3296,17 +3557,17 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
                 </div>
               </div>
 
-              {/* 2. LISTA DE FAST PASSES DO DIA */}
+              {/* 2. LISTA DE PASSES COMPRADOS DO DIA */}
               <div className="space-y-4">
                 <label className="text-xs font-bold uppercase tracking-wider text-slate-500 block">
-                  2. Atrações Agendadas ({fastPasses.length})
+                  2. Passes Cadastrados ({fastPasses.length})
                 </label>
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
                   {fastPasses.length === 0 ? (
                     <div className="text-center py-8 text-slate-400">
                       <Zap className="w-10 h-10 mx-auto mb-2 opacity-25" />
                       <p className="text-xs font-semibold">Nenhum passe ou fila rápida cadastrada neste dia.</p>
-                      <p className="text-[11px] text-slate-400 mt-0.5">Use o formulário acima para adicionar atrações.</p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">Use o formulário acima para adicionar passes.</p>
                     </div>
                   ) : (
                     <div className="space-y-3">
@@ -3317,115 +3578,156 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
                         const isAllTravelers = !fp.travelerIds || fp.travelerIds.includes('all') || fp.travelerIds.length === (settings?.travelers?.length || 1);
                         const travelerCount = isAllTravelers ? (settings?.travelers?.length || 1) : (fp.travelerIds?.length || 1);
 
+                        const hasReservations = fp.attractionReservations && fp.attractionReservations.length > 0;
+
                         return (
                           <div
                             key={fp.id}
-                            className={`p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs transition-all ${
+                            className={`p-3.5 rounded-xl border flex flex-col gap-3 shadow-2xs transition-all ${
                               editingFpId === fp.id
                                 ? 'bg-amber-50/90 border-amber-400 ring-2 ring-amber-300/60'
                                 : 'bg-white border-slate-200 hover:border-slate-300'
                             }`}
                           >
-                            <div className="flex items-start sm:items-center gap-3">
-                              <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${
-                                isPaid
-                                  ? 'bg-amber-50 text-amber-600 border-amber-200'
-                                  : isCourtesy
-                                  ? 'bg-blue-50 text-blue-600 border-blue-200'
-                                  : 'bg-emerald-50 text-emerald-600 border-emerald-200'
-                              }`}>
-                                <Zap className="w-5 h-5" />
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                              <div className="flex items-start sm:items-center gap-3">
+                                <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${
+                                  isPaid
+                                    ? 'bg-amber-50 text-amber-600 border-amber-200'
+                                    : isCourtesy
+                                    ? 'bg-blue-50 text-blue-600 border-blue-200'
+                                    : 'bg-emerald-50 text-emerald-600 border-emerald-200'
+                                }`}>
+                                  <Zap className="w-5 h-5" />
+                                </div>
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <p className="text-xs font-black text-slate-800">{fp.type}</p>
+                                    {!fp.reservationRequired ? (
+                                      <span className="text-[9px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200 font-bold">
+                                        Sem agendamento individual
+                                      </span>
+                                    ) : hasReservations ? (
+                                      <span className="text-[9px] px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
+                                        {fp.attractionReservations!.length} atração(ões) agendada(s)
+                                      </span>
+                                    ) : (
+                                      <span className="text-[9px] px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200 font-bold">
+                                        Ainda sem atrações agendadas
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div className="flex items-center gap-2 flex-wrap text-[10px]">
+                                    {/* Modalidade e Custo Total */}
+                                    {isPaid ? (
+                                      <span className="font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 flex items-center gap-1">
+                                        <CreditCard className="w-3 h-3 text-amber-600" />
+                                        <span>
+                                          Pago: US$ {(fp.costUSD || 0).toFixed(2)} (R$ {(fp.costBRL || 0).toFixed(2).replace('.', ',')})
+                                        </span>
+                                        <span className="text-[9px] font-black uppercase text-amber-600">
+                                          • {fp.paymentStatus || 'Pendente'}
+                                        </span>
+                                      </span>
+                                    ) : isCourtesy ? (
+                                      <span className="font-bold text-blue-800 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 flex items-center gap-1">
+                                        <Building2 className="w-3 h-3 text-blue-600" />
+                                        <span>
+                                          Cortesia {fp.courtesyProvider ? `(${fp.courtesyProvider})` : ''} • R$ 0,00
+                                        </span>
+                                      </span>
+                                    ) : (
+                                      <span className="font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 flex items-center gap-1">
+                                        <Gift className="w-3 h-3 text-emerald-600" />
+                                        <span>Gratuito / Sem Custo • R$ 0,00</span>
+                                      </span>
+                                    )}
+
+                                    {/* Viajantes */}
+                                    <span className="text-slate-600 bg-slate-100 px-2 py-0.5 rounded font-medium flex items-center gap-1">
+                                      <Users className="w-3 h-3 text-slate-400" />
+                                      <span>{isAllTravelers ? `Todo o grupo (${travelerCount})` : `${travelerCount} viajante(s)`}</span>
+                                    </span>
+                                  </div>
+                                </div>
                               </div>
-                              <div className="space-y-1">
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <p className="text-xs font-black text-slate-800">{fp.attractionName}</p>
-                                  <span className="text-[9px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200 uppercase font-black">
-                                    {fp.type}
-                                  </span>
-                                </div>
 
-                                <div className="flex items-center gap-2 flex-wrap text-[10px]">
-                                  {/* Horário */}
-                                  <span className="font-semibold text-slate-600 flex items-center gap-1">
-                                    <Clock className="w-3 h-3 text-slate-400" />
-                                    <span>{fp.timeWindow}</span>
-                                  </span>
-
-                                  {/* Modalidade e Custo Total */}
-                                  {isPaid ? (
-                                    <span className="font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 flex items-center gap-1">
-                                      <CreditCard className="w-3 h-3 text-amber-600" />
-                                      <span>
-                                        Pago: US$ {(fp.costUSD || 0).toFixed(2)} (R$ {(fp.costBRL || 0).toFixed(2).replace('.', ',')})
-                                      </span>
-                                      <span className="text-[9px] font-black uppercase text-amber-600">
-                                        • {fp.paymentStatus || 'Pendente'}
-                                      </span>
-                                    </span>
-                                  ) : isCourtesy ? (
-                                    <span className="font-bold text-blue-800 bg-blue-50 px-2 py-0.5 rounded border border-blue-200 flex items-center gap-1">
-                                      <Building2 className="w-3 h-3 text-blue-600" />
-                                      <span>
-                                        Cortesia {fp.courtesyProvider ? `(${fp.courtesyProvider})` : ''} • R$ 0,00
-                                      </span>
-                                    </span>
-                                  ) : (
-                                    <span className="font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 flex items-center gap-1">
-                                      <Gift className="w-3 h-3 text-emerald-600" />
-                                      <span>Gratuito / Sem Custo • R$ 0,00</span>
-                                    </span>
-                                  )}
-
-                                  {/* Viajantes */}
-                                  <span className="text-slate-600 bg-slate-100 px-2 py-0.5 rounded font-medium flex items-center gap-1">
-                                    <Users className="w-3 h-3 text-slate-400" />
-                                    <span>{isAllTravelers ? `Todo o grupo (${travelerCount})` : `${travelerCount} viajante(s)`}</span>
-                                  </span>
-
-                                  {/* Situação da Reserva */}
-                                  {fp.reservationRequired ? (
-                                    <span className={`px-2 py-0.5 rounded font-bold uppercase text-[9px] border ${
-                                      fp.reservationStatus === 'Confirmada'
-                                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                        : fp.reservationStatus === 'Cancelada'
-                                        ? 'bg-rose-50 text-rose-800 border-rose-200'
-                                        : 'bg-amber-50 text-amber-800 border-amber-200'
-                                    }`}>
-                                      Reserva: {fp.reservationStatus || 'Pendente'}
-                                      {fp.reservationConfirmationCode ? ` #${fp.reservationConfirmationCode}` : ''}
-                                    </span>
-                                  ) : (
-                                    <span className="px-2 py-0.5 rounded font-medium text-[9px] bg-slate-100 text-slate-500 border border-slate-200">
-                                      Reserva não necessária
-                                    </span>
-                                  )}
-                                </div>
+                              {/* Ações do Passe */}
+                              <div className="flex items-center gap-1 self-end sm:self-center shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => handleStartEditFastPass(fp)}
+                                  className={`p-2 rounded-lg transition-colors cursor-pointer ${
+                                    editingFpId === fp.id
+                                      ? 'text-amber-700 bg-amber-100'
+                                      : 'text-slate-400 hover:text-amber-600 hover:bg-amber-50'
+                                  }`}
+                                  title="Editar compra de passe"
+                                >
+                                  <Pencil className="w-4 h-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveFastPass(fp.id)}
+                                  className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                  title="Excluir passe"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
                               </div>
                             </div>
 
-                            {/* Ações */}
-                            <div className="flex items-center gap-1 self-end sm:self-center shrink-0">
-                              <button
-                                type="button"
-                                onClick={() => handleStartEditFastPass(fp)}
-                                className={`p-2 rounded-lg transition-colors cursor-pointer ${
-                                  editingFpId === fp.id
-                                    ? 'text-amber-700 bg-amber-100'
-                                    : 'text-slate-400 hover:text-amber-600 hover:bg-amber-50'
-                                }`}
-                                title="Editar agendamento"
-                              >
-                                <Pencil className="w-4 h-4" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveFastPass(fp.id)}
-                                className="p-2 text-rose-500 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                                title="Excluir agendamento"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
-                            </div>
+                            {/* Detalhamento das Atrações do Passe */}
+                            {fp.reservationRequired && hasReservations && (
+                              <div className="pt-2 border-t border-slate-100 space-y-1">
+                                <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                                  Atrações Agendadas:
+                                </p>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                                  {fp.attractionReservations!.map((res) => (
+                                    <div
+                                      key={res.id}
+                                      className="p-2 bg-slate-50 border border-slate-200 rounded-lg text-[11px] flex items-center justify-between gap-1.5"
+                                    >
+                                      <div className="min-w-0">
+                                        <p className="font-bold text-slate-800 truncate">{res.attractionName}</p>
+                                        <p className="text-[10px] text-slate-500 flex items-center gap-1">
+                                          <Clock className="w-3 h-3 text-slate-400" />
+                                          <span>{res.timeWindow}</span>
+                                          {res.reservationConfirmationCode && (
+                                            <span className="font-mono text-slate-600 bg-slate-200 px-1 rounded">
+                                              #{res.reservationConfirmationCode}
+                                            </span>
+                                          )}
+                                        </p>
+                                      </div>
+                                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                                        res.reservationStatus === 'Confirmada'
+                                          ? 'bg-emerald-100 text-emerald-800'
+                                          : res.reservationStatus === 'Cancelada'
+                                          ? 'bg-rose-100 text-rose-800'
+                                          : 'bg-amber-100 text-amber-800'
+                                      }`}>
+                                        {res.reservationStatus || 'Confirmada'}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {fp.reservationRequired && !hasReservations && (
+                              <div className="pt-2 border-t border-slate-100 text-[11px] text-amber-700 italic">
+                                ℹ️ Nenhuma atração agendada para este passe ainda. Edite o passe para cadastrar atrações.
+                              </div>
+                            )}
+
+                            {fp.notes && (
+                              <div className="text-[10px] text-slate-500 italic">
+                                💬 {fp.notes}
+                              </div>
+                            )}
                           </div>
                         );
                       })}

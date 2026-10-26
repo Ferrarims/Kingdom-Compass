@@ -689,7 +689,11 @@ export function mapFastPassToDb(
   bookingId: string,
   itineraryDayId: string
 ): Record<string, any> {
-  const cleanId = ensureValidUUID(fp.id, 'fastpass', `${bookingId}-${fp.attractionName}-${fp.timeWindow}`);
+  const cleanId = ensureValidUUID(
+    fp.id,
+    'fastpass',
+    `${bookingId}-${fp.type}-${fp.attractionName || fp.attractionReservations?.[0]?.attractionName || 'pass'}`
+  );
   const chargeMode: FastPassChargeMode =
     fp.chargeMode === 'hotel_courtesy' || fp.chargeMode === 'free' ? fp.chargeMode : 'paid';
   const isPaid = chargeMode === 'paid';
@@ -700,8 +704,29 @@ export function mapFastPassToDb(
   const status = validStatuses.includes(fp.status) ? fp.status : 'Agendado';
 
   const reservationRequired = fp.reservationRequired !== undefined ? Boolean(fp.reservationRequired) : false;
+
+  // Process attraction_reservations array
+  const rawReservations = fp.attractionReservations || [];
+  const attractionReservations = rawReservations.map((res, index) => ({
+    id: res.id || `${cleanId}-res-${index}`,
+    attractionName: (res.attractionName || '').trim(),
+    timeWindow: (res.timeWindow || '').trim(),
+    tier: res.tier || null,
+    status: res.status || 'Agendado',
+    reservationStatus: res.reservationStatus || (reservationRequired ? 'Pendente' : 'Não necessária'),
+    reservationConfirmationCode: res.reservationConfirmationCode || null,
+    notes: res.notes || null,
+  }));
+
+  // Backwards compatibility for attraction_name and time_window
+  const firstRes = attractionReservations[0];
+  const attractionName = firstRes ? (firstRes.attractionName || null) : (fp.attractionName?.trim() || null);
+  const timeWindow = firstRes ? (firstRes.timeWindow || null) : (fp.timeWindow?.trim() || null);
+
   let reservationStatus: FastPassReservationStatus = 'Não necessária';
-  if (fp.reservationStatus) {
+  if (firstRes?.reservationStatus) {
+    reservationStatus = firstRes.reservationStatus;
+  } else if (fp.reservationStatus) {
     reservationStatus = fp.reservationStatus;
   } else if (reservationRequired) {
     reservationStatus = 'Pendente';
@@ -714,8 +739,8 @@ export function mapFastPassToDb(
     trip_id: tripId,
     park_day_booking_id: bookingId,
     itinerary_day_id: itineraryDayId,
-    attraction_name: (fp.attractionName || 'Atração').trim(),
-    time_window: fp.timeWindow || '',
+    attraction_name: attractionName,
+    time_window: timeWindow,
     pass_type: fp.type || 'Lightning Lane Multi Pass',
     tier: fp.tier || null,
     status,
@@ -729,8 +754,9 @@ export function mapFastPassToDb(
     traveler_ids: fp.travelerIds || ['all'],
     reservation_required: reservationRequired,
     reservation_status: reservationStatus,
-    reservation_confirmation_code: fp.reservationConfirmationCode || null,
+    reservation_confirmation_code: firstRes?.reservationConfirmationCode || fp.reservationConfirmationCode || null,
     courtesy_provider: fp.courtesyProvider || null,
+    attraction_reservations: attractionReservations,
     updated_at: new Date().toISOString(),
   };
   return row;
@@ -756,10 +782,46 @@ export function mapDbToFastPass(row: any): FastPassItem {
   const validUsageStatuses = ['Agendado', 'Concluído', 'Pendente'];
   const status = validUsageStatuses.includes(row.status) ? row.status : 'Agendado';
 
+  // Read attraction_reservations
+  let rawReservations: any[] = [];
+  if (Array.isArray(row.attraction_reservations)) {
+    rawReservations = row.attraction_reservations;
+  } else if (typeof row.attraction_reservations === 'string' && row.attraction_reservations.trim().startsWith('[')) {
+    try {
+      const parsed = JSON.parse(row.attraction_reservations);
+      if (Array.isArray(parsed)) rawReservations = parsed;
+    } catch {}
+  }
+
+  let attractionReservations = rawReservations.map((res: any, idx: number) => ({
+    id: res.id || `${row.id}-res-${idx}`,
+    attractionName: res.attractionName || res.attraction_name || '',
+    timeWindow: res.timeWindow || res.time_window || '',
+    tier: res.tier || undefined,
+    status: res.status || 'Agendado',
+    reservationStatus: res.reservationStatus || res.reservation_status || (reservationRequired ? 'Pendente' : 'Não necessária'),
+    reservationConfirmationCode: res.reservationConfirmationCode || res.reservation_confirmation_code || undefined,
+    notes: res.notes || undefined,
+  }));
+
+  // Backwards compatibility: if attraction_reservations is empty, but row.attraction_name or row.time_window exists
+  if (attractionReservations.length === 0 && (row.attraction_name || row.time_window)) {
+    attractionReservations = [
+      {
+        id: `${row.id}-res-legacy`,
+        attractionName: row.attraction_name || '',
+        timeWindow: row.time_window || '',
+        tier: row.tier || undefined,
+        status: status as any,
+        reservationStatus: reservationStatus,
+        reservationConfirmationCode: row.reservation_confirmation_code || undefined,
+        notes: row.notes || undefined,
+      },
+    ];
+  }
+
   return {
     id: row.id,
-    attractionName: row.attraction_name || 'Atração',
-    timeWindow: row.time_window || '',
     type: row.pass_type || 'Lightning Lane Multi Pass',
     tier: row.tier || undefined,
     status,
@@ -775,6 +837,9 @@ export function mapDbToFastPass(row: any): FastPassItem {
     reservationStatus,
     reservationConfirmationCode: row.reservation_confirmation_code || undefined,
     courtesyProvider: row.courtesy_provider || undefined,
+    attractionReservations,
+    attractionName: row.attraction_name || attractionReservations[0]?.attractionName || '',
+    timeWindow: row.time_window || attractionReservations[0]?.timeWindow || '',
   };
 }
 

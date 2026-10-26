@@ -186,10 +186,19 @@ export interface FastPassTypeRule {
   defaultChargeMode?: FastPassChargeMode;
 }
 
-export interface FastPassItem {
+export interface FastPassAttractionReservation {
   id: string;
   attractionName: string;
   timeWindow: string; // e.g. "09:15 - 10:15"
+  tier?: string;
+  status?: 'Agendado' | 'Concluído' | 'Pendente';
+  reservationStatus?: FastPassReservationStatus;
+  reservationConfirmationCode?: string;
+  notes?: string;
+}
+
+export interface FastPassItem {
+  id: string;
   type: 'Lightning Lane Multi Pass' | 'Lightning Lane Single Pass' | 'Universal Express Pass' | 'Quick Queue' | 'Fila Virtual (Virtual Queue)' | 'Outro';
   tier?: 'Tier 1' | 'Tier 2' | 'Single Pass' | 'Universal Express';
   status: 'Agendado' | 'Concluído' | 'Pendente';
@@ -203,9 +212,14 @@ export interface FastPassItem {
   payerId?: string;
   travelerIds?: string[];
   reservationRequired?: boolean;
+  courtesyProvider?: string;
+  // Lista de atrações agendadas vinculadas a esta compra de passe
+  attractionReservations?: FastPassAttractionReservation[];
+  // Campos legados para compatibilidade e fallback
+  attractionName?: string;
+  timeWindow?: string;
   reservationStatus?: FastPassReservationStatus;
   reservationConfirmationCode?: string;
-  courtesyProvider?: string;
   // Hidratados a partir da tabela central de expenses
   paidValueBRL?: number;
   paidValueUSD?: number;
