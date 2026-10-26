@@ -229,7 +229,7 @@ CREATE TABLE public.park_fast_passes (
     cost_usd NUMERIC(10, 2),
     cost_brl NUMERIC(12, 2),
     payment_status TEXT DEFAULT 'Pendente',
-    payer_id UUID,
+    payer_id TEXT NOT NULL DEFAULT 'all',
     traveler_ids JSONB DEFAULT '["all"]'::jsonb,
     reservation_required BOOLEAN DEFAULT false,
     reservation_status TEXT DEFAULT 'Não necessária',
@@ -240,7 +240,7 @@ CREATE TABLE public.park_fast_passes (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT park_fast_passes_trip_id_fkey FOREIGN KEY (trip_id) REFERENCES public.trips(id) ON UPDATE NO ACTION ON DELETE CASCADE,
     CONSTRAINT park_fast_passes_itinerary_day_id_fkey FOREIGN KEY (itinerary_day_id) REFERENCES public.itinerary_days(id) ON UPDATE NO ACTION ON DELETE CASCADE,
-    CONSTRAINT park_fast_passes_attraction_reservations_check CHECK (jsonb_typeof(attraction_reservations) = 'array')
+    CONSTRAINT park_fast_passes_attraction_reservations_array_check CHECK (jsonb_typeof(attraction_reservations) = 'array')
 );
 
 -- ---------------------------------------------------------------------

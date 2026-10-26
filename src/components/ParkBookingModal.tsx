@@ -1805,7 +1805,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
 
     // ETAPA 2.5: Sincronização financeira de Fast Passes conforme o padrão canônico de pacotes de fotos
     for (const fp of fastPasses) {
-      const cleanFpId = ensureValidUUID(fp.id, 'fastpass', `${selectedParkName}-${fp.attractionName}-${fp.timeWindow}`);
+      const cleanFpId = ensureValidUUID(fp.id, 'fastpass', fp.id || `${selectedParkName}-fp`);
       const fpExpenseId = generateDeterministicUUID('fastpass-expense', cleanFpId);
       const isPaidMode = (fp.chargeMode || 'paid') === 'paid';
       const fpParsedUsd = fp.costUSD || 0;
@@ -1903,7 +1903,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     const previousFastPasses = activeDay.parkBooking?.fastPasses || [];
     for (const prevFp of previousFastPasses) {
       if (!currentFpIds.has(prevFp.id)) {
-        const cleanPrevFpId = ensureValidUUID(prevFp.id, 'fastpass', `${selectedParkName}-${prevFp.attractionName}-${prevFp.timeWindow}`);
+        const cleanPrevFpId = ensureValidUUID(prevFp.id, 'fastpass', prevFp.id || `${selectedParkName}-fp`);
         const prevFpExpId = generateDeterministicUUID('fastpass-expense', cleanPrevFpId);
 
         if (activeTripId) {

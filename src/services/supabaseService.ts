@@ -689,10 +689,13 @@ export function mapFastPassToDb(
   bookingId: string,
   itineraryDayId: string
 ): Record<string, any> {
+  if (!fp.id) {
+    fp.id = generateUUID();
+  }
   const cleanId = ensureValidUUID(
     fp.id,
     'fastpass',
-    fp.id || `${bookingId}-${Date.now()}`
+    fp.id
   );
   const chargeMode: FastPassChargeMode =
     fp.chargeMode === 'hotel_courtesy' || fp.chargeMode === 'free' ? fp.chargeMode : 'paid';
@@ -707,16 +710,22 @@ export function mapFastPassToDb(
 
   // Process attraction_reservations array
   const rawReservations = fp.attractionReservations || [];
-  const attractionReservations = rawReservations.map((res, index) => ({
-    id: res.id || `${cleanId}-res-${index}`,
-    attractionName: (res.attractionName || '').trim(),
-    timeWindow: (res.timeWindow || '').trim(),
-    tier: res.tier || null,
-    status: res.status || 'Agendado',
-    reservationStatus: res.reservationStatus || (reservationRequired ? 'Pendente' : 'Não necessária'),
-    reservationConfirmationCode: res.reservationConfirmationCode || null,
-    notes: res.notes || null,
-  }));
+  const attractionReservations = rawReservations.map((res, index) => {
+    if (!res.id) {
+      res.id = generateUUID();
+    }
+    const cleanResId = ensureValidUUID(res.id, 'fastpass-res', res.id);
+    return {
+      id: cleanResId,
+      attractionName: (res.attractionName || '').trim(),
+      timeWindow: (res.timeWindow || '').trim(),
+      tier: res.tier || null,
+      status: res.status || 'Agendado',
+      reservationStatus: res.reservationStatus || (reservationRequired ? 'Pendente' : 'Não necessária'),
+      reservationConfirmationCode: res.reservationConfirmationCode || null,
+      notes: res.notes || null,
+    };
+  });
 
   // Backwards compatibility for attraction_name and time_window
   const firstRes = attractionReservations[0];

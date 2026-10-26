@@ -18,13 +18,12 @@ BEGIN
   -- 2. Ensure attraction_reservations has array check constraint
   IF NOT EXISTS (
     SELECT 1 
-    FROM information_schema.constraint_column_usage 
-    WHERE table_schema = 'public' 
-      AND table_name = 'park_fast_passes' 
-      AND constraint_name = 'park_fast_passes_attraction_reservations_check'
+    FROM pg_constraint 
+    WHERE conrelid = 'public.park_fast_passes'::regclass 
+      AND conname = 'park_fast_passes_attraction_reservations_array_check'
   ) THEN
     ALTER TABLE public.park_fast_passes 
-    ADD CONSTRAINT park_fast_passes_attraction_reservations_check 
+    ADD CONSTRAINT park_fast_passes_attraction_reservations_array_check 
     CHECK (jsonb_typeof(attraction_reservations) = 'array');
   END IF;
 
