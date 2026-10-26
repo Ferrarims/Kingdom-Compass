@@ -707,6 +707,8 @@ export function mapFastPassToDb(
     reservationStatus = 'Pendente';
   }
 
+  const paymentStatus = isPaid ? (fp.paymentStatus || 'Pendente') : 'Não informado';
+
   const row: Record<string, any> = {
     id: cleanId,
     trip_id: tripId,
@@ -722,7 +724,7 @@ export function mapFastPassToDb(
     charge_mode: chargeMode,
     cost_usd: costUSD,
     cost_brl: costBRL,
-    payment_status: fp.paymentStatus || 'Pendente',
+    payment_status: paymentStatus,
     payer_id: fp.payerId || 'all',
     traveler_ids: fp.travelerIds || ['all'],
     reservation_required: reservationRequired,
@@ -746,11 +748,10 @@ export function mapDbToFastPass(row: any): FastPassItem {
     reservationStatus = 'Pendente';
   }
 
-  let paymentStatus: ExpenseItem['status'] = 'Pendente';
-  if (row.payment_status === 'Pago') paymentStatus = 'Pago';
-  else if (row.payment_status === 'Parcial') paymentStatus = 'Parcial';
-  else if (row.payment_status === 'Não informado') paymentStatus = 'Não informado';
-  else if (row.payment_status === 'Pendente') paymentStatus = 'Pendente';
+  const validPaymentStatuses: ExpenseItem['status'][] = ['Pago', 'Pendente', 'Parcial', 'Não informado', 'Não iniciado'];
+  let paymentStatus: ExpenseItem['status'] = validPaymentStatuses.includes(row.payment_status)
+    ? (row.payment_status as ExpenseItem['status'])
+    : (chargeMode === 'paid' ? 'Pendente' : 'Não informado');
 
   const validUsageStatuses = ['Agendado', 'Concluído', 'Pendente'];
   const status = validUsageStatuses.includes(row.status) ? row.status : 'Agendado';
@@ -2814,7 +2815,15 @@ export const SupabaseService = {
    */
   async deleteExpensesBySource(
     tripId: string,
-    sourceType: 'flight' | 'accommodation' | 'car_rental' | 'park_ticket' | 'photo_package',
+    sourceType: 'flight' | 'accommodation' | 'car_rental' | 'park_ticket' | 'photo_package' | 'fast_pass',
+    sourceId: string
+  ): Promise<{ success: boolean; error?: string }> {
+    return deleteExpensesBySourceInDb(tripId, sourceType, sourceId);
+  },
+
+  async deleteExpensesBySourceInDb(
+    tripId: string,
+    sourceType: 'flight' | 'accommodation' | 'car_rental' | 'park_ticket' | 'photo_package' | 'fast_pass',
     sourceId: string
   ): Promise<{ success: boolean; error?: string }> {
     return deleteExpensesBySourceInDb(tripId, sourceType, sourceId);

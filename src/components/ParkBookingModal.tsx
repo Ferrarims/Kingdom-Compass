@@ -1745,6 +1745,20 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
         }
       } else {
         // Custo zero ou cortesia/gratuito -> se existir despesa vinculada, remove sem perder o agendamento da atração
+        if (activeTripId) {
+          const delDbRes = await SupabaseService.deleteExpensesBySourceInDb(activeTripId, 'fast_pass', cleanFpId);
+          if (!delDbRes.success) {
+            await rollbackAllSaveState(`Remover despesa de Fast Pass sem custo "${fp.attractionName}"`, delDbRes.error || 'Falha de conexão');
+            return { success: false, error: delDbRes.error };
+          }
+          if (cleanFpId !== fp.id) {
+            const delDbRes2 = await SupabaseService.deleteExpensesBySourceInDb(activeTripId, 'fast_pass', fp.id);
+            if (!delDbRes2.success) {
+              await rollbackAllSaveState(`Remover despesa de Fast Pass sem custo "${fp.attractionName}"`, delDbRes2.error || 'Falha de conexão');
+              return { success: false, error: delDbRes2.error };
+            }
+          }
+        }
         if (existingExpense) {
           const delRes = await deleteExpense(existingExpense.id, { removeSourceItem: false });
           if (!delRes.success) {
@@ -1762,9 +1776,26 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       if (!currentFpIds.has(prevFp.id)) {
         const cleanPrevFpId = ensureValidUUID(prevFp.id, 'fastpass', `${selectedParkName}-${prevFp.attractionName}-${prevFp.timeWindow}`);
         const prevFpExpId = generateDeterministicUUID('fastpass-expense', cleanPrevFpId);
+
+        if (activeTripId) {
+          const delDbRes = await SupabaseService.deleteExpensesBySourceInDb(activeTripId, 'fast_pass', prevFp.id);
+          if (!delDbRes.success) {
+            await rollbackAllSaveState(`Remover despesa de Fast Pass excluído`, delDbRes.error || 'Falha de conexão');
+            return { success: false, error: delDbRes.error };
+          }
+          if (cleanPrevFpId !== prevFp.id) {
+            const delDbRes2 = await SupabaseService.deleteExpensesBySourceInDb(activeTripId, 'fast_pass', cleanPrevFpId);
+            if (!delDbRes2.success) {
+              await rollbackAllSaveState(`Remover despesa de Fast Pass excluído`, delDbRes2.error || 'Falha de conexão');
+              return { success: false, error: delDbRes2.error };
+            }
+          }
+        }
+
         const orphanExpense = expenses.find(
           (e) =>
             e.id === prevFpExpId ||
+            e.id === generateDeterministicUUID('fastpass-expense', prevFp.id) ||
             (e.sourceType === 'fast_pass' && (e.sourceId === cleanPrevFpId || e.sourceId === prevFp.id))
         );
         if (orphanExpense) {
