@@ -109,6 +109,7 @@ export type ExpenseCategory =
   | 'Hospedagem'
   | 'Ingressos'
   | 'Pacotes de Fotos'
+  | 'Fast Pass'
   | 'Alimentação'
   | 'Compras'
   | 'Transporte'
@@ -129,7 +130,7 @@ export interface ExpenseItem {
   travelerIds?: string[];
   responsibleTravelerId: string; // Legacy field, we'll favor payerId
   payerId?: string;
-  sourceType?: 'flight' | 'accommodation' | 'car_rental' | 'park_ticket' | 'photo_package' | 'general';
+  sourceType?: 'flight' | 'accommodation' | 'car_rental' | 'park_ticket' | 'photo_package' | 'fast_pass' | 'general';
   sourceId?: string;
   excluded: boolean; // "Não vou precisar desse gasto"
   notes?: string;
@@ -170,6 +171,21 @@ export interface CustomRouteStop {
   order: number;
 }
 
+export type FastPassChargeMode = 'paid' | 'hotel_courtesy' | 'free';
+export type FastPassReservationStatus = 'Pendente' | 'Confirmada' | 'Cancelada' | 'Não necessária';
+
+export interface FastPassTypeRule {
+  pass_type: string;
+  default_reservation_required: boolean;
+  default_charge_mode: FastPassChargeMode;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+  passType?: string;
+  defaultReservationRequired?: boolean;
+  defaultChargeMode?: FastPassChargeMode;
+}
+
 export interface FastPassItem {
   id: string;
   attractionName: string;
@@ -179,6 +195,20 @@ export interface FastPassItem {
   status: 'Agendado' | 'Concluído' | 'Pendente';
   partyMembers?: string; // e.g. "Todos do Grupo"
   notes?: string;
+  // Campos de gestão financeira e reserva (migração park_fast_passes)
+  chargeMode?: FastPassChargeMode;
+  costUSD?: number;
+  costBRL?: number;
+  paymentStatus?: ExpenseStatus;
+  payerId?: string;
+  travelerIds?: string[];
+  reservationRequired?: boolean;
+  reservationStatus?: FastPassReservationStatus;
+  reservationConfirmationCode?: string;
+  courtesyProvider?: string;
+  // Hidratados a partir da tabela central de expenses
+  paidValueBRL?: number;
+  paidValueUSD?: number;
 }
 
 export interface DiningReservationItem {

@@ -25,6 +25,10 @@ import {
   SettlementPayment,
   TravelerAttractionSelection,
   BaggageAllowance,
+  FastPassItem,
+  FastPassChargeMode,
+  FastPassReservationStatus,
+  FastPassTypeRule,
 } from '../types';
 
 /**
@@ -200,13 +204,14 @@ export function mapExpenseToDb(item: ExpenseItem, tripId: string, fallbackTravel
     'Hospedagem',
     'Ingressos',
     'Pacotes de Fotos',
+    'Fast Pass',
     'Alimentação',
     'Compras',
     'Transporte',
     'Seguro',
     'Documentos',
   ];
-  const category = validDbCategories.includes(item.category) ? item.category : 'Pacotes de Fotos';
+  const category = validDbCategories.includes(item.category) ? item.category : 'Fast Pass';
 
   const validStatuses = ['Pago', 'Pendente', 'Parcial', 'Não informado'];
   let status = validStatuses.includes(item.status) ? item.status : 'Pendente';
@@ -230,7 +235,7 @@ export function mapExpenseToDb(item: ExpenseItem, tripId: string, fallbackTravel
   const respTravelerFk = payerFk || (fallbackTravelerId ? sanitizeTravelerForeignKey(fallbackTravelerId) : null);
 
   const cleanSourceId = item.sourceId ? ensureValidUUID(item.sourceId, 'source', item.sourceId) : null;
-  const sourceType = item.sourceType || (item.category === 'Pacotes de Fotos' || item.title?.toLowerCase().includes('pacote de fotos') ? 'photo_package' : null);
+  const sourceType = item.sourceType || (item.category === 'Fast Pass' ? 'fast_pass' : (item.category === 'Pacotes de Fotos' || item.title?.toLowerCase().includes('pacote de fotos') ? 'photo_package' : null));
 
   const row: Record<string, any> = {
     trip_id: cleanTripId,
@@ -266,7 +271,9 @@ export function mapDbToExpense(row: any): ExpenseItem {
   const respTravelerId = row.responsible_traveler_id || row.payer_id || 'all';
 
   let category: ExpenseCategory = (row.category as ExpenseCategory) || 'Compras';
-  if (
+  if (row.category === 'Fast Pass' || row.source_type === 'fast_pass') {
+    category = 'Fast Pass';
+  } else if (
     row.source_type === 'photo_package' ||
     row.category === 'Pacotes de Fotos' ||
     (row.title && row.title.toLowerCase().startsWith('pacote de fotos'))
@@ -285,7 +292,7 @@ export function mapDbToExpense(row: any): ExpenseItem {
     status: row.status || 'Pendente',
     payerId: payerId,
     responsibleTravelerId: respTravelerId,
-    sourceType: row.source_type || (category === 'Pacotes de Fotos' ? 'photo_package' : undefined),
+    sourceType: row.source_type || (category === 'Fast Pass' ? 'fast_pass' : (category === 'Pacotes de Fotos' ? 'photo_package' : undefined)),
     sourceId: row.source_id,
     travelerIds: Array.isArray(row.traveler_ids) && row.traveler_ids.length > 0
       ? row.traveler_ids.map((tid: string) => (tid && tid !== 'all' ? ensureValidUUID(tid, 'traveler', tid) : 'all'))
@@ -305,7 +312,7 @@ export function mapDbToExpense(row: any): ExpenseItem {
  */
 export async function deleteExpensesBySourceInDb(
   tripId: string,
-  sourceType: 'flight' | 'accommodation' | 'car_rental' | 'park_ticket' | 'photo_package',
+  sourceType: 'flight' | 'accommodation' | 'car_rental' | 'park_ticket' | 'photo_package' | 'fast_pass',
   sourceId: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
@@ -323,6 +330,7 @@ export async function deleteExpensesBySourceInDb(
       car_rental: 'car-expense',
       park_ticket: 'ticket-expense',
       photo_package: 'photo-expense',
+      fast_pass: 'fastpass-expense',
     };
     const expId1 = generateDeterministicUUID(typeMap[sourceType] || sourceType, sourceId);
     const expId2 = generateDeterministicUUID(typeMap[sourceType] || sourceType, cleanSourceId);
@@ -399,7 +407,7 @@ async function rollbackCompensation(
  */
 async function syncToExpenses(
   tripId: string, 
-  sourceType: 'flight' | 'accommodation' | 'car_rental' | 'park_ticket' | 'photo_package',
+  sourceType: 'flight' | 'accommodation' | 'car_rental' | 'park_ticket' | 'photo_package' | 'fast_pass',
   sourceId: string,
   data: {
     title: string;
@@ -434,11 +442,12 @@ async function syncToExpenses(
       accommodation: 'acc-expense',
       car_rental: 'car-expense',
       park_ticket: 'ticket-expense',
-      photo_package: 'photo-expense'
+      photo_package: 'photo-expense',
+      fast_pass: 'fastpass-expense',
     };
 
     const expId = generateDeterministicUUID(typeMap[sourceType] || sourceType, sourceId);
-    const legacyPrefix = sourceType === 'accommodation' ? 'acc' : sourceType === 'flight' ? 'flight' : sourceType;
+    const legacyPrefix = sourceType === 'accommodation' ? 'acc' : sourceType === 'flight' ? 'flight' : (sourceType === 'fast_pass' ? 'fastpass' : sourceType);
     const legacyId = `exp-${legacyPrefix}-${sourceId}`;
 
     // Sincronização idempotente: remover registros paralelos/duplicados da mesma origem/tipo antes de gravar
@@ -674,11 +683,106 @@ export function mapDbToHourlySchedule(row: any): HourlyScheduleItem {
   };
 }
 
+export function mapFastPassToDb(
+  fp: FastPassItem,
+  tripId: string,
+  bookingId: string,
+  itineraryDayId: string
+): Record<string, any> {
+  const cleanId = ensureValidUUID(fp.id, 'fastpass', `${bookingId}-${fp.attractionName}-${fp.timeWindow}`);
+  const chargeMode: FastPassChargeMode =
+    fp.chargeMode === 'hotel_courtesy' || fp.chargeMode === 'free' ? fp.chargeMode : 'paid';
+  const isPaid = chargeMode === 'paid';
+  const costUSD = isPaid && fp.costUSD !== undefined && fp.costUSD !== null ? Number(fp.costUSD) : 0;
+  const costBRL = isPaid && fp.costBRL !== undefined && fp.costBRL !== null ? Number(fp.costBRL) : 0;
+
+  const validStatuses = ['Agendado', 'Concluído', 'Pendente'];
+  const status = validStatuses.includes(fp.status) ? fp.status : 'Agendado';
+
+  const reservationRequired = fp.reservationRequired !== undefined ? Boolean(fp.reservationRequired) : false;
+  let reservationStatus: FastPassReservationStatus = 'Não necessária';
+  if (fp.reservationStatus) {
+    reservationStatus = fp.reservationStatus;
+  } else if (reservationRequired) {
+    reservationStatus = 'Pendente';
+  }
+
+  const row: Record<string, any> = {
+    id: cleanId,
+    trip_id: tripId,
+    park_day_booking_id: bookingId,
+    itinerary_day_id: itineraryDayId,
+    attraction_name: (fp.attractionName || 'Atração').trim(),
+    time_window: fp.timeWindow || '',
+    pass_type: fp.type || 'Lightning Lane Multi Pass',
+    tier: fp.tier || null,
+    status,
+    party_members: fp.partyMembers || null,
+    notes: fp.notes || null,
+    charge_mode: chargeMode,
+    cost_usd: costUSD,
+    cost_brl: costBRL,
+    payment_status: fp.paymentStatus || 'Pendente',
+    payer_id: fp.payerId || 'all',
+    traveler_ids: fp.travelerIds || ['all'],
+    reservation_required: reservationRequired,
+    reservation_status: reservationStatus,
+    reservation_confirmation_code: fp.reservationConfirmationCode || null,
+    courtesy_provider: fp.courtesyProvider || null,
+    updated_at: new Date().toISOString(),
+  };
+  return row;
+}
+
+export function mapDbToFastPass(row: any): FastPassItem {
+  const chargeMode: FastPassChargeMode =
+    row.charge_mode === 'hotel_courtesy' || row.charge_mode === 'free' ? row.charge_mode : 'paid';
+
+  const reservationRequired = Boolean(row.reservation_required);
+  let reservationStatus: FastPassReservationStatus = 'Não necessária';
+  if (row.reservation_status) {
+    reservationStatus = row.reservation_status;
+  } else if (reservationRequired) {
+    reservationStatus = 'Pendente';
+  }
+
+  let paymentStatus: ExpenseItem['status'] = 'Pendente';
+  if (row.payment_status === 'Pago') paymentStatus = 'Pago';
+  else if (row.payment_status === 'Parcial') paymentStatus = 'Parcial';
+  else if (row.payment_status === 'Não informado') paymentStatus = 'Não informado';
+  else if (row.payment_status === 'Pendente') paymentStatus = 'Pendente';
+
+  const validUsageStatuses = ['Agendado', 'Concluído', 'Pendente'];
+  const status = validUsageStatuses.includes(row.status) ? row.status : 'Agendado';
+
+  return {
+    id: row.id,
+    attractionName: row.attraction_name || 'Atração',
+    timeWindow: row.time_window || '',
+    type: row.pass_type || 'Lightning Lane Multi Pass',
+    tier: row.tier || undefined,
+    status,
+    partyMembers: row.party_members || undefined,
+    notes: row.notes || undefined,
+    chargeMode,
+    costUSD: row.cost_usd !== null && row.cost_usd !== undefined ? Number(row.cost_usd) : 0,
+    costBRL: row.cost_brl !== null && row.cost_brl !== undefined ? Number(row.cost_brl) : 0,
+    paymentStatus,
+    payerId: row.payer_id || 'all',
+    travelerIds: Array.isArray(row.traveler_ids) ? row.traveler_ids : ['all'],
+    reservationRequired,
+    reservationStatus,
+    reservationConfirmationCode: row.reservation_confirmation_code || undefined,
+    courtesyProvider: row.courtesy_provider || undefined,
+  };
+}
+
 export function mapParkBookingToDb(
   booking: ParkDayBooking,
   itineraryDayId: string,
   tripId: string
 ): Record<string, any> {
+  const bookingId = booking.id ? ensureValidUUID(booking.id, 'park-booking', itineraryDayId) : generateUUID();
   const row: Record<string, any> = {
     itinerary_day_id: itineraryDayId,
     trip_id: tripId,
@@ -691,10 +795,7 @@ export function mapParkBookingToDb(
     ticket_type: booking.ticketType || null,
     rope_drop_plan: booking.ropeDropPlan || null,
     fast_passes: Array.isArray(booking.fastPasses)
-      ? booking.fastPasses.map(fp => ({
-          ...fp,
-          id: ensureValidUUID(fp.id, 'fastpass', `${itineraryDayId}-${fp.attractionName}-${fp.timeWindow}`)
-        }))
+      ? booking.fastPasses.map(fp => mapFastPassToDb(fp, tripId, bookingId, itineraryDayId))
       : [],
     dining_reservations: Array.isArray(booking.diningReservations)
       ? booking.diningReservations.map(dr => ({
@@ -713,9 +814,7 @@ export function mapParkBookingToDb(
     notes: booking.notes || null,
     updated_at: new Date().toISOString(),
   };
-  if (booking.id) {
-    row.id = ensureValidUUID(booking.id, 'park-booking', itineraryDayId);
-  }
+  row.id = bookingId;
   return row;
 }
 
@@ -744,7 +843,10 @@ export function mapDbToParkBooking(row: any): ParkDayBooking {
     return fallback;
   };
 
-  const fastPasses = parseJsonField(row.fast_passes, []);
+  const rawFastPasses = parseJsonField(row.fast_passes, []);
+  const fastPasses = Array.isArray(rawFastPasses)
+    ? rawFastPasses.map((item) => (item && typeof item === 'object' ? mapDbToFastPass(item) : item))
+    : [];
   const diningReservations = parseJsonField(row.dining_reservations, []);
   const showsAndParades = parseJsonField(row.shows_and_parades, []);
   const photoPkgRaw = parseJsonField(row.photo_package, null);
@@ -761,7 +863,7 @@ export function mapDbToParkBooking(row: any): ParkDayBooking {
     confirmationCode: row.confirmation_code || undefined,
     ticketType: row.ticket_type || undefined,
     ropeDropPlan: row.rope_drop_plan || undefined,
-    fastPasses: Array.isArray(fastPasses) ? fastPasses : [],
+    fastPasses,
     diningReservations: Array.isArray(diningReservations) ? diningReservations : [],
     showsAndParades: Array.isArray(showsAndParades) ? showsAndParades : [],
     hasPhotoPackage: Boolean(row.has_photo_package || photoPkgRaw),
@@ -1593,16 +1695,7 @@ export const SupabaseService = {
         // Map secondary fast passes by itinerary_day_id and park_day_booking_id
         const secondaryFastPassesByDay = new Map<string, any[]>();
         (fastPassData || []).forEach((fp: any) => {
-          const item = {
-            id: fp.id,
-            attractionName: fp.attraction_name || 'Atração',
-            timeWindow: fp.time_window || '',
-            type: fp.pass_type || 'Lightning Lane Multi Pass',
-            tier: fp.tier || undefined,
-            status: fp.status || 'Agendado',
-            partyMembers: fp.party_members || undefined,
-            notes: fp.notes || undefined,
-          };
+          const item = mapDbToFastPass(fp);
           const keys = [fp.itinerary_day_id, fp.park_day_booking_id].filter(Boolean);
           keys.forEach((k) => {
             const list = secondaryFastPassesByDay.get(k) || [];
@@ -1655,8 +1748,11 @@ export const SupabaseService = {
           if (extraFp.length > 0) {
             const existingFp = pb.fastPasses || [];
             extraFp.forEach((ex) => {
-              if (!existingFp.some((ef) => ef.id === ex.id || (ef.attractionName === ex.attractionName && ef.timeWindow === ex.timeWindow))) {
+              const idx = existingFp.findIndex((ef) => ef.id === ex.id || (ef.attractionName === ex.attractionName && ef.timeWindow === ex.timeWindow));
+              if (idx < 0) {
                 existingFp.push(ex);
+              } else {
+                existingFp[idx] = { ...existingFp[idx], ...ex };
               }
             });
             pb.fastPasses = existingFp;
@@ -1977,6 +2073,29 @@ export const SupabaseService = {
               pkg.paymentStatus = exp.status;
             }
           }
+          if (d.parkBooking?.fastPasses && d.parkBooking.fastPasses.length > 0) {
+            d.parkBooking.fastPasses.forEach((fp) => {
+              const cleanFpId = ensureValidUUID(fp.id, 'fastpass', fp.id);
+              const exp =
+                expensesBySource.get(`fast_pass:${fp.id}`) ||
+                expensesBySource.get(`fast_pass:${cleanFpId}`) ||
+                trip.expenses.find(
+                  (e) =>
+                    (e.sourceType === 'fast_pass' || e.category === 'Fast Pass') &&
+                    (e.sourceId === fp.id ||
+                      e.sourceId === cleanFpId ||
+                      e.id === generateDeterministicUUID('fastpass-expense', fp.id) ||
+                      e.id === generateDeterministicUUID('fastpass-expense', cleanFpId))
+                );
+              if (exp) {
+                fp.paidValueBRL = exp.paidValueBRL;
+                fp.paidValueUSD = exp.paidValueUSD;
+                fp.paymentStatus = exp.status;
+                if (exp.payerId) fp.payerId = exp.payerId;
+                if (exp.travelerIds && exp.travelerIds.length > 0) fp.travelerIds = exp.travelerIds;
+              }
+            });
+          }
         });
 
         fullTrips.push(trip);
@@ -2183,20 +2302,7 @@ export const SupabaseService = {
             if (d.parkBooking && d.park && d.park !== 'Sem Parque') {
               const bookingId = ensureValidUUID(d.parkBooking.id, 'park-booking', d.id);
               (d.parkBooking.fastPasses || []).forEach((fp) => {
-                allFastPassRows.push({
-                  id: ensureValidUUID(fp.id, 'fastpass', `${bookingId}-${fp.attractionName}-${fp.timeWindow}`),
-                  trip_id: tripId,
-                  park_day_booking_id: bookingId,
-                  itinerary_day_id: d.id,
-                  attraction_name: fp.attractionName || 'Atração',
-                  time_window: fp.timeWindow || '',
-                  pass_type: fp.type || 'Lightning Lane Multi Pass',
-                  tier: fp.tier || null,
-                  status: fp.status || 'Agendado',
-                  party_members: fp.partyMembers || null,
-                  notes: fp.notes || null,
-                  updated_at: new Date().toISOString(),
-                });
+                allFastPassRows.push(mapFastPassToDb(fp, tripId, bookingId, d.id));
               });
 
               (d.parkBooking.diningReservations || []).forEach((dr) => {
@@ -2437,6 +2543,29 @@ export const SupabaseService = {
     } catch (e) {
       console.warn('Exception in fetchTravelerAttractionSelections:', e);
       return [];
+    }
+  },
+
+  /**
+   * Fetch Fast Pass Type Rules from public.park_fast_pass_type_rules
+   */
+  async fetchFastPassTypeRules(): Promise<{ data: FastPassTypeRule[] | null; error?: string }> {
+    try {
+      const { data, error } = await supabase
+        .from('park_fast_pass_type_rules')
+        .select('*')
+        .eq('is_active', true)
+        .order('pass_type', { ascending: true });
+
+      if (error) {
+        if (isSupabaseMissingTableError(error)) {
+          return { data: null, error: 'Tabela park_fast_pass_type_rules ainda não foi criada no banco de dados.' };
+        }
+        return { data: null, error: error.message };
+      }
+      return { data: (data || []) as FastPassTypeRule[], error: undefined };
+    } catch (err: any) {
+      return { data: null, error: err?.message || 'Erro ao carregar regras de tipos de Fast Pass' };
     }
   },
 
@@ -5000,20 +5129,7 @@ export const SupabaseService = {
           try {
             // Fast Passes
             const fastPasses = day.parkBooking.fastPasses || [];
-            const fpRows = fastPasses.map((fp) => ({
-              id: ensureValidUUID(fp.id, 'fastpass', `${bookingId}-${fp.attractionName}-${fp.timeWindow}`),
-              trip_id: tripId,
-              park_day_booking_id: bookingId,
-              itinerary_day_id: resolvedDayId,
-              attraction_name: fp.attractionName || 'Atração',
-              time_window: fp.timeWindow || '',
-              pass_type: fp.type || 'Lightning Lane Multi Pass',
-              tier: fp.tier || null,
-              status: fp.status || 'Agendado',
-              party_members: fp.partyMembers || null,
-              notes: fp.notes || null,
-              updated_at: new Date().toISOString(),
-            }));
+            const fpRows = fastPasses.map((fp) => mapFastPassToDb(fp, tripId, bookingId, resolvedDayId));
             await supabase.from('park_fast_passes').delete().eq('itinerary_day_id', resolvedDayId);
             if (fpRows.length > 0) {
               await supabase.from('park_fast_passes').upsert(fpRows, { onConflict: 'id' });

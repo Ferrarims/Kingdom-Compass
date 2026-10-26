@@ -41,6 +41,7 @@ const CATEGORIES: ExpenseCategory[] = [
   'Hospedagem',
   'Ingressos',
   'Pacotes de Fotos',
+  'Fast Pass',
   'Alimentação',
   'Compras',
   'Transporte',
@@ -248,11 +249,12 @@ export const FinancialPlanner: React.FC = () => {
     'Hospedagem': 2,
     'Ingressos': 3,
     'Pacotes de Fotos': 4,
-    'Alimentação': 5,
-    'Compras': 6,
-    'Transporte': 7,
-    'Seguro': 8,
-    'Documentos': 9,
+    'Fast Pass': 5,
+    'Alimentação': 6,
+    'Compras': 7,
+    'Transporte': 8,
+    'Seguro': 9,
+    'Documentos': 10,
   };
 
   const filteredExpenses = expenses

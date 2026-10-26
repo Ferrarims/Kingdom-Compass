@@ -792,6 +792,7 @@ const CATEGORY_COLORS: Record<ExpenseCategory, string> = {
   Hospedagem: '#EAB308',
   Ingressos: '#10B981',
   'Pacotes de Fotos': '#8B5CF6',
+  'Fast Pass': '#F59E0B',
   Alimentação: '#EC4899',
   Transporte: '#06B6D4',
   Compras: '#F97316',
@@ -2260,6 +2261,109 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
     });
 
+    // 6. Fast Passes
+    const fastPassesFromDays: { fp: any; parkName: string; dayNumber: number }[] = [];
+    (rawDaysList || []).forEach((day) => {
+      if (day.parkBooking?.fastPasses) {
+        day.parkBooking.fastPasses.forEach((fp) => {
+          if (fp.id || fp.attractionName) {
+            fastPassesFromDays.push({
+              fp,
+              parkName: day.parkBooking?.parkName || day.park || 'Parque',
+              dayNumber: day.dayNumber,
+            });
+          }
+        });
+      }
+    });
+
+    fastPassesFromDays.forEach(({ fp, parkName, dayNumber }) => {
+      const cleanFpId = ensureValidUUID(fp.id, 'fastpass', `${parkName}-${fp.attractionName}-${fp.timeWindow}`);
+      const expId = generateDeterministicUUID('fastpass-expense', cleanFpId);
+      const isPaidMode = (fp.chargeMode || 'paid') === 'paid';
+      const isZero = !isPaidMode || isZeroCost(fp.costUSD, fp.costBRL);
+
+      if (isZero) {
+        // Custo zero ou cortesia/gratuito: remove estritamente a despesa vinculada sem alterar o fast pass
+        for (let i = updatedExpenses.length - 1; i >= 0; i--) {
+          const e = updatedExpenses[i];
+          const isSameId =
+            e.id === expId ||
+            (e.sourceType === 'fast_pass' && (e.sourceId === cleanFpId || e.sourceId === fp.id));
+          if (isSameId) {
+            updatedExpenses.splice(i, 1);
+          }
+        }
+      } else {
+        const usd = Number(fp.costUSD) || 0;
+        const brl = Number(fp.costBRL) || (usd > 0 ? Math.round(usd * rate * 100) / 100 : 0);
+        const finalUsd = usd || (brl > 0 ? Math.round((brl / rate) * 100) / 100 : 0);
+
+        const fpTitle = `Fast Pass: ${fp.attractionName || 'Atração'} (${fp.type || 'Fila Rápida'})`.trim();
+        const fpNotes = `Parque: ${parkName} (Dia ${dayNumber}) | Atração: ${fp.attractionName} | Tipo: ${fp.type}${fp.timeWindow ? ' | Horário: ' + fp.timeWindow : ''}${fp.reservationConfirmationCode ? ' | Confirmação: #' + fp.reservationConfirmationCode : ''}`;
+
+        const matchingIndices: number[] = [];
+        updatedExpenses.forEach((e, idx) => {
+          const isSameId =
+            e.id === expId ||
+            (e.sourceType === 'fast_pass' && (e.sourceId === cleanFpId || e.sourceId === fp.id));
+          if (isSameId) {
+            matchingIndices.push(idx);
+          }
+        });
+
+        const primaryIdx = matchingIndices.length > 0 ? matchingIndices[0] : -1;
+        const existingExp = primaryIdx >= 0 ? updatedExpenses[primaryIdx] : undefined;
+
+        const { status: finalStatus, paidBrl, paidUsd } = computePaymentValues(
+          fp.paymentStatus,
+          existingExp,
+          brl,
+          finalUsd,
+          fp.paidValueBRL,
+          fp.paidValueUSD
+        );
+
+        const expData: ExpenseItem = {
+          id: expId,
+          title: fpTitle,
+          category: 'Fast Pass',
+          estimatedValueUSD: finalUsd,
+          estimatedValueBRL: brl,
+          paidValueBRL: paidBrl,
+          paidValueUSD: paidUsd,
+          status: finalStatus,
+          payerId: fp.payerId || 'all',
+          responsibleTravelerId: fp.payerId || 'all',
+          travelerIds: fp.travelerIds && fp.travelerIds.length > 0 ? fp.travelerIds : ['all'],
+          sourceType: 'fast_pass',
+          sourceId: cleanFpId,
+          excluded: false,
+          notes: fpNotes,
+          updatedAt: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+          updatedBy: cUser.name || 'Sistema',
+        };
+
+        if (primaryIdx >= 0) {
+          const prevExp = updatedExpenses[primaryIdx];
+          updatedExpenses[primaryIdx] = {
+            ...prevExp,
+            ...expData,
+            id: expId,
+            payerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevExp.payerId || expData.payerId),
+            responsibleTravelerId: expData.payerId && expData.payerId !== 'all' ? expData.payerId : (prevExp.responsibleTravelerId || expData.payerId),
+            excluded: prevExp.excluded,
+          };
+          // Consolidar duplicatas antigas da mesma compra sem apagar outras despesas
+          for (let d = matchingIndices.length - 1; d >= 1; d--) {
+            updatedExpenses.splice(matchingIndices[d], 1);
+          }
+        } else {
+          updatedExpenses.push(expData);
+        }
+      }
+    });
+
     return updatedExpenses;
   };
 
@@ -2940,6 +3044,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       Hospedagem: { estimatedBRL: 0, paidBRL: 0 },
       Ingressos: { estimatedBRL: 0, paidBRL: 0 },
       'Pacotes de Fotos': { estimatedBRL: 0, paidBRL: 0 },
+      'Fast Pass': { estimatedBRL: 0, paidBRL: 0 },
       Alimentação: { estimatedBRL: 0, paidBRL: 0 },
       Compras: { estimatedBRL: 0, paidBRL: 0 },
       Transporte: { estimatedBRL: 0, paidBRL: 0 },
@@ -3694,6 +3799,42 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           })
         );
       }
+
+      // 6. Fast Pass
+      const isFastPass = sourceType === 'fast_pass' || updatedItem.category === 'Fast Pass' || id.startsWith('exp-fastpass-');
+      const fpSourceId = sourceId || (id.startsWith('exp-fastpass-') ? id.replace('exp-fastpass-', '') : undefined);
+      if (isFastPass) {
+        setRawDays((prevDays) =>
+          prevDays.map((d) => {
+            if (d.parkBooking?.fastPasses && d.parkBooking.fastPasses.length > 0) {
+              const updatedFpList = d.parkBooking.fastPasses.map((fp) => {
+                const matches = (fpSourceId && fp.id === fpSourceId) || generateDeterministicUUID('fastpass-expense', fp.id) === id;
+                if (matches) {
+                  return {
+                    ...fp,
+                    costBRL: updatedItem.estimatedValueBRL ?? fp.costBRL,
+                    costUSD: updatedItem.estimatedValueUSD ?? fp.costUSD,
+                    paymentStatus: nextPaymentStatus as any,
+                    paidValueBRL: paidBRL,
+                    paidValueUSD: paidUSD,
+                    payerId: updatedItem.payerId || fp.payerId,
+                    travelerIds: updatedItem.travelerIds || fp.travelerIds,
+                  };
+                }
+                return fp;
+              });
+              return {
+                ...d,
+                parkBooking: {
+                  ...d.parkBooking,
+                  fastPasses: updatedFpList,
+                },
+              };
+            }
+            return d;
+          })
+        );
+      }
     }
     addNotification(`Editou o item financeiro`);
     return { success: true };
@@ -3883,6 +4024,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       item.category === 'Pacotes de Fotos' ||
       id.startsWith('exp-photo-');
 
+    const isFastPass =
+      sourceType === 'fast_pass' ||
+      item.category === 'Fast Pass' ||
+      id.startsWith('exp-fastpass-');
+
     if (isPhotoPkg) {
       const targetPkgId = sourceId || (id.startsWith('exp-photo-') ? id.replace('exp-photo-', '') : id);
       const cleanPkgName = (item.title || '').replace(/^Pacote de Fotos:\s*/i, '').trim();
@@ -3890,6 +4036,25 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       if (!photoDelRes.success) {
         return { success: false, error: photoDelRes.error };
       }
+    } else if (isFastPass) {
+      const targetFpId = sourceId || (id.startsWith('exp-fastpass-') ? id.replace('exp-fastpass-', '') : id);
+      if (options?.removeSourceItem) {
+        setRawDays((prevDays) =>
+          prevDays.map((d) => {
+            if (d.parkBooking?.fastPasses && d.parkBooking.fastPasses.length > 0) {
+              return {
+                ...d,
+                parkBooking: {
+                  ...d.parkBooking,
+                  fastPasses: d.parkBooking.fastPasses.filter((fp) => fp.id !== targetFpId),
+                },
+              };
+            }
+            return d;
+          })
+        );
+      }
+      addNotification(`Removeu a despesa do Fast Pass "${item.title}"`);
     } else {
       addNotification(`Removeu o item "${item.title}"`);
     }
