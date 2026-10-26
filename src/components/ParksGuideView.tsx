@@ -666,22 +666,79 @@ export const ParksGuideView: React.FC = () => {
                               Nenhuma atração sem fila agendada para este dia.
                             </p>
                           ) : (
-                            <div className="space-y-1.5 max-h-32 overflow-y-auto custom-scrollbar pr-1">
-                              {pb.fastPasses.map((fp) => (
-                                <div
-                                  key={fp.id}
-                                  onClick={() => handleOpenRegisterModal(day, day.park, 'fastpass')}
-                                  className="p-1.5 rounded-lg bg-amber-50/70 border border-amber-100 flex items-center justify-between gap-1 text-[11px] cursor-pointer hover:bg-amber-100/80 transition-colors"
-                                  title="Clique para gerenciar Fast Pass"
-                                >
-                                  <span className="font-bold text-amber-900 truncate">
-                                    {fp.attractionName}
-                                  </span>
-                                  <span className="font-mono text-[10px] font-bold text-amber-800 shrink-0">
-                                    {fp.timeSlot}
-                                  </span>
-                                </div>
-                              ))}
+                            <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar pr-1">
+                              {pb.fastPasses.map((fp) => {
+                                const passTypeTitle = (fp.type && fp.type.trim()) ? fp.type.trim() : 'Fast Pass';
+
+                                // Extract scheduled attractions or fallback legacy
+                                const reservationsList: Array<{ attractionName: string; timeWindow?: string }> = [];
+                                if (fp.attractionReservations && fp.attractionReservations.length > 0) {
+                                  fp.attractionReservations.forEach((res) => {
+                                    const name = (res.attractionName || '').trim();
+                                    const time = (res.timeWindow || (res as any).timeSlot || '').trim();
+                                    if (name) {
+                                      reservationsList.push({ attractionName: name, timeWindow: time });
+                                    }
+                                  });
+                                } else if (fp.attractionName && fp.attractionName.trim()) {
+                                  const time = (fp.timeWindow || (fp as any).timeSlot || '').trim();
+                                  reservationsList.push({ attractionName: fp.attractionName.trim(), timeWindow: time });
+                                }
+
+                                const isReservationRequired = fp.reservationRequired !== false;
+
+                                return (
+                                  <div
+                                    key={fp.id}
+                                    onClick={() => handleOpenRegisterModal(day, day.park, 'fastpass')}
+                                    className="p-2 rounded-lg bg-amber-50/80 border border-amber-200/80 text-[11px] cursor-pointer hover:bg-amber-100/90 transition-colors space-y-1"
+                                    title="Clique para gerenciar Fast Pass"
+                                  >
+                                    {/* Header: Pass Type in Bold / Highlight */}
+                                    <div className="flex items-center justify-between gap-1">
+                                      <span className="font-bold text-amber-950 text-[11px] truncate">
+                                        ⚡ {passTypeTitle}
+                                      </span>
+                                      {fp.chargeMode === 'hotel_courtesy' && (
+                                        <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-200/80 text-amber-900 shrink-0">
+                                          Cortesia
+                                        </span>
+                                      )}
+                                      {fp.chargeMode === 'free' && (
+                                        <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 shrink-0">
+                                          Gratuito
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    {/* Attractions / Reservation Status Details */}
+                                    {!isReservationRequired ? (
+                                      <p className="text-[10px] text-amber-700/90 italic font-medium">
+                                        Sem agendamento individual
+                                      </p>
+                                    ) : reservationsList.length === 0 ? (
+                                      <p className="text-[10px] text-amber-700/80 italic font-medium">
+                                        Ainda sem atrações agendadas
+                                      </p>
+                                    ) : (
+                                      <div className="space-y-0.5 pt-0.5 border-t border-amber-200/50">
+                                        {reservationsList.map((res, idx) => (
+                                          <div key={idx} className="flex items-center justify-between gap-1 text-[10px]">
+                                            <span className="text-amber-900 font-medium truncate">
+                                              • {res.attractionName}
+                                            </span>
+                                            {res.timeWindow && (
+                                              <span className="font-mono text-amber-800 font-bold shrink-0">
+                                                {res.timeWindow}
+                                              </span>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
                             </div>
                           )}
                         </div>
