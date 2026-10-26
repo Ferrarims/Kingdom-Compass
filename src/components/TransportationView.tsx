@@ -757,8 +757,8 @@ export const TransportationView: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* 5-Column Balanced Grid: Driver, Tolls, Insurances, Passengers, Financial */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5 text-xs">
+                      {/* 4-Column Balanced Grid: Driver, Toll & Insurances, Passengers, Financial */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 text-xs">
                         {/* Driver */}
                         <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
                           <div>
@@ -775,54 +775,66 @@ export const TransportationView: React.FC = () => {
                           </span>
                         </div>
 
-                        {/* Toll Option */}
-                        <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
-                          <div>
-                            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
-                              <CreditCard className="w-3.5 h-3.5 text-[#D4AF37]" />
-                              <span>Opção de Pedágio</span>
-                            </div>
-                            <p className="font-bold text-amber-900 text-xs mt-1">
-                              {rental.tollOption || 'Visitor Toll Pass'}
-                            </p>
-                          </div>
-                          <span className="text-[10px] text-emerald-700 font-semibold pt-1.5 border-t border-slate-200/70 block">
-                            ✓ Isento de taxas abusivas
-                          </span>
-                        </div>
-
-                        {/* Insurances & Coverage */}
-                        <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-1.5 flex flex-col justify-between">
-                          <div>
-                            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center gap-1.5">
-                              <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                              <span>Seguros Inclusos ({rental.includedInsurances?.length || 0})</span>
-                            </div>
-                            {rental.includedInsurances && rental.includedInsurances.length > 0 ? (
-                              <div className="flex flex-wrap gap-1 mt-1">
-                                {rental.includedInsurances.slice(0, 2).map((ins, idx) => (
-                                  <span
-                                    key={idx}
-                                    className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 text-[10px] font-semibold border border-emerald-200 truncate max-w-[140px]"
-                                  >
-                                    ✓ {ins}
-                                  </span>
-                                ))}
-                                {rental.includedInsurances.length > 2 && (
-                                  <span className="text-[10px] font-bold text-slate-500 self-center">
-                                    +{rental.includedInsurances.length - 2} mais
-                                  </span>
-                                )}
+                        {/* Combined Toll & Insurances Card */}
+                        <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200/80 space-y-2 flex flex-col justify-between">
+                          <div className="space-y-2">
+                            <div className="text-[10px] text-slate-400 font-bold uppercase tracking-wider flex items-center justify-between">
+                              <div className="flex items-center gap-1.5">
+                                <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                                <span>Seguro & Pedágio</span>
                               </div>
-                            ) : (
-                              <p className="text-[11px] text-slate-400 italic mt-1">
-                                Seguro CDW/LDW padrão
+                              <CreditCard className="w-3.5 h-3.5 text-[#D4AF37]" />
+                            </div>
+
+                            {/* Toll Info */}
+                            <div className="space-y-0.5">
+                              <span className="text-[10px] text-slate-500 font-medium block">
+                                Opção de Pedágio:
+                              </span>
+                              <p className="font-bold text-amber-900 text-xs truncate" title={rental.tollOption || 'Visitor Toll Pass'}>
+                                {rental.tollOption || 'Visitor Toll Pass'}
                               </p>
-                            )}
+                            </div>
+
+                            {/* Insurances Info */}
+                            <div className="space-y-0.5 pt-1.5 border-t border-slate-200/60">
+                              <span className="text-[10px] text-slate-500 font-medium block">
+                                Seguros Inclusos ({rental.includedInsurances?.length || 0}):
+                              </span>
+                              {rental.includedInsurances && rental.includedInsurances.length > 0 ? (
+                                <div className="flex flex-wrap gap-1 mt-0.5">
+                                  {rental.includedInsurances.slice(0, 3).map((ins, idx) => (
+                                    <span
+                                      key={idx}
+                                      className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 text-[10px] font-semibold border border-emerald-200 truncate max-w-full"
+                                      title={ins}
+                                    >
+                                      ✓ {ins}
+                                    </span>
+                                  ))}
+                                  {rental.includedInsurances.length > 3 && (
+                                    <span className="text-[10px] font-bold text-slate-500 self-center">
+                                      +{rental.includedInsurances.length - 3} mais
+                                    </span>
+                                  )}
+                                </div>
+                              ) : (
+                                <p className="text-[11px] text-slate-400 italic">
+                                  Seguro CDW/LDW padrão
+                                </p>
+                              )}
+                            </div>
                           </div>
-                          <span className="text-[10px] text-slate-400 pt-1.5 border-t border-slate-200/70 block">
-                            Proteção contratada
-                          </span>
+
+                          {/* Footer with statuses */}
+                          <div className="pt-1.5 border-t border-slate-200/70 flex items-center justify-between text-[10px] gap-1">
+                            <span className="text-emerald-700 font-semibold truncate">
+                              ✓ Isento de taxas abusivas
+                            </span>
+                            <span className="text-slate-400 shrink-0">
+                              Proteção contratada
+                            </span>
+                          </div>
                         </div>
 
                         {/* Linked Passengers / Participants */}
@@ -1612,11 +1624,15 @@ export const TransportationView: React.FC = () => {
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {[
                           'CDW / LDW (Proteção contra Colisão e Roubo)',
+                          'CDW/EP (terceiros)',
                           'SLI / ALI (Proteção contra Terceiros)',
                           'PAI / PEC (Proteção contra Acidentes Pessoais)',
                           'Assistência Rodoviária 24h',
+                          'Proteção de Vidros e Pneus',
                         ].map((ins) => {
-                          const isChecked = formData.includedInsurances?.includes(ins);
+                          const isChecked = formData.includedInsurances?.some(
+                            (i) => i.toLowerCase() === ins.toLowerCase() || (ins === 'CDW/EP (terceiros)' && i.toLowerCase().includes('cdw/ep'))
+                          );
                           return (
                             <label
                               key={ins}
@@ -1632,8 +1648,19 @@ export const TransportationView: React.FC = () => {
                                 onChange={(e) => {
                                   const current = formData.includedInsurances || [];
                                   const updated = e.target.checked
-                                    ? [...current, ins]
-                                    : current.filter((i) => i !== ins);
+                                    ? [
+                                        ...current.filter(
+                                          (i) =>
+                                            i.toLowerCase() !== ins.toLowerCase() &&
+                                            !(ins === 'CDW/EP (terceiros)' && i.toLowerCase().includes('cdw/ep'))
+                                        ),
+                                        ins,
+                                      ]
+                                    : current.filter(
+                                        (i) =>
+                                          i.toLowerCase() !== ins.toLowerCase() &&
+                                          !(ins === 'CDW/EP (terceiros)' && i.toLowerCase().includes('cdw/ep'))
+                                      );
                                   setFormData({ ...formData, includedInsurances: updated });
                                 }}
                                 className="w-4 h-4 rounded text-[#1A2B4C] focus:ring-[#1A2B4C]"

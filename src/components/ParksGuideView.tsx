@@ -50,6 +50,7 @@ import { LogisticsCardHeader } from './LogisticsCardHeader';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
 import { isAttractionMatch, normalizeAttractionName } from '../utils/attractionUtils';
 import { AttractionComparisonModal } from './AttractionComparisonModal';
+import { getRealPhotoPackagesList, getPhotoPackageForDay } from '../utils/photoPackageUtils';
 import {
   getAttractionImage,
   getRestaurantImage,
@@ -80,80 +81,8 @@ export const ParksGuideView: React.FC = () => {
   const dollarRate = settings.dollarRate || 5.75;
 
   const tripPhotoPackages = useMemo(() => {
-    const pkgs: Array<{
-      id: string;
-      name: string;
-      complex?: string;
-      confirmationCode?: string;
-      status?: string;
-      costUSD?: number;
-      costBRL?: number;
-      dayNumber?: number;
-      parkName?: string;
-      notes?: string;
-      dayId?: string;
-    }> = [];
-
-    const seen = new Set<string>();
-
-    (itineraryDays || []).forEach((d) => {
-      if (d.parkBooking?.photoPackage) {
-        const pkg = d.parkBooking.photoPackage;
-        const key = pkg.id || `pkg-${pkg.name}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          pkgs.push({
-            id: key,
-            name: pkg.name || 'Pacote de Fotos',
-            complex: pkg.complex || 'Disney',
-            confirmationCode: pkg.confirmationCode,
-            status: pkg.status || 'Ativo',
-            costUSD: pkg.costUSD,
-            costBRL: pkg.costBRL,
-            dayNumber: d.dayNumber,
-            parkName: d.park,
-            notes: pkg.notes || pkg.validityDescription,
-            dayId: d.id,
-          });
-        }
-      } else if (d.parkBooking?.hasPhotoPackage) {
-        const key = `day-photo-${d.id}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          pkgs.push({
-            id: key,
-            name: `Pacote de Fotos (${d.park})`,
-            complex: d.park.includes('Disney') ? 'Disney' : d.park.includes('Universal') ? 'Universal' : 'SeaWorld',
-            confirmationCode: d.parkBooking.confirmationCode,
-            status: 'Ativo',
-            dayNumber: d.dayNumber,
-            parkName: d.park,
-            dayId: d.id,
-          });
-        }
-      }
-    });
-
-    (expenses || []).forEach((e) => {
-      if ((e.category === 'Pacotes de Fotos' || e.sourceType === 'photo_package') && !e.excluded) {
-        const key = e.sourceId || e.id;
-        if (!seen.has(key)) {
-          seen.add(key);
-          pkgs.push({
-            id: key,
-            name: e.title,
-            complex: e.title.toLowerCase().includes('disney') ? 'Disney' : e.title.toLowerCase().includes('universal') ? 'Universal' : 'Outro',
-            status: e.status === 'Pago' ? 'Confirmado' : 'Pendente',
-            costUSD: e.estimatedValueUSD,
-            costBRL: e.estimatedValueBRL,
-            notes: e.notes,
-          });
-        }
-      }
-    });
-
-    return pkgs;
-  }, [itineraryDays, expenses]);
+    return getRealPhotoPackagesList(itineraryDays, expenses, parkTickets);
+  }, [itineraryDays, expenses, parkTickets]);
 
   const getTicketPackageName = (ticketTypeIdOrName?: string) => {
     if (!ticketTypeIdOrName) return '';
@@ -567,7 +496,7 @@ export const ParksGuideView: React.FC = () => {
                       : 'bg-purple-50 text-purple-800 hover:bg-purple-100'
                   }`}
                 >
-                  📸 Com Pacote Fotos ({tripDaysWithParks.filter((d) => Boolean(d.parkBooking?.hasPhotoPackage || d.parkBooking?.photoPackage)).length})
+                  📸 Com Pacote Fotos ({tripDaysWithParks.filter((d) => Boolean(getPhotoPackageForDay(d, tripPhotoPackages))).length})
                 </button>
               </div>
             </div>
@@ -605,12 +534,13 @@ export const ParksGuideView: React.FC = () => {
                   if (scheduleFilter === 'fastpass') return (day.parkBooking?.fastPasses?.length || 0) > 0;
                   if (scheduleFilter === 'dining') return (day.parkBooking?.diningReservations?.length || 0) > 0;
                   if (scheduleFilter === 'shows') return (day.parkBooking?.showsAndParades?.length || 0) > 0;
-                  if (scheduleFilter === 'photos') return Boolean(day.parkBooking?.hasPhotoPackage || day.parkBooking?.photoPackage);
+                  if (scheduleFilter === 'photos') return Boolean(getPhotoPackageForDay(day, tripPhotoPackages));
                   return true;
                 })
                 .map((day) => {
                   const guideInfo = getParkGuideInfo(day.park);
                   const pb = day.parkBooking;
+                  const dayPhotoPkg = getPhotoPackageForDay(day, tripPhotoPackages);
 
                   return (
                     <div
@@ -643,7 +573,7 @@ export const ParksGuideView: React.FC = () => {
                         confirmationCodes={pb?.confirmationCode}
                         codeLabel="Voucher / Confirmação"
                         extraBadges={
-                          (pb?.hasPhotoPackage || pb?.photoPackage) ? (
+                          dayPhotoPkg ? (
                             <span
                               onClick={() => handleOpenRegisterModal(day, day.park, 'photos')}
                               className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-purple-500/30 text-purple-200 border border-purple-400/40 flex items-center gap-1 cursor-pointer hover:bg-purple-500/50 transition-colors"
@@ -873,109 +803,88 @@ export const ParksGuideView: React.FC = () => {
 
                       {/* Photo Package Section / Memory Maker */}
                       <div className="px-5 sm:px-6 pb-3 pt-0 bg-slate-50/50">
-                        {pb?.hasPhotoPackage && pb?.photoPackage ? (
-                          <div
-                            onClick={() => handleOpenRegisterModal(day, day.park, 'photos')}
-                            className="p-3.5 rounded-xl bg-gradient-to-r from-purple-50 via-indigo-50/60 to-purple-50 border border-purple-200/90 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-2xs cursor-pointer hover:border-purple-300 transition-all group"
-                            title="Clique para ver ou gerenciar detalhes do Pacote de Fotos"
-                          >
-                            <div className="flex items-center gap-3">
-                              <div className="w-9 h-9 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform">
-                                <Camera className="w-5 h-5" />
-                              </div>
-                              <div>
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="text-[10px] font-bold uppercase tracking-wider text-purple-700 bg-purple-100/90 px-2 py-0.5 rounded-full border border-purple-200">
-                                    📸 Pacote de Fotos Ativo
-                                  </span>
-                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-200/80 text-purple-900">
-                                    {pb.photoPackage.type === 'trip_30days'
-                                      ? 'Validade: 30 Dias (Múltiplos Parques)'
-                                      : pb.photoPackage.type === 'daily'
-                                      ? 'Validade: 1 Dia'
-                                      : 'Multi-Dias'}
-                                  </span>
-                                  {pb.photoPackage.status && (
-                                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
-                                      <CheckCircle2 className="w-3 h-3" />
-                                      {pb.photoPackage.status}
-                                    </span>
-                                  )}
+                        {(() => {
+                          const dayPhotoPkg = getPhotoPackageForDay(day, tripPhotoPackages);
+                          if (dayPhotoPkg) {
+                            return (
+                              <div
+                                onClick={() => handleOpenRegisterModal(day, day.park, 'photos')}
+                                className="p-3.5 rounded-xl bg-gradient-to-r from-purple-50 via-indigo-50/60 to-purple-50 border border-purple-200/90 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-2xs cursor-pointer hover:border-purple-300 transition-all group"
+                                title="Clique para ver ou gerenciar detalhes do Pacote de Fotos"
+                              >
+                                <div className="flex items-center gap-3">
+                                  <div className="w-9 h-9 rounded-xl bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:scale-105 transition-transform">
+                                    <Camera className="w-5 h-5" />
+                                  </div>
+                                  <div>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                      <span className="text-[10px] font-bold uppercase tracking-wider text-purple-700 bg-purple-100/90 px-2 py-0.5 rounded-full border border-purple-200">
+                                        📸 Pacote de Fotos Ativo
+                                      </span>
+                                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-200/80 text-purple-900">
+                                        {dayPhotoPkg.type === 'trip_30days'
+                                          ? 'Validade: 30 Dias (Múltiplos Parques)'
+                                          : dayPhotoPkg.type === 'daily'
+                                          ? 'Validade: 1 Dia'
+                                          : 'Multi-Dias'}
+                                      </span>
+                                      {dayPhotoPkg.status && (
+                                        <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
+                                          <CheckCircle2 className="w-3 h-3" />
+                                          {dayPhotoPkg.status}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <h4 className="text-xs sm:text-sm font-bold text-purple-950 mt-1 font-serif group-hover:text-purple-700 transition-colors">
+                                      {dayPhotoPkg.name}
+                                    </h4>
+                                    <div className="flex items-center gap-3 text-[11px] text-purple-900/80 mt-0.5 flex-wrap">
+                                      {dayPhotoPkg.code && (
+                                        <span className="font-mono font-bold bg-white/70 px-2 py-0.5 rounded border border-purple-100">
+                                          Voucher: #{dayPhotoPkg.code}
+                                        </span>
+                                      )}
+                                      {dayPhotoPkg.notes && (
+                                        <span className="text-slate-600">{dayPhotoPkg.notes}</span>
+                                      )}
+                                    </div>
+                                  </div>
                                 </div>
-                                <h4 className="text-xs sm:text-sm font-bold text-purple-950 mt-1 font-serif group-hover:text-purple-700 transition-colors">
-                                  {pb.photoPackage.name}
-                                </h4>
-                                <div className="flex items-center gap-3 text-[11px] text-purple-900/80 mt-0.5 flex-wrap">
-                                  {pb.photoPackage.confirmationCode && (
-                                    <span className="font-mono font-bold bg-white/70 px-2 py-0.5 rounded border border-purple-100">
-                                      Voucher: #{pb.photoPackage.confirmationCode}
-                                    </span>
-                                  )}
-                                  {pb.photoPackage.accountEmailOrUser && (
-                                    <span>Titular: <strong>{pb.photoPackage.accountEmailOrUser}</strong></span>
-                                  )}
-                                  {pb.photoPackage.includedParks && pb.photoPackage.includedParks.length > 0 && (
-                                    <span className="text-slate-600">
-                                      Inclui: {pb.photoPackage.includedParks.join(', ')}
-                                    </span>
-                                  )}
-                                  {(pb.photoPackage.costUSD !== undefined || pb.photoPackage.costBRL !== undefined) && (
-                                    <span className="font-mono font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 text-[10px]">
-                                      {pb.photoPackage.costUSD !== undefined && `US$ ${pb.photoPackage.costUSD.toFixed(2)}`}
-                                      {pb.photoPackage.costUSD !== undefined && pb.photoPackage.costBRL !== undefined && ' • '}
-                                      {pb.photoPackage.costBRL !== undefined
-                                        ? `R$ ${pb.photoPackage.costBRL.toFixed(2).replace('.', ',')}`
-                                        : pb.photoPackage.costUSD !== undefined
-                                        ? `R$ ${(pb.photoPackage.costUSD * dollarRate).toFixed(2).replace('.', ',')}`
-                                        : ''}
-                                    </span>
-                                  )}
-                                  {pb.photoPackage.payerId && (
-                                    <span className="font-semibold text-slate-700 bg-white/80 px-2 py-0.5 rounded border border-purple-100 text-[10px]">
-                                      💳 {pb.photoPackage.payerId === 'all'
-                                        ? 'Dividido pelo grupo'
-                                        : `Pago por: ${settings.travelers?.find((t) => t.id === pb.photoPackage.payerId)?.name || 'Viajante'}`}
-                                    </span>
-                                  )}
-                                  {pb.photoPackage.travelerIds && pb.photoPackage.travelerIds.length > 0 && !pb.photoPackage.travelerIds.includes('all') && (
-                                    <span className="font-semibold text-purple-800 bg-purple-100/70 px-2 py-0.5 rounded border border-purple-200 text-[10px]">
-                                      👥 {pb.photoPackage.travelerIds.length} {pb.photoPackage.travelerIds.length === 1 ? 'viajante' : 'viajantes'} dividindo
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            </div>
 
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleOpenRegisterModal(day, day.park, 'photos');
-                              }}
-                              className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-2xs transition-all active:scale-95 cursor-pointer self-start sm:self-auto shrink-0"
-                            >
-                              <Camera className="w-3.5 h-3.5" />
-                              <span>Gerenciar Fotos</span>
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="p-2.5 rounded-xl bg-white/80 border border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-                            <div className="flex items-center gap-2">
-                              <Camera className="w-4 h-4 text-purple-400 shrink-0" />
-                              <span className="text-slate-600 font-medium text-[11px]">
-                                Pacote de Fotos (PhotoPass / Memory Maker): Não cadastrado neste dia.
-                              </span>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleOpenRegisterModal(day, day.park, 'photos');
+                                  }}
+                                  className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs flex items-center gap-1.5 shadow-2xs transition-all active:scale-95 cursor-pointer self-start sm:self-auto shrink-0"
+                                >
+                                  <Camera className="w-3.5 h-3.5" />
+                                  <span>Gerenciar Fotos</span>
+                                </button>
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <div className="p-2.5 rounded-xl bg-white/80 border border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                              <div className="flex items-center gap-2">
+                                <Camera className="w-4 h-4 text-purple-400 shrink-0" />
+                                <span className="text-slate-600 font-medium text-[11px]">
+                                  Pacote de Fotos (PhotoPass / Memory Maker): Não cadastrado neste dia.
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenRegisterModal(day, day.park, 'photos')}
+                                className="px-2.5 py-1 rounded-lg text-purple-700 hover:text-purple-900 hover:bg-purple-50 font-bold text-[11px] flex items-center gap-1 border border-purple-200 transition-colors self-start sm:self-auto cursor-pointer"
+                              >
+                                <Plus className="w-3 h-3 text-purple-600" />
+                                <span>+ Adicionar Pacote de Fotos</span>
+                              </button>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => handleOpenRegisterModal(day, day.park, 'photos')}
-                              className="px-2.5 py-1 rounded-lg text-purple-700 hover:text-purple-900 hover:bg-purple-50 font-bold text-[11px] flex items-center gap-1 border border-purple-200 transition-colors self-start sm:self-auto cursor-pointer"
-                            >
-                              <Plus className="w-3 h-3 text-purple-600" />
-                              <span>+ Adicionar Pacote de Fotos</span>
-                            </button>
-                          </div>
-                        )}
+                          );
+                        })()}
                       </div>
 
                       {/* Observações Gerais embaixo do card */}
@@ -1339,11 +1248,11 @@ export const ParksGuideView: React.FC = () => {
                       </span>
                     </div>
 
-                    {pkg.confirmationCode && (
+                    {(pkg.code || (pkg as any).confirmationCode) && (
                       <div className="bg-purple-50 p-2.5 rounded-xl border border-purple-100 flex items-center justify-between text-xs">
                         <div>
                           <span className="text-[10px] font-bold uppercase text-purple-800 block">Código / Voucher</span>
-                          <span className="font-mono font-bold text-purple-950">{pkg.confirmationCode}</span>
+                          <span className="font-mono font-bold text-purple-950">{pkg.code || (pkg as any).confirmationCode}</span>
                         </div>
                         <span className="text-[10px] font-bold text-purple-700 bg-purple-200/70 px-2 py-0.5 rounded">
                           Voucher Ativo
@@ -1352,12 +1261,16 @@ export const ParksGuideView: React.FC = () => {
                     )}
 
                     <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-100">
-                      {pkg.parkName ? (
+                      {pkg.parks && pkg.parks.length > 0 ? (
                         <span className="text-slate-600">
-                          Parque: <strong>Dia {pkg.dayNumber} ({pkg.parkName})</strong>
+                          Parques: <strong>{pkg.parks.join(', ')}</strong>
+                        </span>
+                      ) : pkg.notes ? (
+                        <span className="text-slate-600 truncate max-w-[200px]" title={pkg.notes}>
+                          {pkg.notes}
                         </span>
                       ) : (
-                        <span className="text-slate-500 italic">Válido para a viagem</span>
+                        <span className="text-slate-500 italic">Válido para a viagem ({pkg.complex})</span>
                       )}
                       {(pkg.costBRL !== undefined || pkg.costUSD !== undefined) && (
                         <span className="font-mono font-bold text-emerald-800">

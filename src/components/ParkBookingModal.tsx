@@ -64,6 +64,9 @@ import {
   getCanonicalPhotoPackageId,
   collectPackageCandidateIds,
   arePhotoPackagesEquivalent,
+  getRealPhotoPackagesList,
+  getPhotoPackageForDay,
+  normalizeComplex,
 } from '../utils/photoPackageUtils';
 
 interface ParkBookingModalProps {
@@ -192,6 +195,8 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     deletePhotoPackage,
     activeTripId,
   } = usePlanner();
+
+  const parkRules = useTripRulesModal(isOpen);
 
   // Determine the active day being edited
   const [selectedDayId, setSelectedDayId] = useState<string>('');
@@ -421,9 +426,12 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       setShowNotes('');
       setConfirmUnlink(false);
 
-      // Photo package populate
+      // Photo package populate: strictly only from real registered packages or existing real day booking
+      const realPackages = getRealPhotoPackagesList(allDays, expenses, parkTickets);
+      const coveredRealPkg = getPhotoPackageForDay(dayToLoad, realPackages);
+
       const existingPkg = existing?.photoPackage;
-      const dayHasPkg = Boolean(existing?.hasPhotoPackage || existingPkg);
+      const dayHasPkg = Boolean(existingPkg || coveredRealPkg);
       setHasPhotoPackage(dayHasPkg);
 
       if (existingPkg) {
@@ -483,81 +491,56 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
 
         setPhotoPkgTravelerIds(existingPkg.travelerIds && existingPkg.travelerIds.length > 0 ? existingPkg.travelerIds : ['all']);
         setPhotoPkgNotes(existingPkg.notes || '');
-      } else {
-        // Look if another day has a 30-day package or package covering this park
-        const detectedPkgDay = allDays.find(
-          (d) => d.id !== dayToLoad.id && d.parkBooking?.photoPackage
-        );
-        const detectedPkg = detectedPkgDay?.parkBooking?.photoPackage;
+      } else if (coveredRealPkg) {
+        // Automatically link the genuine registered package for this park
+        const canonicalDetId = coveredRealPkg.id;
+        setPhotoPkgId(canonicalDetId);
+        setPhotoPkgName(coveredRealPkg.name);
+        setPhotoPkgType(coveredRealPkg.type || 'trip_30days');
+        setPhotoPkgValidityDesc(coveredRealPkg.notes || '');
+        setPhotoPkgComplex(coveredRealPkg.complex || 'Disney');
+        setPhotoPkgIncludedParks(coveredRealPkg.parks || []);
+        setPhotoPkgCode(coveredRealPkg.code || '');
+        setPhotoPkgAccount('');
+        let detUsd = coveredRealPkg.costUSD !== undefined ? coveredRealPkg.costUSD : 0;
+        let detBrl = coveredRealPkg.costBRL !== undefined ? coveredRealPkg.costBRL : 0;
+        if (!detBrl && detUsd && dollarRate > 0) {
+          detBrl = Math.round(detUsd * dollarRate * 100) / 100;
+        } else if (!detUsd && detBrl && dollarRate > 0) {
+          detUsd = Math.round((detBrl / dollarRate) * 100) / 100;
+        }
+        setPhotoPkgCostUSD(detUsd);
+        setPhotoPkgCostBRL(detBrl);
+        setPhotoPkgStatus(coveredRealPkg.status || 'Confirmado');
 
+        const linkedExpense = expenses.find(
+          (e) =>
+            (e.sourceType === 'photo_package' && (e.sourceId === canonicalDetId || (coveredRealPkg.code && e.notes?.includes(coveredRealPkg.code)))) ||
+            (e.category === 'Pacotes de Fotos' && coveredRealPkg.name && e.title?.toLowerCase().includes(coveredRealPkg.name.toLowerCase()))
+        );
+
+        if (linkedExpense) {
+          setPhotoPkgPaymentStatus(linkedExpense.status);
+          setPhotoPkgPaidValueBRL(linkedExpense.paidValueBRL || 0);
+          if (linkedExpense.payerId) setPhotoPkgPayerId(linkedExpense.payerId);
+        } else {
+          setPhotoPkgPaymentStatus('Pago');
+          setPhotoPkgPaidValueBRL(detBrl);
+          setPhotoPkgPayerId(settings?.currentUserId || 'all');
+        }
+
+        setPhotoPkgTravelerIds(['all']);
+        setPhotoPkgNotes(coveredRealPkg.notes || '');
+      } else {
         const isDisney = /magic|epcot|hollywood|animal|blizzard|typhoon|disney/i.test(defaultPark);
         const isUniversal = /universal|island|volcano|epic/i.test(defaultPark);
         const isSeaWorld = /seaworld|busch|aquatica|discovery/i.test(defaultPark);
 
-        if (
-          detectedPkg &&
-          defaultPark &&
-          detectedPkg.includedParks?.some(
-            (p) =>
-              p.toLowerCase().includes(defaultPark.toLowerCase()) ||
-              defaultPark.toLowerCase().includes(p.toLowerCase())
-          )
-        ) {
-          const canonicalDetId = (detectedPkg.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(detectedPkg.id))
-            ? detectedPkg.id
-            : ensureValidUUID(detectedPkg.id, 'photo-pkg', `${activeTripId || 'trip'}-${(detectedPkg.name || 'pkg').trim()}`);
-          setPhotoPkgId(canonicalDetId);
-          setPhotoPkgName(detectedPkg.name);
-          setPhotoPkgType(detectedPkg.type);
-          setPhotoPkgValidityDesc(detectedPkg.validityDescription || '');
-          setPhotoPkgComplex(detectedPkg.complex || 'Disney');
-          setPhotoPkgIncludedParks(detectedPkg.includedParks || []);
-          setPhotoPkgCode(detectedPkg.confirmationCode || '');
-          setPhotoPkgAccount(detectedPkg.accountEmailOrUser || '');
-          let detUsd = detectedPkg.costUSD !== undefined ? detectedPkg.costUSD : 0;
-          let detBrl = detectedPkg.costBRL !== undefined ? detectedPkg.costBRL : 0;
-          if (!detBrl && detUsd && dollarRate > 0) {
-            detBrl = Math.round(detUsd * dollarRate * 100) / 100;
-          } else if (!detUsd && detBrl && dollarRate > 0) {
-            detUsd = Math.round((detBrl / dollarRate) * 100) / 100;
-          }
-          setPhotoPkgCostUSD(detUsd);
-          setPhotoPkgCostBRL(detBrl);
-          setPhotoPkgStatus(detectedPkg.status || 'Confirmado');
-
-          const linkedExpense = expenses.find(
-            (e) =>
-              (e.sourceType === 'photo_package' && (e.sourceId === canonicalDetId || e.sourceId === detectedPkg.id)) ||
-              (e.category === 'Pacotes de Fotos' && detectedPkg.name && e.title?.toLowerCase().includes(detectedPkg.name.toLowerCase()))
-          );
-
-          if (linkedExpense) {
-            setPhotoPkgPaymentStatus(linkedExpense.status);
-            setPhotoPkgPaidValueBRL(linkedExpense.paidValueBRL || 0);
-            if (linkedExpense.payerId) setPhotoPkgPayerId(linkedExpense.payerId);
-          } else {
-            const detRawStatus = detectedPkg.paymentStatus as any;
-            let detNormalizedStatus: NonNullable<PhotoPackageItem['paymentStatus']> = 'Não informado';
-            if (detRawStatus === 'Pago' || detRawStatus === 'Pendente' || detRawStatus === 'Parcial' || detRawStatus === 'Não informado') {
-              detNormalizedStatus = detRawStatus;
-            } else if (detRawStatus === 'Reservado / Confirmado') {
-              detNormalizedStatus = 'Não informado';
-            } else if (detRawStatus === 'Falta Pagar') {
-              detNormalizedStatus = 'Pendente';
-            }
-            setPhotoPkgPaymentStatus(detNormalizedStatus);
-            setPhotoPkgPaidValueBRL(detectedPkg.paidValueBRL !== undefined ? Number(detectedPkg.paidValueBRL) : 0);
-            setPhotoPkgPayerId(detectedPkg.payerId || settings?.currentUserId || 'all');
-          }
-
-          setPhotoPkgTravelerIds(detectedPkg.travelerIds && detectedPkg.travelerIds.length > 0 ? detectedPkg.travelerIds : ['all']);
-          setPhotoPkgNotes(detectedPkg.notes || '');
-        } else {
-          setPhotoPkgId(ensureValidUUID(undefined, 'photo-pkg', `${activeTripId || 'trip'}-${(defaultPark || 'default')}-photo-pkg`));
-          setPhotoPkgPaidValueBRL(0);
-          if (isDisney) {
-            setPhotoPkgName('Disney Memory Maker (30 Dias)');
-            setPhotoPkgType('trip_30days');
+        setPhotoPkgId(ensureValidUUID(undefined, 'photo-pkg', `${activeTripId || 'trip'}-${(defaultPark || 'default')}-photo-pkg`));
+        setPhotoPkgPaidValueBRL(0);
+        if (isDisney) {
+          setPhotoPkgName('Disney Memory Maker (30 Dias)');
+          setPhotoPkgType('trip_30days');
             setPhotoPkgValidityDesc('Válido por 30 dias para todos os 4 parques temáticos e aquáticos Disney');
             setPhotoPkgComplex('Disney');
             setPhotoPkgIncludedParks([
@@ -606,7 +589,6 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
           setPhotoPkgPayerId(settings?.currentUserId || 'all');
           setPhotoPkgTravelerIds(['all']);
         }
-      }
 
       // Auto fetch live park hours for official status indicator.
       // NEVER overwrite saved hours when loading a day that already has hours/park configured.
@@ -959,13 +941,32 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     setShowsList(showsList.filter((s) => s.id !== id));
   };
 
-  // Detected package from another day
+  // Detected package from another day or registered trip expenses
   const detectedOtherDayPkg = React.useMemo(() => {
+    const realPkgs = getRealPhotoPackagesList(allDays, expenses, parkTickets);
+    if (activeDay && activeDay.park) {
+      const parkComplex = normalizeComplex(undefined, activeDay.park);
+      const matched = realPkgs.find((p) => p.complex === parkComplex);
+      if (matched) {
+        return {
+          id: matched.id,
+          name: matched.name,
+          type: matched.type,
+          complex: matched.complex,
+          confirmationCode: matched.code,
+          costUSD: matched.costUSD,
+          costBRL: matched.costBRL,
+          validityDescription: matched.notes,
+          status: (matched.status as any) || 'Confirmado',
+          dayNumber: 0,
+        };
+      }
+    }
     const foundDay = allDays.find(
       (d) => d.id !== activeDay?.id && d.parkBooking?.hasPhotoPackage && d.parkBooking.photoPackage
     );
     return foundDay ? { ...foundDay.parkBooking!.photoPackage!, dayNumber: foundDay.dayNumber } : null;
-  }, [allDays, activeDay]);
+  }, [allDays, activeDay, expenses, parkTickets]);
 
   const handleApplyPhotoPreset = (
     preset: 'disney_30days' | 'disney_1day' | 'universal_3days' | 'universal_1day' | 'seaworld_season' | 'seaworld_1day'
@@ -1096,6 +1097,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     setIsSaving(true);
     
     try {
+    await parkRules.save(async () => {
 
     // Locate active accommodation for the day
     const activeAccommodation = accommodations.find((a) => {
@@ -1135,8 +1137,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
         alert(`❌ Erro ao salvar dados no banco: ${errorMsg}. Mantendo dados para nova tentativa.`);
         return;
       }
-      onClose();
-      return;
+      return {success:true};
     }
 
     const effectiveEarlyEntry = hasEarlyEntry && earlyEntryTime.trim() ? earlyEntryTime.trim() : undefined;
@@ -1510,6 +1511,8 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
       }
     }
 
+    return {success:true};
+    });
     onClose();
     } catch (error: any) {
       console.error('Error saving park booking:', error);
@@ -3621,3 +3624,4 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     </div>
   );
 };
+

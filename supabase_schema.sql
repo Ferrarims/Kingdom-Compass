@@ -718,3 +718,8 @@ ADD COLUMN IF NOT EXISTS photo_package JSONB DEFAULT NULL::jsonb;
 
 CREATE INDEX IF NOT EXISTS idx_park_day_bookings_photo_pkg ON public.park_day_bookings USING gin (photo_package);
 
+
+
+-- Configuração persistente do motor central de regras do roteiro.
+ALTER TABLE public.trips ADD COLUMN IF NOT EXISTS itinerary_rules_config JSONB NOT NULL DEFAULT '{}'::jsonb;
+

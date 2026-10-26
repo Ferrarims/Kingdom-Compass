@@ -632,7 +632,7 @@ export function mapHourlyScheduleToDb(
     : 'other';
 
   const cleanTime = (item.time || '').trim();
-  if (!/^\d{2}:\d{2}$/.test(cleanTime)) {
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(cleanTime)) {
     throw new Error(`Horário inválido ou ausente estritamente requerido (HH:mm): "${item.time}"`);
   }
 
@@ -652,7 +652,6 @@ export function mapHourlyScheduleToDb(
     notes: item.notes ? item.notes.trim() : null,
     source_type: item.sourceType || null,
     source_id: item.sourceId || null,
-    created_at: new Date().toISOString(),
   };
 }
 
@@ -1702,6 +1701,57 @@ export const SupabaseService = {
                 parkBookingsByDayNum.set(dayNum, existingPb);
               }
             }
+          }
+        });
+
+        // If trip has photo package expenses (e.g. Disney Memory Maker), associate with matching park bookings
+        const photoPkgExpenses = (expData || []).filter(
+          (e: any) => (e.category === 'Pacotes de Fotos' || e.source_type === 'photo_package') && !e.excluded
+        );
+        if (photoPkgExpenses.length > 0) {
+          photoPkgExpenses.forEach((pExp: any) => {
+            const expTitle = pExp.title || '';
+            const codeMatch =
+              pExp.notes?.match(/voucher:\s*([A-Z0-9-]+)/i) ||
+              pExp.notes?.match(/c[oó]digo:\s*([A-Z0-9-]+)/i) ||
+              pExp.notes?.match(/confirma[cç][aã]o:\s*([A-Z0-9-]+)/i);
+            const voucherCode = pExp.confirmation_code || (codeMatch ? codeMatch[1].trim() : undefined);
+            const isDisney = /disney|magic|epcot|hollywood|animal/i.test(expTitle);
+            const isUniversal = /universal|islands|volcano|epic/i.test(expTitle);
+            const isSeaWorld = /seaworld|busch|aquatica/i.test(expTitle);
+
+            parkBookingsByDayId.forEach((pb) => {
+              const park = (pb.parkName || '').toLowerCase();
+              const parkMatches =
+                (isDisney && /disney|magic|epcot|hollywood|animal/i.test(park)) ||
+                (isUniversal && /universal|islands|volcano|epic/i.test(park)) ||
+                (isSeaWorld && /seaworld|busch|aquatica/i.test(park));
+
+              if (parkMatches && !pb.photoPackage) {
+                pb.photoPackage = {
+                  id: pExp.source_id || pExp.id,
+                  name: expTitle,
+                  type: /30\s*dia|trip|viagem/i.test(expTitle) ? 'trip_30days' : 'daily',
+                  complex: isDisney ? 'Disney' : isUniversal ? 'Universal' : 'SeaWorld',
+                  includedParks: isDisney
+                    ? ['Magic Kingdom', "Disney's Hollywood Studios", "Disney's Animal Kingdom", 'EPCOT']
+                    : [pb.parkName],
+                  confirmationCode: voucherCode,
+                  status: pExp.status === 'Pago' ? 'Confirmado' : 'Pendente',
+                  costUSD: pExp.estimated_value_usd,
+                  costBRL: pExp.estimated_value_brl,
+                  notes: pExp.notes,
+                };
+                pb.hasPhotoPackage = true;
+              }
+            });
+          });
+        }
+
+        // Clean phantom hasPhotoPackage from parks that have no actual photo package
+        parkBookingsByDayId.forEach((pb) => {
+          if (!pb.photoPackage) {
+            pb.hasPhotoPackage = false;
           }
         });
 
@@ -5331,65 +5381,52 @@ export const SupabaseService = {
    * persistindo o item de forma explícita sem substituir ou apagar outros itens do dia.
    */
   async saveHourlyScheduleItem(
-    tripId: string,
-    itineraryDayId: string,
-    item: HourlyScheduleItem
-  ): Promise<{ success: boolean; error?: string; rowId?: string }> {
+    tripId:string, itineraryDayId:string, item:HourlyScheduleItem
+  ):Promise<{success:boolean;error?:string;rowId?:string}> {
+    let written=false;
     try {
-      if (!tripId || !itineraryDayId || !item) {
-        return { success: false, error: 'tripId, itineraryDayId e item são obrigatórios' };
+      if(!tripId||!itineraryDayId||!item)throw new Error('Viagem, dia e item são obrigatórios.');
+      const rowId=item.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.id)
+        ? item.id : ensureValidUUID(item.id,'hourly',itineraryDayId+'-'+item.time+'-'+item.title);
+      const before=await supabase.from('itinerary_days').select('hourly_schedule,updated_at')
+        .eq('trip_id',tripId).eq('id',itineraryDayId).maybeSingle();
+      if(before.error||!before.data)throw new Error(before.error?.message||'Dia não encontrado nesta viagem.');
+      if(!Array.isArray(before.data.hourly_schedule))throw new Error('Cronograma do dia inválido.');
+      const current=before.data.hourly_schedule as HourlyScheduleItem[];
+      const itemWithValidId=preserveHourlyMetadata({...item,id:rowId},current.find(i=>i.id===rowId));
+      const {created_at:_createdAt,updated_at:_updatedAt,...dbRow}=mapHourlyScheduleToDb(itemWithValidId,itineraryDayId,tripId);
+      const upsert=await supabase.from('hourly_schedules').upsert(dbRow,{onConflict:'id'}).select('id');
+      if(upsert.error||upsert.data?.length!==1)throw new Error(upsert.error?.message||'Item relacional não confirmado.');
+      written=true;
+      const next=current.some(i=>i.id===rowId)
+        ? current.map(i=>i.id===rowId?itemWithValidId:i) : [...current,itemWithValidId];
+      next.sort(compareScheduleItemOrder);
+      let update=supabase.from('itinerary_days')
+        .update({hourly_schedule:next,updated_at:new Date().toISOString()})
+        .eq('trip_id',tripId).eq('id',itineraryDayId);
+      update=before.data.updated_at ? update.eq('updated_at',before.data.updated_at) : update.is('updated_at',null);
+      const saved=await update.select('hourly_schedule');
+      if(saved.error||saved.data?.length!==1) {
+        throw new Error(saved.error?.message||'O dia mudou ou o JSON não foi gravado. Recarregue e tente novamente.');
       }
-
-      const rowId = item.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.id)
-        ? item.id
-        : ensureValidUUID(item.id, 'hourly', `${itineraryDayId}-${item.sourceType || 'manual'}-${item.time}-${(item.title || '').trim()}`);
-
-      const itemWithValidId = { ...item, id: rowId };
-      const dbRow = mapHourlyScheduleToDb(itemWithValidId, itineraryDayId, tripId);
-
-      const { error: upsertErr } = await supabase
-        .from('hourly_schedules')
-        .upsert(dbRow, { onConflict: 'id' });
-
-      if (upsertErr) {
-        console.error('Erro ao salvar item em hourly_schedules:', upsertErr.message);
-        return { success: false, error: upsertErr.message };
+      const savedList=saved.data[0].hourly_schedule;
+      if(!Array.isArray(savedList)||stableJson(savedList.find(i=>i.id===rowId))!==stableJson(itemWithValidId)){
+        throw new Error('A confirmação do JSON difere do item salvo.');
       }
-
-      // Also update itinerary_days.hourly_schedule JSON array so JSON and relational table stay in sync
-      try {
-        const { data: dayRow } = await supabase
-          .from('itinerary_days')
-          .select('hourly_schedule')
-          .eq('id', itineraryDayId)
-          .maybeSingle();
-
-        if (dayRow) {
-          const currentList = Array.isArray(dayRow.hourly_schedule) ? dayRow.hourly_schedule : [];
-          const idx = currentList.findIndex((i: any) => i.id === rowId);
-          let newList: HourlyScheduleItem[];
-          if (idx >= 0) {
-            newList = [...currentList];
-            newList[idx] = itemWithValidId;
-          } else {
-            newList = [...currentList, itemWithValidId];
-          }
-          newList.sort(compareScheduleItemOrder);
-          await supabase
-            .from('itinerary_days')
-            .update({ hourly_schedule: newList, updated_at: new Date().toISOString() })
-            .eq('id', itineraryDayId);
-        }
-      } catch (jsonSyncErr) {
-        console.warn('Warning: failed to sync hourly schedule item to itinerary_days JSON:', jsonSyncErr);
+      const check=await supabase.from('hourly_schedules').select('*')
+        .eq('trip_id',tripId).eq('itinerary_day_id',itineraryDayId).eq('id',rowId).single();
+      const row=check.data;
+      if(check.error||!row||Object.keys(dbRow).some(key=>
+        stableJson(row[key]??null)!==stableJson(dbRow[key]??null))){
+        throw new Error(check.error?.message||'A confirmação relacional difere do item salvo.');
       }
-
-      return { success: true, rowId };
-    } catch (err: any) {
-      console.error('Falha ao salvar item de horário:', err);
-      return { success: false, error: err?.message || 'Falha ao salvar horário' };
+      return {success:true,rowId};
+    }catch(error){
+      const message=error instanceof Error?error.message:String(error);
+      return {success:false,error:(written?'A gravação pode estar parcial; o roteiro não foi confirmado. ':'')+message};
     }
   },
+
 
   /**
    * Delete Hourly Schedule Item
@@ -5672,4 +5709,5 @@ export const SupabaseService = {
     }
   },
 };
+
 

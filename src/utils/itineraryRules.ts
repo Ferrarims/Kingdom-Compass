@@ -346,7 +346,7 @@ export function evaluateItineraryRules(
     const suffix = c.date !== date ? ' — jornada de ' + date : '';
     emit(j,'arrival',arrival,zone,
       (end === arrival ? 'Chegada e fim do dia — ' : 'Chegada à acomodação — ') + stay.name + suffix,
-      location(stay),'accommodation','Chegada calculada pelos trechos desta jornada.',stay.id);
+      location(stay),'accommodation','Chegada estimada: '+c.date+' às '+c.time+'. O descanso considera o maior horário entre '+policy.normalEnd+', chegada e check-in.',stay.id);
     if (end !== arrival) emit(j,'end',end,zone,'Fim do dia / descanso — ' + stay.name,
       location(stay),'accommodation','Marcador de descanso posterior à chegada.',stay.id);
   };
@@ -555,7 +555,14 @@ export function evaluateItineraryRules(
           if (!j.earlyCheckout.luggageConfirmed) issue(j.id,'LUGGAGE_PLAN','Confirmar guarda-volumes antes do parque.');
         }
       });
-      stage(j,['close','car','return','arrival','end'],()=>{
+      // Fechamento informativo, sem inventar saída ou retorno de show pendente.
+      if (j.returnEndUnknown) stage(j,['close'],()=>{
+        let closing = at(j.date,j.closing,zone);
+        if (closing <= opening) closing = at(shiftDate(j.date,1),j.closing,zone);
+        emit(j,'close',closing,zone,'Fechamento cadastrado — ' + j.name,j.name,'park',
+          'Horário cadastrado de planejamento. Término do show e retorno ainda pendentes.');
+      });
+      stage(j,j.returnEndUnknown ? ['car','return','arrival','end'] : ['close','car','return','arrival','end'],()=>{
         let closing = at(j.date,j.closing,zone);
         if (closing <= opening) closing = at(shiftDate(j.date,1),j.closing,zone);
         if (j.returnEndUnknown) throw new Error('Término da última atividade pendente; retorno não confirmado.');
@@ -678,3 +685,4 @@ export function createRulesController(store: RulesStore, policy: Partial<Policy>
     evaluateAndCorrectAllItems: (tripId: string) => enqueue(()=>evaluateAndCorrectAllItems(tripId)),
   };
 }
+

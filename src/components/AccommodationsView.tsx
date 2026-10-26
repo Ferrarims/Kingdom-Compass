@@ -49,8 +49,8 @@ export const AccommodationsView: React.FC = () => {
     accommodations,
     selectedAccommodationsPerNight,
     setSelectedAccommodationForNight,
-    addAccommodation,
-    updateAccommodation,
+    addAccommodation: persistAddAccommodation,
+    updateAccommodation: persistUpdateAccommodation,
     deleteAccommodation,
     syncAccommodationsToSupabase,
     reloadAccommodationsFromSupabase,
@@ -64,6 +64,14 @@ export const AccommodationsView: React.FC = () => {
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const accommodationRules = useTripRulesModal(isModalOpen);
+  const addAccommodation: typeof persistAddAccommodation = async (...args) => {
+    const {result} = await accommodationRules.save(() => persistAddAccommodation(...args));
+    return result;
+  };
+  const updateAccommodation: typeof persistUpdateAccommodation = async (...args) => {
+    const {result} = await accommodationRules.save(() => persistUpdateAccommodation(...args));
+    return result;
+  };
 
   // Determine min and max allowed dates for the active trip
 
@@ -1742,3 +1750,4 @@ export const AccommodationsView: React.FC = () => {
     </div>
   );
 };
+

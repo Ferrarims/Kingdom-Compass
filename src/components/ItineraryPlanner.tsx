@@ -1,3 +1,4 @@
+import { ItineraryLogisticsSettings } from './ItineraryLogisticsSettings';
 import React, { useState, useMemo, useRef } from 'react';
 import {
   Calendar,
@@ -57,6 +58,7 @@ import { isDayWithPark, isNonParkEvent, clearParkReferencesFromDay, compareSched
 import { ParkBookingModal } from './ParkBookingModal';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { SupabaseService } from '../services/supabaseService';
+import { getRealPhotoPackagesList, getPhotoPackageForDay } from '../utils/photoPackageUtils';
 import { useConfirmationKeyboard } from '../hooks/useConfirmationKeyboard';
 import { generateUUID } from '../utils/uuid';
 import { useTripRulesModal } from '../hooks/useTripRulesModal';
@@ -216,6 +218,7 @@ export const ItineraryPlanner: React.FC = () => {
 
   // Hourly Item Modal state (Add / Edit)
   const [isHourlyModalOpen, setIsHourlyModalOpen] = useState(false);
+  const hourlyRules = useTripRulesModal(isHourlyModalOpen);
   const [hourlyTargetDayId, setHourlyTargetDayId] = useState<string>('');
   const [editingHourlyItemId, setEditingHourlyItemId] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -235,158 +238,12 @@ export const ItineraryPlanner: React.FC = () => {
   const [overviewSearchQuery, setOverviewSearchQuery] = useState('');
 
   const photoPackagesList = React.useMemo(() => {
-    const list: Array<{
-      id: string;
-      name: string;
-      complex?: string;
-      code?: string;
-      type?: string;
-      status?: string;
-      notes?: string;
-      parks?: string[];
-      source?: string;
-    }> = [];
-
-    const seenKeys = new Set<string>();
-
-    (itineraryDays || []).forEach((d) => {
-      const pb = d.parkBooking;
-      if (pb?.photoPackage) {
-        const pkg = pb.photoPackage;
-        const key = pkg.id || `pkg-${pkg.name}`;
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          list.push({
-            id: key,
-            name: pkg.name || 'Pacote de Fotos',
-            complex: pkg.complex || (d.park.includes('Disney') ? 'Disney' : d.park.includes('Universal') ? 'Universal' : 'SeaWorld'),
-            code: pkg.confirmationCode,
-            type: pkg.type,
-            status: pkg.status || 'Ativo',
-            notes: pkg.notes || pkg.validityDescription,
-            parks: pkg.includedParks,
-            source: `Dia ${d.dayNumber} (${d.park})`,
-          });
-        }
-      } else if (pb?.hasPhotoPackage) {
-        const key = `day-photo-${d.id}`;
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          list.push({
-            id: key,
-            name: `Pacote de Fotos / PhotoPass`,
-            complex: d.park.includes('Disney') ? 'Disney' : d.park.includes('Universal') ? 'Universal' : 'SeaWorld',
-            code: pb.confirmationCode,
-            status: 'Ativo',
-            source: `Dia ${d.dayNumber} (${d.park})`,
-          });
-        }
-      }
-    });
-
-    (expenses || []).forEach((exp) => {
-      if ((exp.category === 'Pacotes de Fotos' || exp.sourceType === 'photo_package') && !exp.excluded) {
-        const key = exp.sourceId || exp.id;
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          list.push({
-            id: key,
-            name: exp.title,
-            complex: exp.title.toLowerCase().includes('disney') ? 'Disney' : exp.title.toLowerCase().includes('universal') ? 'Universal' : 'Outro',
-            status: exp.status === 'Pago' ? 'Confirmado' : 'Pendente',
-            notes: exp.notes,
-            source: 'Financeiro / Despesas',
-          });
-        }
-      }
-    });
-
-    (parkTickets || []).forEach((tk) => {
-      const titleLower = (tk.title || '').toLowerCase();
-      if (titleLower.includes('foto') || titleLower.includes('photo') || titleLower.includes('memory maker')) {
-        const key = tk.id;
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          list.push({
-            id: key,
-            name: tk.title,
-            complex: tk.complex,
-            code: tk.confirmationCode,
-            status: tk.paymentStatus || 'Pago',
-            notes: tk.notes,
-            parks: tk.parksIncluded,
-            source: 'Ingressos Comprados',
-          });
-        }
-      }
-    });
-
-    return list;
+    return getRealPhotoPackagesList(itineraryDays, expenses, parkTickets);
   }, [itineraryDays, expenses, parkTickets]);
 
   const getDayPhotoPackage = React.useCallback(
     (day: ItineraryDay) => {
-      if (!day) return null;
-      if (day.parkBooking?.photoPackage) {
-        const pkg = day.parkBooking.photoPackage;
-        return {
-          name: pkg.name || 'Pacote de Fotos (PhotoPass / Memory Maker)',
-          code: pkg.confirmationCode,
-          complex: pkg.complex || (day.park?.includes('Disney') ? 'Disney' : day.park?.includes('Universal') ? 'Universal' : 'Outro'),
-          details: pkg.validityDescription || pkg.notes,
-        };
-      }
-      if (day.parkBooking?.hasPhotoPackage) {
-        return {
-          name: 'Pacote de Fotos (PhotoPass / Memory Maker)',
-          code: day.parkBooking.confirmationCode,
-          complex: day.park?.includes('Disney') ? 'Disney' : day.park?.includes('Universal') ? 'Universal' : 'Outro',
-          details: 'Ativo para este dia de parque',
-        };
-      }
-
-      if (!day.park || day.park === 'Sem Parque' || day.park === 'Livre' || !isDayWithPark(day)) return null;
-
-      const parkLower = day.park.toLowerCase();
-      const parkComplex = parkLower.includes('disney') || parkLower.includes('kingdom') || parkLower.includes('epcot') || parkLower.includes('hollywood') || parkLower.includes('blizzard') || parkLower.includes('typhoon')
-        ? 'disney'
-        : parkLower.includes('universal') || parkLower.includes('volcano') || parkLower.includes('epic') || parkLower.includes('adventure') || parkLower.includes('studios')
-        ? 'universal'
-        : parkLower.includes('seaworld') || parkLower.includes('busch') || parkLower.includes('aquatica') || parkLower.includes('discovery')
-        ? 'seaworld'
-        : 'outro';
-
-      const matched = photoPackagesList.find((pkg) => {
-        const pkgComplex = (pkg.complex || '').toLowerCase();
-        const pkgName = (pkg.name || '').toLowerCase();
-        if (pkgComplex && pkgComplex !== 'outro') {
-          if (pkgComplex.includes(parkComplex) || parkComplex.includes(pkgComplex)) return true;
-        }
-        if (pkgName.includes(parkComplex) || (parkComplex === 'disney' && (pkgName.includes('memory') || pkgName.includes('photopass')))) return true;
-        if (pkg.parks && pkg.parks.some((p) => p.toLowerCase().includes(parkLower) || parkLower.includes(p.toLowerCase()))) return true;
-        return false;
-      });
-
-      if (matched) {
-        return {
-          name: matched.name,
-          code: matched.code,
-          complex: matched.complex,
-          details: matched.notes || (matched.complex ? `Pacote ${matched.complex} Ativo` : 'Pacote de Fotos Ativo'),
-        };
-      }
-
-      if (photoPackagesList.length > 0 && isDayWithPark(day)) {
-        const firstPkg = photoPackagesList[0];
-        return {
-          name: firstPkg.name,
-          code: firstPkg.code,
-          complex: firstPkg.complex,
-          details: firstPkg.notes || 'Pacote de Fotos da Viagem Ativo',
-        };
-      }
-
-      return null;
+      return getPhotoPackageForDay(day, photoPackagesList);
     },
     [photoPackagesList]
   );
@@ -646,10 +503,12 @@ export const ItineraryPlanner: React.FC = () => {
       }
       const targetDayId = targetDay.id;
 
+      await hourlyRules.save(async () => {
       let success = false;
       if (editingHourlyItemId) {
         const existing = (targetDay.hourlySchedule || []).find((i) => i.id === editingHourlyItemId);
         const updatedItem: HourlyScheduleItem = {
+          ...existing,
           id: editingHourlyItemId,
           time: hourlyForm.time || '08:00',
           title: hourlyForm.title.trim(),
@@ -675,13 +534,11 @@ export const ItineraryPlanner: React.FC = () => {
         success = await saveHourlyScheduleItem(targetDayId, newItem);
       }
 
-      if (success) {
-        setIsHourlyModalOpen(false);
-        setEditingHourlyItemId(null);
-        if (activeTripId) await evaluateAndCorrectAllItems(activeTripId);
-      } else {
-        throw new Error('Falha ao salvar atividade.');
-      }
+      if (!success) throw new Error('Falha ao salvar atividade.');
+      return {success:true};
+      });
+      setIsHourlyModalOpen(false);
+      setEditingHourlyItemId(null);
     } catch (error: any) {
       setSaveError(error?.message || 'Erro inesperado ao salvar atividade.');
     } finally {
@@ -2078,6 +1935,13 @@ export const ItineraryPlanner: React.FC = () => {
           </div>
         </div>
 
+        <details className="rounded-2xl border border-slate-200 bg-white p-4">
+          <summary className="cursor-pointer font-semibold text-[#1A2B4C]">
+            Ajustar logística e recalcular roteiro
+          </summary>
+          <div className="mt-4"><ItineraryLogisticsSettings /></div>
+        </details>
+
         {/* VIEW MODE SELECTOR & SEARCH BAR */}
         <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-2xs space-y-3.5">
           <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
@@ -2287,23 +2151,28 @@ export const ItineraryPlanner: React.FC = () => {
                       <span>Shows & Fogos ({activeDay.parkBooking?.showsAndParades?.length || 0})</span>
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={() => handleOpenFullParkBooking('photos')}
-                      className={`px-2.5 py-1 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
-                        activeDay.parkBooking?.hasPhotoPackage
-                          ? 'bg-purple-100 hover:bg-purple-200 text-purple-900 border-purple-300'
-                          : 'bg-purple-50/60 hover:bg-purple-100 text-purple-800 border-purple-200'
-                      }`}
-                      title="Gerenciar Pacote de Fotos / PhotoPass / Memory Maker"
-                    >
-                      <Camera className="w-3.5 h-3.5 text-purple-600" />
-                      <span>
-                        {activeDay.parkBooking?.hasPhotoPackage
-                          ? '📸 PhotoPass Ativo'
-                          : '+ Pacote de Fotos'}
-                      </span>
-                    </button>
+                    {(() => {
+                      const dayHasPhoto = Boolean(getDayPhotoPackage(activeDay));
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => handleOpenFullParkBooking('photos')}
+                          className={`px-2.5 py-1 rounded-lg border text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                            dayHasPhoto
+                              ? 'bg-purple-100 hover:bg-purple-200 text-purple-900 border-purple-300'
+                              : 'bg-purple-50/60 hover:bg-purple-100 text-purple-800 border-purple-200'
+                          }`}
+                          title="Gerenciar Pacote de Fotos / PhotoPass / Memory Maker"
+                        >
+                          <Camera className="w-3.5 h-3.5 text-purple-600" />
+                          <span>
+                            {dayHasPhoto
+                              ? '📸 PhotoPass Ativo'
+                              : '+ Pacote de Fotos'}
+                          </span>
+                        </button>
+                      );
+                    })()}
                   </div>
                 )}
 
@@ -3034,13 +2903,22 @@ export const ItineraryPlanner: React.FC = () => {
 
             <form onSubmit={handleSaveHourlyItem} className="flex flex-col flex-1 min-h-0 overflow-hidden text-slate-700">
               <div className="p-5 sm:p-6 space-y-6 flex-1 overflow-y-auto min-h-0 custom-scrollbar">
-                {saveError && (
+                {(saveError || hourlyRules.error) && (
                   <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-start gap-2 shadow-2xs">
                     <AlertCircle className="w-4 h-4 shrink-0 text-red-500 mt-0.5" />
-                    <span>{saveError}</span>
+                    <span>{saveError || hourlyRules.error}</span>
                   </div>
                 )}
 
+                {hourlyRules.sourceSaved && (
+                  <button type="button" className="rounded border p-2 text-sm"
+                    disabled={hourlyRules.checking}
+                    onClick={() => void hourlyRules.retry().then(() => {
+                      setIsHourlyModalOpen(false); setEditingHourlyItemId(null);
+                    }).catch(error => setSaveError(error instanceof Error ? error.message : String(error)))}>
+                    Repetir somente a conferência do roteiro
+                  </button>
+                )}
                 {/* 1. Detalhes do Horário */}
                 <div>
                   <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-2">1. Detalhes da Atividade & Horário</label>
@@ -3149,7 +3027,7 @@ export const ItineraryPlanner: React.FC = () => {
                   </button>
                   <button
                     type="submit"
-                    disabled={isSaving}
+                    disabled={isSaving || hourlyRules.sourceSaved}
                     className="px-6 py-2.5 rounded-xl bg-[#1A2B4C] text-white text-xs font-bold hover:bg-[#2A437E] transition-all flex items-center gap-2 cursor-pointer shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <CheckCircle2 className="w-4 h-4 text-[#D4AF37]" />
@@ -4527,3 +4405,4 @@ export const ItineraryPlanner: React.FC = () => {
     </div>
   );
 };
+

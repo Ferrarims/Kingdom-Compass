@@ -195,7 +195,7 @@ export function buildRulesSnapshot(raw: RawRulesData): Snapshot & { legacyOwnedI
       const fast=list(pb.fast_passes || []);
       let latest=cfg.latestActivityEnd;
       let unknown=!!cfg.returnEndUnknown;
-      const activities=[
+      const activities: Row[]=[
         ...shows.map(s=>({...s,label:s.showName,source:'show'})),
         ...dining.map(s=>({...s,label:s.restaurantName,source:'dining'})),
         ...fast.map(s=>({...s,label:s.attractionName,source:'fastpass',time:String(s.timeWindow||'').split(/\s*[-–]\s*/)[0]})),
@@ -316,7 +316,7 @@ export function buildRulesSnapshot(raw: RawRulesData): Snapshot & { legacyOwnedI
       }
       const j=jobs.find(j=>j.id===e.binding!.jobId);
       if(!j)return e.binding; // Fonte antiga removida: o motor pode retirar seu automático.
-      if(j.kind==='park'&&j.returnEndUnknown&&['close','car','return','arrival','end'].includes(e.binding.role)) {
+      if(j.kind==='park'&&j.returnEndUnknown&&['car','return','arrival','end'].includes(e.binding.role)) {
         return {jobId:'obsolete-unconfirmed-return-'+j.id,role:e.binding.role};
       }
       if ((source==='accommodation'&&j.kind==='flight') ||
@@ -372,7 +372,7 @@ export function buildRulesSnapshot(raw: RawRulesData): Snapshot & { legacyOwnedI
        !/^split-drive-|^transit-|^transfer-|^acc-transport-/.test(e.item.sourceId)){
       throw new Error('Fonte incompatível na migração de '+e.item.id);
     }
-    if (j.kind==='park' && j.returnEndUnknown && ['close','car','return','arrival','end'].includes(role)) {
+    if (j.kind==='park' && j.returnEndUnknown && ['car','return','arrival','end'].includes(role)) {
       return {jobId:'obsolete-unconfirmed-return-'+j.id,role};
     }
     return {jobId:j.id,role};
@@ -634,3 +634,4 @@ export class SupabaseItineraryRulesStore implements RulesStore {
     this.callbacks.report(enriched,this.loaded?.raw.trip.id || '');
   }
 }
+

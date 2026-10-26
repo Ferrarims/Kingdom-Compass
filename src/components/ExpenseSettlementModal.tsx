@@ -436,13 +436,16 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
     const payDate = newAdjDate || new Date().toISOString().split('T')[0];
     const payMethod = newAdjMethod || 'PIX';
 
+    const amountBrl = selectedCurrency === 'USD' ? Number((num * dollarRate).toFixed(2)) : num;
+    const amountUsd = selectedCurrency === 'USD' ? num : Number((num / dollarRate).toFixed(2));
+
     const newPayment: SettlementPayment = {
       id: tempId,
       tripId: settings.id!,
       fromTravelerId: newAdjFrom,
       toTravelerId: newAdjTo,
-      amountBrl: num,
-      amountUsd: Number((num / dollarRate).toFixed(2)),
+      amountBrl,
+      amountUsd,
       description: desc,
       paymentDate: payDate,
       paymentMethod: payMethod,
@@ -456,7 +459,7 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
         id: tempId,
         fromTravelerId: newAdjFrom,
         toTravelerId: newAdjTo,
-        amount: num,
+        amount: amountBrl,
         description: desc,
         paymentDate: payDate,
         paymentMethod: payMethod,
@@ -976,8 +979,22 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
                   
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Valor (R$)</label>
-                      <MoneyInput currency="BRL" variant="light" value={newAdjAmount} onChange={(val) => setNewAdjAmount(val)} />
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Valor ({selectedCurrency === 'USD' ? 'US$' : 'R$'})
+                      </label>
+                      <MoneyInput
+                        currency={selectedCurrency}
+                        variant="light"
+                        value={newAdjAmount}
+                        onChange={(val) => setNewAdjAmount(val)}
+                      />
+                      {newAdjAmount !== null && newAdjAmount > 0 && (
+                        <span className="text-[10px] text-slate-400 font-medium block mt-1">
+                          {selectedCurrency === 'USD'
+                            ? `≈ R$ ${(newAdjAmount * dollarRate).toFixed(2)}`
+                            : `≈ US$ ${(newAdjAmount / dollarRate).toFixed(2)}`}
+                        </span>
+                      )}
                     </div>
                     <div>
                       <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">Forma de Pagamento</label>
@@ -1074,10 +1091,14 @@ export const ExpenseSettlementModal: React.FC<ExpenseSettlementModalProps> = ({
                         <div className="flex items-center gap-3 self-end sm:self-auto shrink-0">
                           <div className="text-right">
                             <span className="font-bold text-emerald-700 font-mono text-sm block">
-                              R$ {adj.amount.toFixed(2)}
+                              {selectedCurrency === 'USD'
+                                ? `$ ${(adj.amount / dollarRate).toFixed(2)}`
+                                : `R$ ${adj.amount.toFixed(2)}`}
                             </span>
                             <span className="text-[10px] text-slate-400 font-mono">
-                              ≈ US$ {(adj.amount / dollarRate).toFixed(2)}
+                              {selectedCurrency === 'USD'
+                                ? `≈ R$ ${adj.amount.toFixed(2)}`
+                                : `≈ US$ ${(adj.amount / dollarRate).toFixed(2)}`}
                             </span>
                           </div>
                           <button

@@ -73,8 +73,8 @@ const formatFlightRoute = (flight: {
 export const FlightsView: React.FC = () => {
   const {
     flights,
-    addFlight,
-    updateFlight,
+    addFlight: persistAddFlight,
+    updateFlight: persistUpdateFlight,
     deleteFlight,
     currencyView,
     settings,
@@ -95,6 +95,15 @@ export const FlightsView: React.FC = () => {
   const [copiedPnr, setCopiedPnr] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const flightRules = useTripRulesModal(modalOpen);
+  const addFlight: typeof persistAddFlight = async (...args) => {
+    const {result} = await flightRules.save(() => persistAddFlight(...args));
+    return result;
+  };
+  const updateFlight: typeof persistUpdateFlight = async (...args) => {
+    const {result} = await flightRules.save(() => persistUpdateFlight(...args));
+    return result;
+  };
   const [editingFlight, setEditingFlight] = useState<FlightSegment | null>(null);
   const [flightToDelete, setFlightToDelete] = useState<FlightSegment | null>(null);
 
@@ -361,7 +370,7 @@ export const FlightsView: React.FC = () => {
       }
     } catch (err) {
       console.error('Erro ao salvar voo:', err);
-      setSaveError('Erro inesperado ao salvar voo');
+      setSaveError(err instanceof Error ? err.message : 'Erro inesperado ao salvar voo');
     } finally {
       setIsSaving(false);
     }
@@ -1913,3 +1922,4 @@ export const FlightsView: React.FC = () => {
     </div>
   );
 };
+

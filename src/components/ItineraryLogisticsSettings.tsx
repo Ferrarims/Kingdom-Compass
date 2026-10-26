@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { usePlanner } from '../context/PlannerContext';
 import { supabase } from '../services/supabaseClient';
 import { routeKey } from '../services/itineraryRulesAdapter';
+import type { Clock, Route } from '../utils/itineraryRules';
 import type { LogisticsConfig } from '../services/itineraryRulesAdapter';
 import { useTripRulesModal } from '../hooks/useTripRulesModal';
 
@@ -54,7 +55,7 @@ export function ItineraryLogisticsSettings() {
   const save=async()=>{
     if(!activeTripId)return;
     try{
-      for(const end of Object.values(cfg.activityEnds || {})){
+      for(const end of Object.values<Clock>(cfg.activityEnds || {})){
         if(!end.date||!end.time||!cfg.destinationTimeZone)throw new Error('Preencha data, término e fuso do destino ou remova esse ajuste.');
       }
       const {plan}=await rules.save(async()=>{
@@ -122,7 +123,7 @@ export function ItineraryLogisticsSettings() {
       <input placeholder="Fonte da estimativa" value={source} onChange={e=>setSource(e.target.value)}
         className="rounded border p-2"/>
       <button type="button" onClick={addRoute} className="rounded border p-2">Adicionar ou atualizar trecho</button>
-      {Object.entries(cfg.routes || {}).map(([key,r])=><div key={key} className="text-sm">
+      {Object.entries<Route>(cfg.routes || {}).map(([key,r])=><div key={key} className="text-sm">
         {key.split('|').slice(1).map(id=>nodes.find(n=>n.id===id)?.name || id).join(' → ')}:
         {' '}{r.minutes ?? 'pendente'} min — {r.description}
         <button type="button" className="ml-2 underline" onClick={()=>setCfg(c=>{
@@ -133,6 +134,7 @@ export function ItineraryLogisticsSettings() {
     <label className="flex gap-2 text-sm"><input type="checkbox" checked={!!cfg.luggagePlanConfirmed}
       onChange={e=>setCfg(c=>({...c,luggagePlanConfirmed:e.target.checked}))}/>
       Bagagens e espera após o checkout da volta já combinadas</label>
+    <p className="text-sm">Padrões: acordar 30 min antes da primeira saída; catracas 30 min antes da entrada válida; pré-check-in 30 min; descanso às 22:30 ou após a chegada, se mais tarde. Durações de rotas são estimativas e podem ser ajustadas abaixo.</p>
     {bookings.map(p=><div key={p.id} className="space-y-2 rounded border p-2">
       <p className="font-semibold">{p.parkName} — {p.date}</p>
       <label className="grid gap-1 text-sm">Transporte usado para este parque
@@ -155,6 +157,10 @@ export function ItineraryLogisticsSettings() {
           <option value="">Usar os benefícios cadastrados</option><option value="true">Confirmado</option><option value="false">Sem direito</option>
         </select>
       </label>
+      {input('Estacionamento até as catracas (min)',cfg.parks?.[p.id]?.parkingToGateMinutes,
+        v=>setCfg(c=>({...c,parks:{...c.parks,[p.id]:{...c.parks?.[p.id],parkingToGateMinutes:v}}})))}
+      {input('Catracas até o estacionamento na volta (min)',cfg.parks?.[p.id]?.gateToParkingMinutes,
+        v=>setCfg(c=>({...c,parks:{...c.parks,[p.id]:{...c.parks?.[p.id],gateToParkingMinutes:v}}})))}
       <label className="flex gap-2 text-sm"><input type="checkbox" checked={!!cfg.parks?.[p.id]?.luggageConfirmed}
         onChange={e=>setCfg(c=>({...c,parks:{...c.parks,[p.id]:{...c.parks?.[p.id],luggageConfirmed:e.target.checked}}}))}/>
         Guarda-volumes combinado para o checkout antes do parque</label>
@@ -187,3 +193,4 @@ export function ItineraryLogisticsSettings() {
     </ul>}
   </section>;
 }
+

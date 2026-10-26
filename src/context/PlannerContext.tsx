@@ -31,7 +31,7 @@ import { fetchLiveExchangeRate } from '../services/exchangeRateService';
 import { supabase, checkSupabaseConnection } from '../services/supabaseClient';
 import { SupabaseService } from '../services/supabaseService';
 import { detectGenderByName, Gender } from '../utils/genderDetector';
-import { clearParkReferencesFromDay, generateParkScheduleResult, deduplicateHourlySchedule, cleanInvalidAutoItems, isDayWithPark, isNonParkEvent, adjustScheduleForCheckoutAndDeparture, compareScheduleItemOrder, calculateDay1AccommodationTimeline, Day1AirportAccommodationTimeline, addMinutesToTimeString, maxTimeString, syncFlightsWithItineraryDays, isDefaultItineraryDayTitle, syncAccommodationsWithItineraryDays, ensureHourlyScheduleItems, cleanOrphanedAccommodationSelections, getAccommodationsForNight, resolveAccommodationForNight, calculateUniqueAccommodationNights } from '../utils/parkScheduleUtils';
+import { syncAllEventsToHourlySchedule, clearParkReferencesFromDay, generateParkScheduleResult, deduplicateHourlySchedule, cleanInvalidAutoItems, isDayWithPark, isNonParkEvent, adjustScheduleForCheckoutAndDeparture, compareScheduleItemOrder, calculateDay1AccommodationTimeline, Day1AirportAccommodationTimeline, addMinutesToTimeString, maxTimeString, syncFlightsWithItineraryDays, isDefaultItineraryDayTitle, syncAccommodationsWithItineraryDays, ensureHourlyScheduleItems, cleanOrphanedAccommodationSelections, getAccommodationsForNight, resolveAccommodationForNight, calculateUniqueAccommodationNights } from '../utils/parkScheduleUtils';
 import { generateEssentialBaggageItems, BaggageTemplateOptions, WeatherCondition, detectOrlandoWeatherFromTrip } from '../utils/baggageGenerator';
 import { normalizeAttractionName } from '../utils/attractionUtils';
 import {
@@ -1142,16 +1142,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
 
       const remoteTrips = result.trips;
       if (remoteTrips && remoteTrips.length > 0) {
-        const targetTripId = '78bbd4b1-2857-43d0-9520-2318a3b157a3';
-        
-        const reconciledTrips = await Promise.all(remoteTrips.map(async (trip) => {
-          if (trip.id === targetTripId) {
-            await evaluateAndCorrectAllItems(trip.id);
-            const refreshed = await SupabaseService.fetchTripById(trip.id);
-            if (refreshed) return refreshed;
-          }
-          return trip;
-        }));
+        const target = remoteTrips.find(trip => trip.id === activeTripId) || remoteTrips[0];
+        await evaluateAndCorrectAllItems(target.id);
+        const refreshed = await SupabaseService.fetchTripById(target.id);
+        if (!refreshed) throw new Error('Não foi possível reler a viagem após a reconciliação.');
+        const reconciledTrips = remoteTrips.map(trip => trip.id === target.id ? refreshed : trip);
 
         setTrips((prevTrips) => {
           const merged = mergeLocalAndRemoteTrips(prevTrips, reconciledTrips);
@@ -1226,16 +1221,13 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
             return;
           }
 
-          const remoteTrips = result.trips;
+          let remoteTrips = result.trips;
           if (remoteTrips && remoteTrips.length > 0) {
-            const targetTripId = '78bbd4b1-2857-43d0-9520-2318a3b157a3';
-            
-            await Promise.all(remoteTrips.map(async (trip) => {
-              if (trip.id === targetTripId) {
-                await evaluateAndCorrectAllItems(trip.id);
-              }
-              return trip;
-            }));
+            const target = remoteTrips.find(trip => trip.id === activeTripId) || remoteTrips[0];
+            await evaluateAndCorrectAllItems(target.id);
+            const refreshed = await SupabaseService.fetchTripById(target.id);
+            if (!refreshed) throw new Error('Não foi possível reler a viagem após a reconciliação.');
+            remoteTrips = remoteTrips.map(trip => trip.id === target.id ? refreshed : trip);
 
             setTrips((prevTrips) => {
               const merged = mergeLocalAndRemoteTrips(prevTrips, remoteTrips);
@@ -1298,7 +1290,11 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
     }
 
-    initSupabase();
+    void initSupabase().catch(error => {
+      if (isMounted) setSupabaseStatus(previous => ({
+        ...previous, syncing:false, error:error instanceof Error ? error.message : String(error),
+      }));
+    });
 
     return () => {
       isMounted = false;
@@ -2888,7 +2884,7 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
   // Exibe o estado persistido diretamente de rawDays sem gerar ou modificar horários durante a renderização
   const itineraryDays: ItineraryDay[] = useMemo(() => {
     return rawDays.map((day, index) => {
-      const calculatedDate = calculateDateOffset(settings.startDate, index);
+      const calculatedDate = day.date || calculateDateOffset(settings.startDate, index);
       const isPast = isDateInPast(calculatedDate, settings.isFlexibleDates);
       const isThemePark = isDayWithPark(day);
 
@@ -4203,8 +4199,8 @@ export const PlannerProvider: React.FC<{ children: ReactNode }> = ({ children })
           // Reverter estado otimista imediatamente
           setRawDays(previousRawDays);
           setTrips(previousTrips);
-          addNotification(`❌ Falha ao salvar horário: ${res.error || 'Erro no banco de dados'}. Alteração revertida.`);
-          return false;
+          addNotification(`❌ Falha ao salvar horário: ${res.error || 'Erro no banco de dados'}. Estado local restaurado.`);
+          throw new Error(res.error || 'Falha ao salvar o horário no banco.');
         }
         addNotification(`Horário "${itemToSave.title}" salvo com sucesso.`);
         return true;
@@ -7547,3 +7543,4 @@ export async function reconcileItineraryDay(trip: Trip, _day: ItineraryDay): Pro
   const plan = await providerRulesController.evaluateAndCorrectAllItems(trip.id);
   return plan.complete;
 }
+

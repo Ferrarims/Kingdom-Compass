@@ -41,6 +41,7 @@ import { isDayWithPark } from '../utils/parkScheduleUtils';
 import { useModalKeyEvents } from '../hooks/useModalKeyEvents';
 import { FlightSegment } from '../types';
 import { isArrivalInBrazilDay } from './ItineraryPlanner';
+import { getRealPhotoPackagesList, getPhotoPackageForDay } from '../utils/photoPackageUtils';
 
 interface MasterOverviewModalProps {
   isOpen?: boolean;
@@ -129,101 +130,7 @@ export const MasterOverviewModal: React.FC<MasterOverviewModalProps> = ({
   };
 
   const photoPackagesList = React.useMemo(() => {
-    const list: Array<{
-      id: string;
-      name: string;
-      complex?: string;
-      code?: string;
-      type?: string;
-      status?: string;
-      notes?: string;
-      parks?: string[];
-      costUSD?: number;
-      costBRL?: number;
-      source?: string;
-    }> = [];
-
-    const seenKeys = new Set<string>();
-
-    (itineraryDays || []).forEach((d) => {
-      const pb = d.parkBooking;
-      if (pb?.photoPackage) {
-        const pkg = pb.photoPackage;
-        const key = pkg.id || `pkg-${pkg.name}`;
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          list.push({
-            id: key,
-            name: pkg.name || 'Pacote de Fotos',
-            complex: pkg.complex || (d.park.includes('Disney') ? 'Disney' : d.park.includes('Universal') ? 'Universal' : 'SeaWorld'),
-            code: pkg.confirmationCode,
-            type: pkg.type,
-            status: pkg.status || 'Ativo',
-            notes: pkg.notes || pkg.validityDescription,
-            parks: pkg.includedParks,
-            costUSD: pkg.costUSD,
-            costBRL: pkg.costBRL,
-            source: `Dia ${d.dayNumber} (${d.park})`,
-          });
-        }
-      } else if (pb?.hasPhotoPackage) {
-        const key = `day-photo-${d.id}`;
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          list.push({
-            id: key,
-            name: `Pacote de Fotos / PhotoPass`,
-            complex: d.park.includes('Disney') ? 'Disney' : d.park.includes('Universal') ? 'Universal' : 'SeaWorld',
-            code: pb.confirmationCode,
-            status: 'Ativo',
-            source: `Dia ${d.dayNumber} (${d.park})`,
-          });
-        }
-      }
-    });
-
-    (expenses || []).forEach((exp) => {
-      if ((exp.category === 'Pacotes de Fotos' || exp.sourceType === 'photo_package') && !exp.excluded) {
-        const key = exp.sourceId || exp.id;
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          list.push({
-            id: key,
-            name: exp.title,
-            complex: exp.title.toLowerCase().includes('disney') ? 'Disney' : exp.title.toLowerCase().includes('universal') ? 'Universal' : 'Outro',
-            status: exp.status === 'Pago' ? 'Confirmado' : 'Pendente',
-            notes: exp.notes,
-            costUSD: exp.estimatedValueUSD,
-            costBRL: exp.estimatedValueBRL,
-            source: 'Financeiro / Despesas',
-          });
-        }
-      }
-    });
-
-    (parkTickets || []).forEach((tk) => {
-      const titleLower = (tk.title || '').toLowerCase();
-      if (titleLower.includes('foto') || titleLower.includes('photo') || titleLower.includes('memory maker')) {
-        const key = tk.id;
-        if (!seenKeys.has(key)) {
-          seenKeys.add(key);
-          list.push({
-            id: key,
-            name: tk.title,
-            complex: tk.complex,
-            code: tk.confirmationCode,
-            status: tk.paymentStatus || 'Pago',
-            notes: tk.notes,
-            parks: tk.parksIncluded,
-            costUSD: tk.costUSD,
-            costBRL: tk.costBRL,
-            source: 'Ingressos Comprados',
-          });
-        }
-      }
-    });
-
-    return list;
+    return getRealPhotoPackagesList(itineraryDays, expenses, parkTickets);
   }, [itineraryDays, expenses, parkTickets]);
 
   const sortedAccommodations = React.useMemo(() => {
@@ -581,8 +488,8 @@ export const MasterOverviewModal: React.FC<MasterOverviewModalProps> = ({
             ${itineraryDays.map(day => {
               const dateStr = formatDisplayDate(day.date, false);
               const items = day.hourlySchedule || [];
-              const hasPhoto = Boolean(day.parkBooking?.hasPhotoPackage || day.parkBooking?.photoPackage);
-              const photoPkg = day.parkBooking?.photoPackage;
+              const photoPkg = getPhotoPackageForDay(day, photoPackagesList);
+              const hasPhoto = Boolean(photoPkg);
               return `
                 <div class="day-card">
                   <div class="day-header">
@@ -620,7 +527,7 @@ export const MasterOverviewModal: React.FC<MasterOverviewModalProps> = ({
 
                   ${hasPhoto ? `
                     <div class="info-guide-box" style="margin: 8px 0; background: #faf5ff; border-color: #e9d5ff; color: #581c87;">
-                      <strong>📸 Pacote de Fotos / PhotoPass:</strong> ${photoPkg?.name || 'Memory Maker / PhotoPass Incluído'}${photoPkg?.confirmationCode ? ` — Código: ${photoPkg.confirmationCode}` : ''}
+                      <strong>📸 Pacote de Fotos / PhotoPass:</strong> ${photoPkg?.name || 'Memory Maker / PhotoPass Incluído'}${photoPkg?.code ? ` — Código: ${photoPkg.code}` : ''}
                     </div>
                   ` : ''}
 
@@ -689,8 +596,8 @@ export const MasterOverviewModal: React.FC<MasterOverviewModalProps> = ({
           ${itineraryDays.map(day => {
             const dateStr = formatDisplayDate(day.date, false);
             const items = day.hourlySchedule || [];
-            const hasPhoto = Boolean(day.parkBooking?.hasPhotoPackage || day.parkBooking?.photoPackage);
-            const photoPkg = day.parkBooking?.photoPackage;
+            const photoPkg = getPhotoPackageForDay(day, photoPackagesList);
+            const hasPhoto = Boolean(photoPkg);
             return `
               <div class="day-card">
                 <div class="day-header">
@@ -728,7 +635,7 @@ export const MasterOverviewModal: React.FC<MasterOverviewModalProps> = ({
 
                 ${hasPhoto ? `
                   <div class="info-guide-box" style="margin: 8px 0; background: #faf5ff; border-color: #e9d5ff; color: #581c87;">
-                    <strong>📸 Pacote de Fotos / PhotoPass:</strong> ${photoPkg?.name || 'Memory Maker / PhotoPass Incluído'}${photoPkg?.confirmationCode ? ` — Código: ${photoPkg.confirmationCode}` : ''}
+                    <strong>📸 Pacote de Fotos / PhotoPass:</strong> ${photoPkg?.name || 'Memory Maker / PhotoPass Incluído'}${photoPkg?.code ? ` — Código: ${photoPkg.code}` : ''}
                   </div>
                 ` : ''}
 
@@ -2409,26 +2316,30 @@ export const MasterOverviewModal: React.FC<MasterOverviewModalProps> = ({
                           </div>
                         )}
 
-                        {/* Pacote de Fotos / PhotoPass (se houver) */}
-                        {(day.parkBooking?.hasPhotoPackage || day.parkBooking?.photoPackage) && (
-                          <div className="p-3 bg-purple-50/90 rounded-xl border border-purple-200 text-xs text-purple-900 space-y-1">
-                            <div className="font-bold flex items-center justify-between gap-1.5 text-purple-900 text-[11px] uppercase tracking-wider">
-                              <span className="flex items-center gap-1.5">
-                                <Camera className="w-3.5 h-3.5 text-purple-600 shrink-0" />
-                                <span>Pacote de Fotos (PhotoPass / Memory Maker)</span>
-                              </span>
-                              {day.parkBooking?.photoPackage?.confirmationCode && (
-                                <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200">
-                                  #{day.parkBooking.photoPackage.confirmationCode}
+                        {/* Pacote de Fotos / PhotoPass (se houver e for registrado) */}
+                        {(() => {
+                          const dayPhotoPkg = getPhotoPackageForDay(day, photoPackagesList);
+                          if (!dayPhotoPkg) return null;
+                          return (
+                            <div className="p-3 bg-purple-50/90 rounded-xl border border-purple-200 text-xs text-purple-900 space-y-1">
+                              <div className="font-bold flex items-center justify-between gap-1.5 text-purple-900 text-[11px] uppercase tracking-wider">
+                                <span className="flex items-center gap-1.5">
+                                  <Camera className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                                  <span>Pacote de Fotos (PhotoPass / Memory Maker)</span>
                                 </span>
-                              )}
+                                {dayPhotoPkg.code && (
+                                  <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200">
+                                    #{dayPhotoPkg.code}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-purple-950 font-medium leading-relaxed">
+                                {dayPhotoPkg.name || 'Pacote de Fotos Ativo'}
+                                {dayPhotoPkg.notes && ` — ${dayPhotoPkg.notes}`}
+                              </p>
                             </div>
-                            <p className="text-purple-950 font-medium leading-relaxed">
-                              {day.parkBooking?.photoPackage?.name || 'Pacote de Fotos Ativo'}
-                              {day.parkBooking?.photoPackage?.validityDescription && ` — ${day.parkBooking.photoPackage.validityDescription}`}
-                            </p>
-                          </div>
-                        )}
+                          );
+                        })()}
 
                         {items.length > 0 && (
                           <div className="pt-2">
@@ -2814,26 +2725,30 @@ export const MasterOverviewModal: React.FC<MasterOverviewModalProps> = ({
                             </div>
                           )}
 
-                          {/* Pacote de Fotos / PhotoPass (se houver) */}
-                          {dayHasPark && (day.parkBooking?.hasPhotoPackage || day.parkBooking?.photoPackage) && (
-                            <div className="p-3 bg-purple-50/90 rounded-xl border border-purple-200 text-xs text-purple-900 space-y-1">
-                              <div className="font-bold flex items-center justify-between gap-1.5 text-purple-900 text-[11px] uppercase tracking-wider">
-                                <span className="flex items-center gap-1.5">
-                                  <Camera className="w-3.5 h-3.5 text-purple-600 shrink-0" />
-                                  <span>Pacote de Fotos (PhotoPass / Memory Maker)</span>
-                                </span>
-                                {day.parkBooking?.photoPackage?.confirmationCode && (
-                                  <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200">
-                                    #{day.parkBooking.photoPackage.confirmationCode}
+                          {/* Pacote de Fotos / PhotoPass (se houver e for registrado) */}
+                          {dayHasPark && (() => {
+                            const dayPhotoPkg = getPhotoPackageForDay(day, photoPackagesList);
+                            if (!dayPhotoPkg) return null;
+                            return (
+                              <div className="p-3 bg-purple-50/90 rounded-xl border border-purple-200 text-xs text-purple-900 space-y-1">
+                                <div className="font-bold flex items-center justify-between gap-1.5 text-purple-900 text-[11px] uppercase tracking-wider">
+                                  <span className="flex items-center gap-1.5">
+                                    <Camera className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                                    <span>Pacote de Fotos (PhotoPass / Memory Maker)</span>
                                   </span>
-                                )}
+                                  {dayPhotoPkg.code && (
+                                    <span className="font-mono text-[10px] font-bold px-2 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200">
+                                      #{dayPhotoPkg.code}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-purple-950 font-medium leading-relaxed">
+                                  {dayPhotoPkg.name || 'Pacote de Fotos Ativo'}
+                                  {dayPhotoPkg.notes && ` — ${dayPhotoPkg.notes}`}
+                                </p>
                               </div>
-                              <p className="text-purple-950 font-medium leading-relaxed">
-                                {day.parkBooking?.photoPackage?.name || 'Pacote de Fotos Ativo'}
-                                {day.parkBooking?.photoPackage?.validityDescription && ` — ${day.parkBooking.photoPackage.validityDescription}`}
-                              </p>
-                            </div>
-                          )}
+                            );
+                          })()}
 
                           {items.length > 0 && (
                             <div className="pt-2">
