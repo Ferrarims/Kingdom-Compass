@@ -218,17 +218,29 @@ CREATE TABLE public.park_fast_passes (
     trip_id UUID NOT NULL,
     park_day_booking_id UUID,
     itinerary_day_id UUID NOT NULL,
-    attraction_name TEXT NOT NULL,
-    time_window TEXT NOT NULL,
+    attraction_name TEXT,
+    time_window TEXT,
     pass_type TEXT NOT NULL DEFAULT 'Lightning Lane Multi Pass',
     tier TEXT,
     status TEXT NOT NULL DEFAULT 'Agendado',
     party_members TEXT,
     notes TEXT,
+    charge_mode TEXT DEFAULT 'paid',
+    cost_usd NUMERIC(10, 2),
+    cost_brl NUMERIC(12, 2),
+    payment_status TEXT DEFAULT 'Pendente',
+    payer_id UUID,
+    traveler_ids JSONB DEFAULT '["all"]'::jsonb,
+    reservation_required BOOLEAN DEFAULT false,
+    reservation_status TEXT DEFAULT 'Não necessária',
+    reservation_confirmation_code TEXT,
+    courtesy_provider TEXT,
+    attraction_reservations JSONB NOT NULL DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT park_fast_passes_trip_id_fkey FOREIGN KEY (trip_id) REFERENCES public.trips(id) ON UPDATE NO ACTION ON DELETE CASCADE,
-    CONSTRAINT park_fast_passes_itinerary_day_id_fkey FOREIGN KEY (itinerary_day_id) REFERENCES public.itinerary_days(id) ON UPDATE NO ACTION ON DELETE CASCADE
+    CONSTRAINT park_fast_passes_itinerary_day_id_fkey FOREIGN KEY (itinerary_day_id) REFERENCES public.itinerary_days(id) ON UPDATE NO ACTION ON DELETE CASCADE,
+    CONSTRAINT park_fast_passes_attraction_reservations_check CHECK (jsonb_typeof(attraction_reservations) = 'array')
 );
 
 -- ---------------------------------------------------------------------

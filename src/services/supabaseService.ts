@@ -692,7 +692,7 @@ export function mapFastPassToDb(
   const cleanId = ensureValidUUID(
     fp.id,
     'fastpass',
-    `${bookingId}-${fp.type}-${fp.attractionName || fp.attractionReservations?.[0]?.attractionName || 'pass'}`
+    fp.id || `${bookingId}-${Date.now()}`
   );
   const chargeMode: FastPassChargeMode =
     fp.chargeMode === 'hotel_courtesy' || fp.chargeMode === 'free' ? fp.chargeMode : 'paid';

@@ -63,7 +63,7 @@ import {
   isDayWithPark,
   getDriveAndParkingMetrics,
 } from '../utils/parkScheduleUtils';
-import { generateDeterministicUUID, ensureValidUUID } from '../utils/uuid';
+import { generateUUID, generateDeterministicUUID, ensureValidUUID } from '../utils/uuid';
 import { SupabaseService } from '../services/supabaseService';
 import {
   getCanonicalPhotoPackageId,
@@ -1087,7 +1087,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     const firstRes = fpAttractionReservations[0];
 
     const itemData: FastPassItem = {
-      id: editingFpId || `fp-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      id: editingFpId || generateUUID(),
       type: fpType,
       tier: fpTier,
       status: editingFpId
@@ -1125,7 +1125,7 @@ export const ParkBookingModal: React.FC<ParkBookingModalProps> = ({
     if (!resAttractionName.trim()) return;
 
     const newRes = {
-      id: editingResId || `res-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      id: editingResId || generateUUID(),
       attractionName: resAttractionName.trim(),
       timeWindow: resTimeWindow.trim() || '10:00 - 11:00',
       tier: resTier,
