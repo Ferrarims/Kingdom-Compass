@@ -228,7 +228,7 @@ CREATE TABLE public.park_fast_passes (
     charge_mode TEXT DEFAULT 'paid',
     cost_usd NUMERIC(10, 2),
     cost_brl NUMERIC(12, 2),
-    payment_status TEXT DEFAULT 'Pendente',
+    payment_status TEXT NOT NULL DEFAULT 'Não informado',
     payer_id TEXT NOT NULL DEFAULT 'all',
     traveler_ids JSONB DEFAULT '["all"]'::jsonb,
     reservation_required BOOLEAN DEFAULT false,
